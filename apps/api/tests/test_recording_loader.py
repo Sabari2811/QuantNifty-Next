@@ -7,10 +7,10 @@ import pyarrow.parquet as pq
 from quantnifty.recording_loader import load_recording, load_snapshot_bundle
 
 
-def write_bundle(root):
+def write_bundle(root, timestamp="04-Aug-2026 13:02:21"):
     root.mkdir(parents=True)
     (root / "runtime.json").write_text(json.dumps({
-        "timestamp": "04-Aug-2026 13:02:21",
+        "timestamp": timestamp,
         "spot": 24383.6,
         "symbol": "NIFTY",
         "expiry": "08/04/2026 14:00",
@@ -42,8 +42,9 @@ def test_load_snapshot_bundle_builds_canonical_rows(tmp_path):
 
 def test_load_recording_sorts_bundles(tmp_path):
     root = tmp_path / "snapshots"
-    write_bundle(root / "b")
-    write_bundle(root / "a")
+    write_bundle(root / "b", "04-Aug-2026 13:02:21")
+    write_bundle(root / "a", "04-Aug-2026 13:01:21")
     snapshots = load_recording(root)
     assert len(snapshots) == 2
+    assert [s["timestamp"] for s in snapshots] == sorted(s["timestamp"] for s in snapshots)
     assert all(s["data_integrity"] == "RECORDED_HISTORICAL" for s in snapshots)

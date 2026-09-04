@@ -96,8 +96,7 @@ def _regime(snapshot: dict[str, Any]) -> str:
     state = (intelligence.get("market_state") or {}).get("state")
     if state:
         return str(state)
-    structure = str(snapshot.get("structure") or "UNKNOWN")
-    return structure
+    return str(snapshot.get("structure") or "UNKNOWN")
 
 
 def _metrics(trades: list[Trade], initial_capital: float, observations: int) -> dict[str, Any]:
@@ -130,26 +129,18 @@ def _metrics(trades: list[Trade], initial_capital: float, observations: int) -> 
         elif p < 0:
             current_loss += 1; current_win = 0; max_loss_streak = max(max_loss_streak, current_loss)
     costs = sum(t.costs for t in trades)
+    gross = sum(t.gross_pnl for t in trades)
     return {
-        "observations": observations,
-        "trades": len(trades),
-        "wins": len(wins),
-        "losses": len(losses),
+        "observations": observations, "trades": len(trades), "wins": len(wins), "losses": len(losses),
         "win_rate_pct": round(len(wins) / len(trades) * 100, 2) if trades else 0.0,
-        "gross_pnl": round(sum(t.gross_pnl for t in trades), 2),
-        "net_pnl": round(sum(pnls), 2),
-        "costs": round(costs, 2),
-        "cost_drag_pct_of_gross": round(costs / abs(sum(t.gross_pnl for t in trades)) * 100, 2) if sum(t.gross_pnl for t in trades) else 0.0,
+        "gross_pnl": round(gross, 2), "net_pnl": round(sum(pnls), 2), "costs": round(costs, 2),
+        "cost_drag_pct_of_gross": round(costs / abs(gross) * 100, 2) if gross else 0.0,
         "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else (999.0 if gross_profit else 0.0),
-        "expectancy_per_trade": round(mean_pnl, 2),
-        "avg_win": round(mean(wins), 2) if wins else 0.0,
-        "avg_loss": round(mean(losses), 2) if losses else 0.0,
-        "max_drawdown": round(max_dd, 2),
+        "expectancy_per_trade": round(mean_pnl, 2), "avg_win": round(mean(wins), 2) if wins else 0.0,
+        "avg_loss": round(mean(losses), 2) if losses else 0.0, "max_drawdown": round(max_dd, 2),
         "max_drawdown_pct": round(max_dd / initial_capital * 100, 2) if initial_capital else 0.0,
-        "max_consecutive_wins": max_win_streak,
-        "max_consecutive_losses": max_loss_streak,
-        "ending_equity": round(equity, 2),
-        "sharpe_like": round(sharpe, 3),
+        "max_consecutive_wins": max_win_streak, "max_consecutive_losses": max_loss_streak,
+        "ending_equity": round(equity, 2), "sharpe_like": round(sharpe, 3),
         "return_pct": round((equity - initial_capital) / initial_capital * 100, 2) if initial_capital else 0.0,
         "avg_signal_confidence": round(mean(confidence), 2) if confidence else 0.0,
     }
@@ -159,14 +150,28 @@ def _trade_slice(trades: list[Trade], start: int, end: int) -> list[Trade]:
     return [t for t in trades if start <= t.entry_index < end]
 
 
+def _canonical_backtest_input(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not snapshots:
+        return []
+    provenances = {str(s.get("data_integrity") or "UNKNOWN") for s in snapshots if isinstance(s, dict)}
+    if provenances == {"RECORDED_HISTORICAL"}:
+        provenance = "RECORDED_HISTORICAL"
+    elif provenances == {"LIVE_PROVIDER"}:
+        provenance = "LIVE_PROVIDER"
+    else:
+        raise ValueError("mixed or unknown historical data provenance is not allowed")
+    return canonicalize_snapshots(snapshots, provenance)
+
+
 def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional", config: BacktestConfig | None = None) -> dict[str, Any]:
     cfg = config or BacktestConfig()
     mode = strategy.strip().lower()
     if mode not in {"directional", "gamma_blast"}:
         raise ValueError("strategy must be directional or gamma_blast")
-    ordered = canonicalize_snapshots(snapshots, "RECORDED_HISTORICAL" if snapshots and all(s.get("data_integrity") == "RECORDED_HISTORICAL" for s in snapshots if isinstance(s, dict)) else "LIVE_PROVIDER")
+    ordered = _canonical_backtest_input(snapshots)
+    data_status = historical_data_status(ordered)
     if len(ordered) < 2:
-        return {"status": "INSUFFICIENT_DATA", "strategy": mode, "historical_data": historical_data_status(ordered), "metrics": _metrics([], cfg.initial_capital, len(ordered)), "trades": [], "regimes": {}, "split": {}}
+        return {"status": "INSUFFICIENT_DATA", "strategy": mode, "historical_data": data_status, "metrics": _metrics([], cfg.initial_capital, len(ordered)), "trades": [], "regimes": {}, "split": {}}
 
     trades: list[Trade] = []
     blocked = approved = 0
@@ -179,8 +184,7 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
         if not risk.get("approved"):
             blocked += 1; i += 1; continue
         approved += 1
-        plan = decision.get("execution_plan") or {}
-        instrument = plan.get("instrument")
+        instrument = (decision.get("execution_plan") or {}).get("instrument")
         entry_snap = ordered[i + 1]
         leg = _find_leg(entry_snap, instrument)
         if not leg:
@@ -197,14 +201,12 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
         if entry_spot <= 0:
             i += 1; continue
         max_j = min(len(ordered) - 1, i + max(1, cfg.max_hold_bars))
-        exit_j = max_j; reason = "TIME"
+        exit_j, reason = max_j, "TIME"
         for j in range(i + 1, max_j + 1):
             spot = _f(ordered[j].get("spot"))
             favorable = (spot - entry_spot) / entry_spot if direction == "BULLISH" else (entry_spot - spot) / entry_spot
-            if favorable <= -abs(cfg.stop_pct):
-                exit_j, reason = j, "STOP"; break
-            if favorable >= abs(cfg.target_pct):
-                exit_j, reason = j, "TARGET"; break
+            if favorable <= -abs(cfg.stop_pct): exit_j, reason = j, "STOP"; break
+            if favorable >= abs(cfg.target_pct): exit_j, reason = j, "TARGET"; break
         exit_leg = _find_leg(ordered[exit_j], instrument)
         if not exit_leg:
             i = exit_j; continue
@@ -225,53 +227,25 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
     for t in trades:
         entry_snapshot = ordered[min(t.entry_index, n - 1)]
         regimes.setdefault(_regime(entry_snapshot), []).append(t)
-        dt = _timestamp(entry_snapshot)
-        expiry = str(entry_snapshot.get("expiry") or "")[:10]
+        dt = _timestamp(entry_snapshot); expiry = str(entry_snapshot.get("expiry") or "")[:10]
         if dt and expiry and dt.date().isoformat() == expiry:
             regimes.setdefault("EXPIRY_DAY", []).append(t)
-            if dt.hour == 9 and dt.minute < 30:
-                regimes.setdefault("EXPIRY_OPEN", []).append(t)
-            minutes = dt.hour * 60 + dt.minute
-            if minutes >= 15 * 60 + 15:
-                regimes.setdefault("EXPIRY_FINAL_15M", []).append(t)
+            if dt.hour == 9 and dt.minute < 30: regimes.setdefault("EXPIRY_OPEN", []).append(t)
+            if dt.hour * 60 + dt.minute >= 15 * 60 + 15: regimes.setdefault("EXPIRY_FINAL_15M", []).append(t)
     regime_metrics = {name: _metrics(ts, cfg.initial_capital, len(ts)) for name, ts in regimes.items()}
     risk_gate = {"approved": approved, "blocked": blocked, "block_rate_pct": round(blocked / (approved + blocked) * 100, 2) if approved + blocked else 0.0}
-    signal_quality = {"traded_signals": len(trades), "trade_win_rate_pct": _metrics(trades, cfg.initial_capital, len(trades))["win_rate_pct"], "avg_confidence": _metrics(trades, cfg.initial_capital, len(trades))["avg_signal_confidence"]}
-    return {
-        "status": "OK",
-        "mode": "READ_ONLY_BACKTEST",
-        "strategy": mode,
-        "lookahead_free": True,
-        "entry_rule": "decision at t, fill at t+1 available quote",
-        "exit_rule": "next-snapshot spot stop/target, otherwise max-hold time",
-        "cost_model": asdict(cfg),
-        "historical_data": historical_data_status(ordered),
-        "approved_signals": approved,
-        "blocked_signals": blocked,
-        "risk_gate_effectiveness": risk_gate,
-        "signal_quality": signal_quality,
-        "metrics": _metrics(trades, cfg.initial_capital, n),
-        "split": split_metrics,
-        "regimes": regime_metrics,
-        "trades": [asdict(t) for t in trades],
-        "orders_placed": 0,
-        "trading_enabled": False,
-    }
+    overall = _metrics(trades, cfg.initial_capital, n)
+    signal_quality = {"traded_signals": len(trades), "trade_win_rate_pct": overall["win_rate_pct"], "avg_confidence": overall["avg_signal_confidence"]}
+    return {"status":"OK","mode":"READ_ONLY_BACKTEST","strategy":mode,"lookahead_free":True,
+            "entry_rule":"decision at t, fill at t+1 available quote","exit_rule":"next-snapshot spot stop/target, otherwise max-hold time",
+            "cost_model":asdict(cfg),"historical_data":data_status,"approved_signals":approved,"blocked_signals":blocked,
+            "risk_gate_effectiveness":risk_gate,"signal_quality":signal_quality,"metrics":overall,"split":split_metrics,
+            "regimes":regime_metrics,"trades":[asdict(t) for t in trades],"orders_placed":0,"trading_enabled":False}
 
 
 def validation_report(snapshots: list[dict[str, Any]], strategy: str = "directional", config: BacktestConfig | None = None) -> dict[str, Any]:
     result = run_backtest(snapshots, strategy, config)
-    oos = result.get("split", {}).get("out_of_sample", {})
-    return {
-        "status": result.get("status"),
-        "strategy": result.get("strategy"),
-        "lookahead_free": result.get("lookahead_free"),
-        "historical_data": result.get("historical_data"),
-        "oos": oos,
-        "overall": result.get("metrics"),
-        "risk_gate": result.get("risk_gate_effectiveness", {"approved": result.get("approved_signals", 0), "blocked": result.get("blocked_signals", 0)}),
-        "signal_quality": result.get("signal_quality", {}),
-        "regimes": result.get("regimes", {}),
-        "research_only": True,
-        "orders_placed": 0,
-    }
+    return {"status":result.get("status"),"strategy":result.get("strategy"),"lookahead_free":result.get("lookahead_free"),
+            "historical_data":result.get("historical_data"),"oos":result.get("split",{}).get("out_of_sample",{}),
+            "overall":result.get("metrics"),"risk_gate":result.get("risk_gate_effectiveness",{}),"signal_quality":result.get("signal_quality",{}),
+            "regimes":result.get("regimes",{}),"research_only":True,"orders_placed":0}

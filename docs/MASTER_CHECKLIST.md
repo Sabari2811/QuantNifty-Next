@@ -62,4 +62,4 @@
 - [ ] Full browser E2E with live provider response
 - [ ] Production historical replay run with real provider candles
 
-These final three gates remain evidence-gated. Source code, CI, deployment status, or an unauthenticated request is not sufficient to mark them green. The system remains production-read-only until authenticated live-provider evidence is observed.
+These final three gates remain evidence-gated. They cannot be marked complete from source inspection alone. QuantNifty Next remains production-read-only until authenticated live-provider evidence is observed.

@@ -40,6 +40,7 @@ def test_dashboard_retains_all_current_analytics_sections():
     required = [
         "Market Snapshot",
         "Key Market Levels",
+        "Market Level Map",
         "Gamma Walls",
         "Expected Move Range",
         "Market Structure",
@@ -47,6 +48,11 @@ def test_dashboard_retains_all_current_analytics_sections():
         "Directional Score",
         "Positioning & Volatility",
         "Reference Levels & Feed",
+        "Market Intelligence Charts",
+        "OI Distribution",
+        "Gamma Profile",
+        "IV Smile",
+        "Dealer Positioning",
         "Vanna Proxy",
         "IV Skew",
         "Gamma Flip",
@@ -59,9 +65,12 @@ def test_dashboard_retains_all_current_analytics_sections():
         assert label in text, f"missing analytics UI detail: {label}"
 
 
-def test_dashboard_binds_chain_to_provider_option_chain_payload():
+def test_dashboard_binds_visualizations_and_chain_to_provider_payload():
     text = HTML.read_text(encoding="utf-8")
     assert "d.option_chain" in text
     assert "currentChain=Array.isArray(d.option_chain)?d.option_chain:[]" in text
+    assert "renderCharts(currentChain)" in text
+    assert "strikeSeries(rows,'oi')" in text
+    assert "gamma_contribution" in text
     assert "LIVE_PROVIDER" in text
     assert "No mock values are rendered" in text

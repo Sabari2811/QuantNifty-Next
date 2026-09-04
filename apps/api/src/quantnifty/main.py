@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from quantnifty.replay import normalize_candles, replay, summary, to_dict
+from quantnifty.strike_selector import select_strikes
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -217,6 +218,7 @@ def analytics(spot: float, rows: list[dict[str, Any]], expiry: str | None = None
     bias = "BULLISH" if score >= 60 else "BEARISH" if score <= 40 else "NEUTRAL"
     confidence = 50.0 if bias == "NEUTRAL" else min(99.0, 50.0 + abs(score-50.0))
     expected_move = expected_move_value(spot, atm_iv, expiry)
+    strike_selection = select_strikes(spot, rows, bias, expected_move=(expected_move or None))
 
     return {
         "spot": spot,
@@ -244,6 +246,7 @@ def analytics(spot: float, rows: list[dict[str, Any]], expiry: str | None = None
         "bias": bias,
         "confidence": round(confidence, 1),
         "rationale": reasons,
+        "strike_selection": strike_selection,
         "data_integrity": "LIVE_PROVIDER",
         "rows": len(rows),
         "option_chain": rows,
@@ -289,7 +292,7 @@ def api_health():
 
 @app.get("/api/v1/status")
 def status():
-    return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "cached": cache["snapshot"] is not None, "trading": "DISABLED", "analytics": ["OI_FLOW", "PCR", "GEX", "DEX", "VANNA_PROXY", "IV_SKEW", "GAMMA_FLIP", "GAMMA_WALLS", "MAX_PAIN", "EXPECTED_MOVE", "MARKET_STRUCTURE", "DEALER_FLOW", "LIQUIDITY", "DIRECTION_SCORE"], "replay": "AVAILABLE"}
+    return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "cached": cache["snapshot"] is not None, "trading": "DISABLED", "analytics": ["OI_FLOW", "PCR", "GEX", "DEX", "VANNA_PROXY", "IV_SKEW", "GAMMA_FLIP", "GAMMA_WALLS", "MAX_PAIN", "EXPECTED_MOVE", "MARKET_STRUCTURE", "DEALER_FLOW", "LIQUIDITY", "DIRECTION_SCORE", "STRIKE_SELECTION"], "replay": "AVAILABLE"}
 
 
 @app.get("/api/v1/market")
@@ -303,6 +306,19 @@ async def market():
 @app.get("/api/v1/analytics")
 async def analytics_api():
     return await market()
+
+
+@app.get("/api/v1/decision")
+async def decision(strategy: str = "directional"):
+    try:
+        data = await snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    mode = strategy.strip().lower()
+    if mode not in {"directional", "gamma_blast"}:
+        raise HTTPException(400, "strategy must be directional or gamma_blast")
+    selection = select_strikes(data["spot"], data["option_chain"], data["bias"], gamma_blast=(mode == "gamma_blast"), expected_move=(data.get("expected_move") or {}).get("move"))
+    return {"mode": "READ_ONLY", "execution": "DISABLED", "strategy": "GAMMA_BLAST" if mode == "gamma_blast" else "DIRECTIONAL", "bias": data["bias"], "confidence": data["confidence"], "strike_selection": selection}
 
 
 @app.get("/api/v1/historical")

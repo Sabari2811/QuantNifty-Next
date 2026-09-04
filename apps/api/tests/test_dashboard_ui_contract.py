@@ -7,29 +7,9 @@ HTML = Path(__file__).parents[1] / "src" / "quantnifty" / "web" / "index.html"
 def test_dashboard_retains_legacy_live_option_chain_details():
     text = HTML.read_text(encoding="utf-8")
     required = [
-        "Live Option Chain",
-        "All",
-        "Calls",
-        "Puts",
-        "ATM",
-        "Side",
-        "Strike",
-        "Security ID",
-        "LTP",
-        "Prev Close",
-        "OI",
-        "OI Δ",
-        "Volume",
-        "Bid",
-        "Bid Qty",
-        "Ask",
-        "Ask Qty",
-        "IV %",
-        "Delta",
-        "Gamma",
-        "Theta",
-        "Vega",
-        "Data Integrity",
+        "Live Option Chain", "All", "Calls", "Puts", "ATM", "Side", "Strike", "Security ID",
+        "LTP", "Prev Close", "OI", "OI Δ", "Volume", "Bid", "Bid Qty", "Ask", "Ask Qty",
+        "IV %", "Delta", "Gamma", "Theta", "Vega", "Data Integrity",
     ]
     for label in required:
         assert label in text, f"missing dashboard detail: {label}"
@@ -38,28 +18,11 @@ def test_dashboard_retains_legacy_live_option_chain_details():
 def test_dashboard_retains_all_current_analytics_sections():
     text = HTML.read_text(encoding="utf-8")
     required = [
-        "Market Snapshot",
-        "Key Market Levels",
-        "Market Level Map",
-        "Gamma Walls",
-        "Expected Move Range",
-        "Market Structure",
-        "Dealer Flow",
-        "Directional Score",
-        "Positioning & Volatility",
-        "Reference Levels & Feed",
-        "Market Intelligence Charts",
-        "OI Distribution",
-        "Gamma Profile",
-        "IV Smile",
-        "Dealer Positioning",
-        "Vanna Proxy",
-        "IV Skew",
-        "Gamma Flip",
-        "Max Pain",
-        "Liquidity",
-        "Bullish Score",
-        "Bearish Score",
+        "Market Snapshot", "Key Market Levels", "Market Level Map", "Gamma Walls", "Expected Move Range",
+        "Market Structure", "Dealer Flow", "Directional Score", "Positioning & Volatility",
+        "Reference Levels & Feed", "Market Intelligence Charts", "OI Distribution", "Gamma Profile",
+        "IV Smile", "Dealer Positioning", "Vanna Proxy", "IV Skew", "Gamma Flip", "Max Pain",
+        "Liquidity", "Bullish Score", "Bearish Score",
     ]
     for label in required:
         assert label in text, f"missing analytics UI detail: {label}"
@@ -74,3 +37,13 @@ def test_dashboard_binds_visualizations_and_chain_to_provider_payload():
     assert "gamma_contribution" in text
     assert "LIVE_PROVIDER" in text
     assert "No mock values are rendered" in text
+
+
+def test_dashboard_level_map_is_simple_and_provider_bound():
+    text = HTML.read_text(encoding="utf-8")
+    assert "levelMapList" in text
+    assert "level-item" in text
+    assert "items.length?items.map" in text
+    assert "sort((a,b)=>Number(a[1])-Number(b[1]))" in text
+    assert "$('levelMapList').innerHTML='<div class=\"muted\">No provider market levels</div>';" in text
+    assert "class=\"marker\"" not in text

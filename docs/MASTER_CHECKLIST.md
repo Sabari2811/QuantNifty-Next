@@ -22,6 +22,10 @@
 - [x] Dealer-flow classification
 - [x] Liquidity score
 - [x] Direction score / rationale
+- [x] Dynamic ATM + ITM strike selection for directional trades
+- [x] Controlled OTM strike selection restricted to qualified Gamma Blast mode
+- [x] Gamma Blast qualification gates
+- [x] Read-only Decision/Risk gate
 
 ## Replay / history
 - [x] Historical OHLCV adapter

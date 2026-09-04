@@ -24,7 +24,7 @@ POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
 app = FastAPI(title="QuantNifty Next", version="1.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
-cache: dict[str, Any] = {"snapshot": None, "updated_at": None}
+cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
 
 
 async def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -270,6 +270,8 @@ async def snapshot() -> dict[str, Any]:
         raise RuntimeError("provider returned an empty or incomplete option chain")
     result = analytics(spot, rows, expiry)
     result["expiry"] = expiry
+    if cache.get("snapshot") is not None:
+        cache["previous_snapshot"] = cache["snapshot"]
     cache["snapshot"], cache["updated_at"] = result, time.time()
     return result
 
@@ -317,8 +319,24 @@ async def decision(strategy: str = "directional"):
     mode = strategy.strip().lower()
     if mode not in {"directional", "gamma_blast"}:
         raise HTTPException(400, "strategy must be directional or gamma_blast")
-    selection = select_strikes(data["spot"], data["option_chain"], data["bias"], gamma_blast=(mode == "gamma_blast"), expected_move=(data.get("expected_move") or {}).get("move"))
-    return {"mode": "READ_ONLY", "execution": "DISABLED", "strategy": "GAMMA_BLAST" if mode == "gamma_blast" else "DIRECTIONAL", "bias": data["bias"], "confidence": data["confidence"], "strike_selection": selection}
+    em = (data.get("expected_move") or {}).get("move")
+    bias = data["bias"]
+    directional_ok = bias in {"BULLISH", "BEARISH"}
+    confidence_ok = data["confidence"] >= 60.0
+    liquidity_ok = data["liquidity_score"] >= 50.0
+    gf = data.get("gamma_flip")
+    gamma_position_ok = gf is not None and ((bias == "BULLISH" and data["spot"] > gf) or (bias == "BEARISH" and data["spot"] < gf))
+    dealer_ok = (bias == "BULLISH" and data["dealer_flow"] == "PUT_SUPPORT") or (bias == "BEARISH" and data["dealer_flow"] == "CALL_RESISTANCE")
+    previous = cache.get("previous_snapshot") or {}
+    pg, cg = previous.get("gex"), data.get("gex")
+    gamma_acceleration = pg is not None and cg is not None and abs(cg) > abs(pg) * 1.10
+    old_em = (previous.get("expected_move") or {}).get("move") if isinstance(previous.get("expected_move"), dict) else None
+    move_expansion = em is not None and (old_em is None or em > old_em * 1.05)
+    volume_ok = data.get("rows", 0) >= 20 and sum(r.get("volume", 0) for r in data.get("option_chain", [])) > 0
+    gamma_blast_qualified = all([directional_ok, confidence_ok, liquidity_ok, gamma_position_ok, dealer_ok, gamma_acceleration, move_expansion, volume_ok])
+    selection = select_strikes(data["spot"], data["option_chain"], bias, gamma_blast=(mode == "gamma_blast"), expected_move=em, gamma_blast_qualified=gamma_blast_qualified)
+    trade_allowed = directional_ok and confidence_ok and liquidity_ok and selection["eligible"]
+    return {"mode": "READ_ONLY", "execution": "DISABLED", "strategy": "GAMMA_BLAST" if mode == "gamma_blast" else "DIRECTIONAL", "bias": bias, "confidence": data["confidence"], "risk_gate": {"directional_signal": directional_ok, "confidence": confidence_ok, "liquidity": liquidity_ok, "gamma_position": gamma_position_ok, "dealer_flow": dealer_ok, "gamma_acceleration": gamma_acceleration, "expected_move_expansion": move_expansion, "volume": volume_ok, "trade_allowed": trade_allowed}, "strike_selection": selection}
 
 
 @app.get("/api/v1/historical")

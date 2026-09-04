@@ -21,7 +21,7 @@ NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
 POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
-app = FastAPI(title="QuantNifty Next", version="1.3.0")
+app = FastAPI(title="QuantNifty Next", version="1.4.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "updated_at": None}
 
@@ -88,26 +88,46 @@ def flatten_chain(data: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
             continue
         ce = value.get("ce") or value.get("call") or value.get("CE") or {}
         pe = value.get("pe") or value.get("put") or value.get("PE") or {}
-        if ce: rows.append(norm_leg(ce, strike, "CE"))
-        if pe: rows.append(norm_leg(pe, strike, "PE"))
+        if ce:
+            rows.append(norm_leg(ce, strike, "CE"))
+        if pe:
+            rows.append(norm_leg(pe, strike, "PE"))
     spot = num(root.get("underlying_ltp", root.get("underlying_price")))
     return spot, rows
 
 
 def max_pain(rows: list[dict[str, Any]]) -> float | None:
     strikes = sorted({r["strike"] for r in rows})
-    if not strikes: return None
+    if not strikes:
+        return None
     best, loss_best = None, float("inf")
     for expiry_price in strikes:
         loss = 0.0
         for r in rows:
             intrinsic = max(0.0, expiry_price-r["strike"]) if r["side"] == "CE" else max(0.0, r["strike"]-expiry_price)
             loss += intrinsic * r["oi"]
-        if loss < loss_best: best, loss_best = expiry_price, loss
+        if loss < loss_best:
+            best, loss_best = expiry_price, loss
     return best
 
 
-def analytics(spot: float, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def expected_move_value(spot: float, atm_iv: float | None, expiry: str | None = None, now: datetime | None = None) -> float | None:
+    """Return one-standard-deviation expected move using INDstocks IV percentage convention."""
+    if spot <= 0 or atm_iv is None or atm_iv <= 0:
+        return None
+    current = now or datetime.now(timezone.utc)
+    days = 1.0
+    if expiry:
+        try:
+            expiry_dt = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            days = max(1.0, (expiry_dt - current).total_seconds() / 86400.0)
+        except ValueError:
+            days = 1.0
+    iv_decimal = atm_iv / 100.0
+    return spot * iv_decimal * math.sqrt(days / 365.0)
+
+
+def analytics(spot: float, rows: list[dict[str, Any]], expiry: str | None = None) -> dict[str, Any]:
     calls = [r for r in rows if r["side"] == "CE"]
     puts = [r for r in rows if r["side"] == "PE"]
     call_oi, put_oi = sum(r["oi"] for r in calls), sum(r["oi"] for r in puts)
@@ -134,9 +154,12 @@ def analytics(spot: float, rows: list[dict[str, Any]]) -> dict[str, Any]:
     points = sorted(by_strike.items())
     gamma_flip = None
     for (a, ea), (b, eb) in zip(points, points[1:]):
-        if ea == 0: gamma_flip = a; break
+        if ea == 0:
+            gamma_flip = a
+            break
         if ea*eb < 0:
-            gamma_flip = a + (b-a)*(abs(ea)/(abs(ea)+abs(eb))); break
+            gamma_flip = a + (b-a)*(abs(ea)/(abs(ea)+abs(eb)))
+            break
     if gamma_flip is None and points:
         gamma_flip = min(points, key=lambda p: abs(p[1]))[0]
 
@@ -156,18 +179,31 @@ def analytics(spot: float, rows: list[dict[str, Any]]) -> dict[str, Any]:
     score = 50.0
     reasons: list[str] = []
     if pcr is not None:
-        if pcr > 1.15: score += 15; reasons.append("put OI dominance")
-        elif pcr < 0.85: score -= 15; reasons.append("call OI dominance")
+        if pcr > 1.15:
+            score += 15
+            reasons.append("put OI dominance")
+        elif pcr < 0.85:
+            score -= 15
+            reasons.append("call OI dominance")
     if iv_skew is not None:
-        if iv_skew < -2: score += 10; reasons.append("lower put IV")
-        elif iv_skew > 2: score -= 10; reasons.append("higher put IV")
-    if put_doi > call_doi: score += 10; reasons.append("positive put OI flow")
-    elif call_doi > put_doi: score -= 10; reasons.append("positive call OI flow")
-    if gamma_flip is not None: score += 5 if spot > gamma_flip else -5
+        if iv_skew < -2:
+            score += 10
+            reasons.append("lower put IV")
+        elif iv_skew > 2:
+            score -= 10
+            reasons.append("higher put IV")
+    if put_doi > call_doi:
+        score += 10
+        reasons.append("positive put OI flow")
+    elif call_doi > put_doi:
+        score -= 10
+        reasons.append("positive call OI flow")
+    if gamma_flip is not None:
+        score += 5 if spot > gamma_flip else -5
     score = max(0.0, min(100.0, score))
     bias = "BULLISH" if score >= 60 else "BEARISH" if score <= 40 else "NEUTRAL"
     confidence = 50.0 if bias == "NEUTRAL" else min(99.0, 50.0 + abs(score-50.0))
-    expected_move = spot*atm_iv*math.sqrt(1/365) if atm_iv and atm_iv < 5 else None
+    expected_move = expected_move_value(spot, atm_iv, expiry)
 
     return {
         "spot": spot, "pcr": pcr, "call_oi": call_oi, "put_oi": put_oi,
@@ -189,13 +225,17 @@ async def snapshot() -> dict[str, Any]:
     if not expiry:
         response = await api_get("/market/instruments/expiries", {"underlying": "NIFTY", "segment": "DERIVATIVE"})
         values = response.get("data") or []
-        if not isinstance(values, list) or not values: raise RuntimeError("provider returned no upcoming NIFTY expiries")
+        if not isinstance(values, list) or not values:
+            raise RuntimeError("provider returned no upcoming NIFTY expiries")
         expiry = str(values[0].get("expiry") if isinstance(values[0], dict) else values[0])
     raw = await api_get("/market/option-chain", {"exchange": "NSE", "segment": "INDEX", "underlying-scrip": NIFTY_ID, "expiry": expiry, "strike_count": 20})
     spot, rows = flatten_chain(raw)
-    if spot <= 0: raise RuntimeError("provider returned invalid NIFTY spot")
-    if len(rows) < 2: raise RuntimeError("provider returned an empty or incomplete option chain")
-    result = analytics(spot, rows); result["expiry"] = expiry
+    if spot <= 0:
+        raise RuntimeError("provider returned invalid NIFTY spot")
+    if len(rows) < 2:
+        raise RuntimeError("provider returned an empty or incomplete option chain")
+    result = analytics(spot, rows, expiry)
+    result["expiry"] = expiry
     cache["snapshot"], cache["updated_at"] = result, time.time()
     return result
 
@@ -211,6 +251,11 @@ def health():
     return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+@app.get("/api/v1/health")
+def api_health():
+    return health()
+
+
 @app.get("/api/v1/status")
 def status():
     return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "cached": cache["snapshot"] is not None, "trading": "DISABLED", "analytics": ["OI_FLOW", "PCR", "GEX", "DEX", "IV_SKEW", "GAMMA_FLIP", "GAMMA_WALLS", "MAX_PAIN", "EXPECTED_MOVE", "MARKET_STRUCTURE", "DEALER_FLOW", "LIQUIDITY", "DIRECTION_SCORE"], "replay": "AVAILABLE"}
@@ -218,12 +263,15 @@ def status():
 
 @app.get("/api/v1/market")
 async def market():
-    try: return await snapshot()
-    except Exception as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        return await snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/v1/analytics")
-async def analytics_api(): return await market()
+async def analytics_api():
+    return await market()
 
 
 @app.get("/api/v1/historical")
@@ -257,7 +305,8 @@ def trading_status():
 
 
 @app.post("/api/v1/trading/orders", status_code=503)
-def trading_disabled(): raise HTTPException(503, "trading is disabled")
+def trading_disabled():
+    raise HTTPException(503, "trading is disabled")
 
 
 @app.websocket("/ws")
@@ -265,8 +314,19 @@ async def ws(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            try: await websocket.send_json(await snapshot())
-            except Exception as exc: await websocket.send_json({"data_integrity": "UNAVAILABLE", "error": str(exc), "timestamp": datetime.now(timezone.utc).isoformat()})
+            try:
+                payload = await snapshot()
+            except Exception as exc:
+                payload = {"data_integrity": "UNAVAILABLE", "error": str(exc), "timestamp": datetime.now(timezone.utc).isoformat()}
+            try:
+                await websocket.send_json(payload)
+            except (WebSocketDisconnect, RuntimeError):
+                break
             await asyncio.sleep(POLL_SECONDS)
     except WebSocketDisconnect:
         pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass

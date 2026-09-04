@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -12,19 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 BASE = "https://api.indstocks.com"
-# Runtime secret only. Keep the legacy name as a backwards-compatible fallback.
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
 NIFTY_ID = os.getenv("NIFTY_SECURITY_ID", "40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
+POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
-app = FastAPI(title="QuantNifty Next", version="1.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI(title="QuantNifty Next", version="1.2.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "updated_at": None}
 
 
@@ -47,8 +42,7 @@ async def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, 
                 except Exception:
                     payload = {}
                 detail = payload.get("debug_info") or payload.get("message") or payload.get("error")
-                last = f"HTTP {response.status_code}: {detail or 'provider rejected request'}"
-                raise RuntimeError(last)
+                raise RuntimeError(f"HTTP {response.status_code}: {detail or 'provider rejected request'}")
             return response.json()
         except RuntimeError:
             raise
@@ -58,7 +52,7 @@ async def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, 
     raise RuntimeError(last)
 
 
-def _num(value: Any) -> float:
+def num(value: Any) -> float:
     try:
         return float(value or 0)
     except (TypeError, ValueError):
@@ -66,118 +60,124 @@ def _num(value: Any) -> float:
 
 
 def norm_leg(leg: dict[str, Any], strike: float, side: str) -> dict[str, Any]:
-    greeks = leg.get("greeks") or {}
+    g = leg.get("greeks") or {}
     return {
-        "strike": float(strike),
-        "side": side,
-        "last_price": _num(leg.get("last_price")),
-        "oi": _num(leg.get("oi")),
-        "previous_oi": _num(leg.get("previous_oi")),
-        "volume": _num(leg.get("volume")),
-        "bid": _num(leg.get("top_bid_price", leg.get("bid"))),
-        "ask": _num(leg.get("top_ask_price", leg.get("ask"))),
-        "iv": _num(leg.get("iv")),
-        "delta": _num(greeks.get("delta", leg.get("delta"))),
-        "gamma": _num(greeks.get("gamma", leg.get("gamma"))),
-        "vega": _num(greeks.get("vega", leg.get("vega"))),
+        "strike": float(strike), "side": side, "last_price": num(leg.get("last_price")),
+        "oi": num(leg.get("oi")), "previous_oi": num(leg.get("previous_oi")),
+        "volume": num(leg.get("volume")), "bid": num(leg.get("top_bid_price", leg.get("bid"))),
+        "ask": num(leg.get("top_ask_price", leg.get("ask"))), "iv": num(leg.get("iv")),
+        "delta": num(g.get("delta", leg.get("delta"))), "gamma": num(g.get("gamma", leg.get("gamma"))),
+        "vega": num(g.get("vega", leg.get("vega"))),
     }
 
 
 def flatten_chain(data: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
     root = data.get("data") or data
     strikes = root.get("strikes") or root.get("option_chain") or {}
+    items = strikes.items() if isinstance(strikes, dict) else []
     rows: list[dict[str, Any]] = []
-    if isinstance(strikes, dict):
-        items = strikes.items()
-    elif isinstance(strikes, list):
-        items = ((x.get("strike_price") or x.get("strike"), x) for x in strikes)
-    else:
-        items = []
     for key, value in items:
         try:
             strike = float(key)
         except (TypeError, ValueError):
             continue
-        ce = value.get("ce") or value.get("call") or value.get("CE") or value.get("call_option") or {}
-        pe = value.get("pe") or value.get("put") or value.get("PE") or value.get("put_option") or {}
-        if ce:
-            rows.append(norm_leg(ce, strike, "CE"))
-        if pe:
-            rows.append(norm_leg(pe, strike, "PE"))
-    spot = _num(root.get("underlying_ltp", root.get("underlying_price")))
+        if not isinstance(value, dict):
+            continue
+        ce = value.get("ce") or value.get("call") or value.get("CE") or {}
+        pe = value.get("pe") or value.get("put") or value.get("PE") or {}
+        if ce: rows.append(norm_leg(ce, strike, "CE"))
+        if pe: rows.append(norm_leg(pe, strike, "PE"))
+    spot = num(root.get("underlying_ltp", root.get("underlying_price")))
     return spot, rows
 
 
+def max_pain(rows: list[dict[str, Any]]) -> float | None:
+    strikes = sorted({r["strike"] for r in rows})
+    if not strikes: return None
+    best, loss_best = None, float("inf")
+    for expiry_price in strikes:
+        loss = 0.0
+        for r in rows:
+            intrinsic = max(0.0, expiry_price-r["strike"]) if r["side"] == "CE" else max(0.0, r["strike"]-expiry_price)
+            loss += intrinsic * r["oi"]
+        if loss < loss_best: best, loss_best = expiry_price, loss
+    return best
+
+
 def analytics(spot: float, rows: list[dict[str, Any]]) -> dict[str, Any]:
-    calls = [x for x in rows if x["side"] == "CE"]
-    puts = [x for x in rows if x["side"] == "PE"]
-    call_oi = sum(x["oi"] for x in calls)
-    put_oi = sum(x["oi"] for x in puts)
-    pcr = put_oi / call_oi if call_oi else 0.0
-    call_change = sum(x["oi"] - x["previous_oi"] for x in calls)
-    put_change = sum(x["oi"] - x["previous_oi"] for x in puts)
-    gex = sum(x["gamma"] * x["oi"] * (spot**2) * 0.01 * (1 if x["side"] == "PE" else -1) for x in rows)
-    dex = sum(x["delta"] * x["oi"] * (1 if x["side"] == "CE" else -1) for x in rows)
-    call_iv = [x["iv"] for x in calls if x["iv"] > 0]
-    put_iv = [x["iv"] for x in puts if x["iv"] > 0]
-    skew = (sum(put_iv) / len(put_iv) - sum(call_iv) / len(call_iv)) if call_iv and put_iv else 0.0
+    calls = [r for r in rows if r["side"] == "CE"]
+    puts = [r for r in rows if r["side"] == "PE"]
+    call_oi, put_oi = sum(r["oi"] for r in calls), sum(r["oi"] for r in puts)
+    call_doi = sum(r["oi"]-r["previous_oi"] for r in calls)
+    put_doi = sum(r["oi"]-r["previous_oi"] for r in puts)
+    pcr = put_oi/call_oi if call_oi else None
+    call_iv = [r["iv"] for r in calls if r["iv"] > 0]
+    put_iv = [r["iv"] for r in puts if r["iv"] > 0]
+    avg_call_iv = sum(call_iv)/len(call_iv) if call_iv else None
+    avg_put_iv = sum(put_iv)/len(put_iv) if put_iv else None
+    iv_skew = avg_put_iv-avg_call_iv if avg_put_iv is not None and avg_call_iv is not None else None
+    atm = min((r for r in rows if r["iv"] > 0), key=lambda r: abs(r["strike"]-spot), default=None)
+    atm_iv = atm["iv"] if atm else None
+    gex = sum(r["gamma"]*r["oi"]*spot*spot*0.01*(-1 if r["side"] == "CE" else 1) for r in rows)
+    dex = sum(r["delta"]*r["oi"]*(-1 if r["side"] == "CE" else 1) for r in rows)
+    vanna_proxy = sum(r["vega"]*r["oi"]*(-1 if r["side"] == "CE" else 1) for r in rows)
+    volume = sum(r["volume"] for r in rows)
+    spread_cost = sum(max(0.0, r["ask"]-r["bid"]) for r in rows if r["ask"] > 0 and r["bid"] > 0)
+    liquidity = max(0.0, 100.0*(1.0-min(1.0, spread_cost/max(1.0, volume))))
+
+    by_strike: dict[float, float] = {}
+    for r in rows:
+        by_strike[r["strike"]] = by_strike.get(r["strike"], 0.0) + r["gamma"]*r["oi"]*spot*spot*0.01*(-1 if r["side"] == "CE" else 1)
+    points = sorted(by_strike.items())
+    gamma_flip = None
+    for (a, ea), (b, eb) in zip(points, points[1:]):
+        if ea == 0: gamma_flip = a; break
+        if ea*eb < 0:
+            gamma_flip = a + (b-a)*(abs(ea)/(abs(ea)+abs(eb))); break
+    if gamma_flip is None and points:
+        gamma_flip = min(points, key=lambda p: abs(p[1]))[0]
 
     walls = []
     for side in ("CE", "PE"):
-        side_rows = [x for x in rows if x["side"] == side]
+        side_rows = [r for r in rows if r["side"] == side]
         if side_rows:
-            wall = max(side_rows, key=lambda x: x["oi"] * abs(x["gamma"]))
-            walls.append({"side": side, "strike": wall["strike"], "exposure": wall["oi"] * abs(wall["gamma"])})
+            w = max(side_rows, key=lambda r: r["oi"]*abs(r["gamma"]))
+            walls.append({"side": side, "strike": w["strike"], "exposure": w["oi"]*abs(w["gamma"])})
 
-    by_strike: dict[float, list[dict[str, Any]]] = {}
-    for row in rows:
-        by_strike.setdefault(row["strike"], []).append(row)
-    points = []
-    for strike in sorted(by_strike):
-        exposure = sum(
-            y["gamma"] * y["oi"] * (spot**2) * 0.01 * (1 if y["side"] == "PE" else -1)
-            for y in by_strike[strike]
-        )
-        points.append((strike, exposure))
-
-    flip = None
-    for (a, ea), (b, eb) in zip(points, points[1:]):
-        if ea == 0:
-            flip = a
-            break
-        if ea * eb < 0:
-            flip = a + (b - a) * (abs(ea) / (abs(ea) + abs(eb)))
-            break
+    strikes = sorted(by_strike)
+    support = max((s for s in strikes if s <= spot), default=None)
+    resistance = min((s for s in strikes if s >= spot), default=None)
+    structure = "ABOVE_GAMMA_FLIP" if gamma_flip is not None and spot > gamma_flip else "BELOW_GAMMA_FLIP" if gamma_flip is not None else "UNAVAILABLE"
+    dealer_flow = "PUT_SUPPORT" if put_doi > call_doi else "CALL_RESISTANCE" if call_doi > put_doi else "BALANCED"
 
     score = 50.0
-    score += 15 if pcr > 1.15 else (-15 if pcr < 0.85 else 0)
-    score += 10 if skew > 2 else (-10 if skew < -2 else 0)
-    score += 10 if put_change > call_change else (-10 if call_change > put_change else 0)
-    score += 5 if flip is not None and spot > flip else (-5 if flip is not None else 0)
-    score = max(0, min(100, score))
-    bias = "BULLISH" if score >= 60 else ("BEARISH" if score <= 40 else "NEUTRAL")
-    confidence = round(abs(score - 50) * 2 + 50 if bias != "NEUTRAL" else 50, 1)
-    structure = "ABOVE_GAMMA_FLIP" if flip is not None and spot > flip else ("BELOW_GAMMA_FLIP" if flip is not None else "UNAVAILABLE")
+    reasons: list[str] = []
+    if pcr is not None:
+        if pcr > 1.15: score += 15; reasons.append("put OI dominance")
+        elif pcr < 0.85: score -= 15; reasons.append("call OI dominance")
+    if iv_skew is not None:
+        if iv_skew < -2: score += 10; reasons.append("lower put IV")
+        elif iv_skew > 2: score -= 10; reasons.append("higher put IV")
+    if put_doi > call_doi: score += 10; reasons.append("positive put OI flow")
+    elif call_doi > put_doi: score -= 10; reasons.append("positive call OI flow")
+    if gamma_flip is not None:
+        score += 5 if spot > gamma_flip else -5
+    score = max(0.0, min(100.0, score))
+    bias = "BULLISH" if score >= 60 else "BEARISH" if score <= 40 else "NEUTRAL"
+    confidence = 50.0 if bias == "NEUTRAL" else min(99.0, 50.0 + abs(score-50.0))
+    expected_move = spot*atm_iv*math.sqrt(1/365) if atm_iv and atm_iv < 5 else None
 
     return {
-        "spot": spot,
-        "pcr": round(pcr, 3),
-        "call_oi": call_oi,
-        "put_oi": put_oi,
-        "call_oi_change": call_change,
-        "put_oi_change": put_change,
-        "gex": gex,
-        "dex": dex,
-        "iv_skew": skew,
-        "gamma_flip": flip,
-        "gamma_walls": walls,
-        "bullish_score": round(score, 1),
-        "bearish_score": round(100 - score, 1),
-        "bias": bias,
-        "confidence": confidence,
-        "structure": structure,
-        "data_integrity": "LIVE_PROVIDER",
-        "rows": len(rows),
+        "spot": spot, "pcr": pcr, "call_oi": call_oi, "put_oi": put_oi,
+        "call_oi_change": call_doi, "put_oi_change": put_doi, "gex": gex, "dex": dex,
+        "vanna_proxy": vanna_proxy, "iv_skew": iv_skew, "atm_iv": atm_iv,
+        "gamma_flip": gamma_flip, "gamma_walls": walls, "max_pain": max_pain(rows),
+        "expected_move": {"move": expected_move, "lower": spot-expected_move, "upper": spot+expected_move} if expected_move else None,
+        "support": support, "resistance": resistance, "structure": structure,
+        "dealer_flow": dealer_flow, "liquidity_score": round(liquidity, 1),
+        "bullish_score": round(score, 1), "bearish_score": round(100-score, 1),
+        "bias": bias, "confidence": round(confidence, 1), "rationale": reasons,
+        "data_integrity": "LIVE_PROVIDER", "rows": len(rows),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -187,28 +187,14 @@ async def snapshot() -> dict[str, Any]:
     if not expiry:
         response = await api_get("/market/instruments/expiries", {"underlying": "NIFTY", "segment": "DERIVATIVE"})
         values = response.get("data") or []
-        if not isinstance(values, list) or not values:
-            raise RuntimeError("provider returned no upcoming NIFTY expiries")
+        if not isinstance(values, list) or not values: raise RuntimeError("provider returned no upcoming NIFTY expiries")
         expiry = str(values[0].get("expiry") if isinstance(values[0], dict) else values[0])
-    raw = await api_get(
-        "/market/option-chain",
-        {
-            "exchange": "NSE",
-            "segment": "INDEX",
-            "underlying-scrip": NIFTY_ID,
-            "expiry": expiry,
-            "strike_count": 20,
-        },
-    )
+    raw = await api_get("/market/option-chain", {"exchange": "NSE", "segment": "INDEX", "underlying-scrip": NIFTY_ID, "expiry": expiry, "strike_count": 20})
     spot, rows = flatten_chain(raw)
-    if spot <= 0:
-        raise RuntimeError("provider returned invalid NIFTY spot")
-    if len(rows) < 2:
-        raise RuntimeError("provider returned an empty or incomplete option chain")
-    result = analytics(spot, rows)
-    result["expiry"] = expiry
-    cache["snapshot"] = result
-    cache["updated_at"] = time.time()
+    if spot <= 0: raise RuntimeError("provider returned invalid NIFTY spot")
+    if len(rows) < 2: raise RuntimeError("provider returned an empty or incomplete option chain")
+    result = analytics(spot, rows); result["expiry"] = expiry
+    cache["snapshot"], cache["updated_at"] = result, time.time()
     return result
 
 
@@ -220,36 +206,31 @@ def root():
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "provider": "INDstocks",
-        "provider_configured": bool(TOKEN),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/v1/status")
 def status():
-    return {
-        "status": "ok",
-        "provider": "INDstocks",
-        "provider_configured": bool(TOKEN),
-        "cached": cache["snapshot"] is not None,
-        "live_market_validation": "available via /api/v1/market",
-    }
+    return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "cached": cache["snapshot"] is not None, "trading": "DISABLED", "analytics": ["OI_FLOW", "PCR", "GEX", "DEX", "IV_SKEW", "GAMMA_FLIP", "GAMMA_WALLS", "MAX_PAIN", "EXPECTED_MOVE", "MARKET_STRUCTURE", "DEALER_FLOW", "LIQUIDITY", "DIRECTION_SCORE"]}
 
 
 @app.get("/api/v1/market")
 async def market():
-    try:
-        return await snapshot()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try: return await snapshot()
+    except Exception as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/v1/analytics")
-async def analytics_api():
-    return await market()
+async def analytics_api(): return await market()
+
+
+@app.get("/api/v1/trading/status")
+def trading_status():
+    return {"enabled": False, "mode": "READ_ONLY", "order_placement": False, "order_modification": False, "order_cancellation": False}
+
+
+@app.post("/api/v1/trading/orders", status_code=503)
+def trading_disabled(): raise HTTPException(503, "trading is disabled")
 
 
 @app.websocket("/ws")
@@ -257,11 +238,8 @@ async def ws(websocket: WebSocket):
     await websocket.accept()
     try:
         while True:
-            try:
-                data = await snapshot()
-                await websocket.send_json(data)
-            except Exception as exc:
-                await websocket.send_json({"data_integrity": "UNAVAILABLE", "error": str(exc)})
-            await asyncio.sleep(float(os.getenv("POLL_SECONDS", "15")))
+            try: await websocket.send_json(await snapshot())
+            except Exception as exc: await websocket.send_json({"data_integrity": "UNAVAILABLE", "error": str(exc), "timestamp": datetime.now(timezone.utc).isoformat()})
+            await asyncio.sleep(POLL_SECONDS)
     except WebSocketDisconnect:
         pass

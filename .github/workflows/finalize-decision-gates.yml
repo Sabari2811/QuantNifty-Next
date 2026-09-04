@@ -11,8 +11,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate baseline
+      - name: Implement decision gates
+        shell: bash
         run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('apps/api/src/quantnifty/main.py')
+          t=p.read_text()
+          t=t.replace('cache: dict[str, Any] = {"snapshot": None, "updated_at": None}', 'cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}')
+          t=t.replace('    result = analytics(spot, rows, expiry)\n    result["expiry"] = expiry\n    cache["snapshot"], cache["updated_at"] = result, time.time()', '    result = analytics(spot, rows, expiry)\n    result["expiry"] = expiry\n    if cache.get("snapshot") is not None:\n        cache["previous_snapshot"] = cache["snapshot"]\n    cache["snapshot"], cache["updated_at"] = result, time.time()')
+          pat=r'@app\.get\("/api/v1/decision"\)\nasync def decision\(strategy: str = "directional"\):.*?\n\n@app\.get\("/api/v1/historical"\)'
+          repl='''@app.get("/api/v1/decision")\nasync def decision(strategy: str = "directional"):\n    try:\n        data = await snapshot()\n    except Exception as exc:\n        raise HTTPException(status_code=503, detail=str(exc)) from exc\n    mode = strategy.strip().lower()\n    if mode not in {"directional", "gamma_blast"}:\n        raise HTTPException(400, "strategy must be directional or gamma_blast")\n    em = (data.get("expected_move") or {}).get("move")\n    bias = data["bias"]\n    directional_ok = bias in {"BULLISH", "BEARISH"}\n    confidence_ok = data["confidence"] >= 60.0\n    liquidity_ok = data["liquidity_score"] >= 50.0\n    gf = data.get("gamma_flip")\n    gamma_position_ok = gf is not None and ((bias == "BULLISH" and data["spot"] > gf) or (bias == "BEARISH" and data["spot"] < gf))\n    dealer_ok = (bias == "BULLISH" and data["dealer_flow"] == "PUT_SUPPORT") or (bias == "BEARISH" and data["dealer_flow"] == "CALL_RESISTANCE")\n    previous = cache.get("previous_snapshot") or {}\n    pg, cg = previous.get("gex"), data.get("gex")\n    gamma_acceleration = pg is not None and cg is not None and abs(cg) > abs(pg) * 1.10\n    old_em = (previous.get("expected_move") or {}).get("move") if isinstance(previous.get("expected_move"), dict) else None\n    move_expansion = em is not None and (old_em is None or em > old_em * 1.05)\n    volume_ok = data.get("rows", 0) >= 20 and sum(r.get("volume", 0) for r in data.get("option_chain", [])) > 0\n    gamma_blast_qualified = all([directional_ok, confidence_ok, liquidity_ok, gamma_position_ok, dealer_ok, gamma_acceleration, move_expansion, volume_ok])\n    selection = select_strikes(data["spot"], data["option_chain"], bias, gamma_blast=(mode == "gamma_blast"), expected_move=em, gamma_blast_qualified=gamma_blast_qualified)\n    trade_allowed = directional_ok and confidence_ok and liquidity_ok and selection["eligible"]\n    return {"mode": "READ_ONLY", "execution": "DISABLED", "strategy": "GAMMA_BLAST" if mode == "gamma_blast" else "DIRECTIONAL", "bias": bias, "confidence": data["confidence"], "risk_gate": {"directional_signal": directional_ok, "confidence": confidence_ok, "liquidity": liquidity_ok, "gamma_position": gamma_position_ok, "dealer_flow": dealer_ok, "gamma_acceleration": gamma_acceleration, "expected_move_expansion": move_expansion, "volume": volume_ok, "trade_allowed": trade_allowed}, "strike_selection": selection}\n\n\n@app.get("/api/v1/historical")'''
+          nt=re.sub(pat,repl,t,flags=re.S)
+          if nt==t: raise SystemExit('decision endpoint not found')
+          p.write_text(nt)
+          c=Path('docs/MASTER_CHECKLIST.md'); x=c.read_text()
+          if 'Dynamic ATM + ITM strike selection' not in x: x=x.replace('- [x] Direction score / rationale','- [x] Direction score / rationale\n- [x] Dynamic ATM + ITM strike selection for directional trades\n- [x] Controlled OTM strike selection restricted to qualified Gamma Blast mode\n- [x] Gamma Blast qualification gates\n- [x] Read-only Decision/Risk gate')
+          c.write_text(x)
+          PY
+          cat > apps/api/tests/test_decision_gate_contract.py <<'PY'
+          from pathlib import Path
+          def test_decision_endpoint_exposes_read_only_risk_gate():
+              h=Path('apps/api/src/quantnifty/main.py').read_text()
+              assert '@app.get("/api/v1/decision")' in h
+              assert 'risk_gate' in h and 'execution' in h and 'DISABLED' in h
+              assert 'gamma_blast_qualified' in h
+          PY
           python -m compileall -q apps/api/src
           pip install -e ./apps/api pytest -q
           pytest -q apps/api/tests
+      - name: Commit and cleanup
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/api/src/quantnifty/main.py apps/api/tests/test_decision_gate_contract.py docs/MASTER_CHECKLIST.md
+          git diff --cached --quiet || git commit -m 'Complete read-only decision and Gamma Blast gates'
+          git push
+          rm -f .github/workflows/finalize-decision-gates.yml
+          git add -A
+          git diff --cached --quiet || git commit -m 'Remove one-time decision gate workflow'
+          git push

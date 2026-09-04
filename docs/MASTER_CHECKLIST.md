@@ -46,7 +46,7 @@
 - [x] Analytics cards
 - [x] Vanna proxy
 - [x] Expected move value and lower/upper range
-- [x] Focused Market Levels display
+- [x] Focused Key Market Levels display
 - [x] Current NIFTY market level
 - [x] Gamma flip level
 - [x] Call wall level
@@ -54,9 +54,16 @@
 - [x] Support level
 - [x] Resistance level
 - [x] Gamma walls / market structure / dealer flow context
+- [x] Directional bullish / bearish score and confidence
+- [x] Positioning & volatility detail panel
+- [x] Reference levels & provider feed panel
 - [x] Data-integrity state
 - [x] No fabricated fallback values
-- [x] Full normalized option-chain remains backend analytics input; raw chain table intentionally not displayed
+- [x] Full normalized option-chain exposed in UI
+- [x] Live option-chain All / Calls / Puts filters
+- [x] ATM strike identification and highlighting
+- [x] Complete option-chain columns: Side, Strike, Security ID, LTP, Previous Close, OI, OI Δ, Volume, Bid, Bid Qty, Ask, Ask Qty, IV %, Delta, Gamma, Theta, Vega
+- [x] Option-chain rows remain sourced from the same normalized provider payload used by analytics
 
 ## Deployment / reliability
 - [x] Render Python service configuration aligned with repository
@@ -64,7 +71,7 @@
 - [x] WebSocket client-disconnect handling
 - [x] CI compile validation
 - [x] CI replay/analytics regression tests
-- [x] Production deployment of completed UI/API changes observed live
+- [x] Production deployment of previously completed UI/API changes observed live
 
 ## Final evidence gates
 - [ ] Authenticated live-market response observed after the latest UI/API deployment

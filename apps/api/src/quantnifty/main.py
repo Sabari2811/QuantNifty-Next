@@ -21,7 +21,7 @@ NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
 POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
-app = FastAPI(title="QuantNifty Next", version="1.4.0")
+app = FastAPI(title="QuantNifty Next", version="1.5.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "updated_at": None}
 
@@ -65,11 +65,23 @@ def num(value: Any) -> float:
 def norm_leg(leg: dict[str, Any], strike: float, side: str) -> dict[str, Any]:
     g = leg.get("greeks") or {}
     return {
-        "strike": float(strike), "side": side, "last_price": num(leg.get("last_price")),
-        "oi": num(leg.get("oi")), "previous_oi": num(leg.get("previous_oi")),
-        "volume": num(leg.get("volume")), "bid": num(leg.get("top_bid_price", leg.get("bid"))),
-        "ask": num(leg.get("top_ask_price", leg.get("ask"))), "iv": num(leg.get("iv")),
-        "delta": num(g.get("delta", leg.get("delta"))), "gamma": num(g.get("gamma", leg.get("gamma"))),
+        "strike": float(strike),
+        "side": side,
+        "security_id": str(leg.get("security_id") or ""),
+        "trading_symbol": str(leg.get("trading_symbol") or ""),
+        "last_price": num(leg.get("last_price")),
+        "previous_close": num(leg.get("previous_close_price", leg.get("previous_close"))),
+        "oi": num(leg.get("oi")),
+        "previous_oi": num(leg.get("previous_oi")),
+        "volume": num(leg.get("volume")),
+        "bid": num(leg.get("top_bid_price", leg.get("bid"))),
+        "bid_qty": num(leg.get("top_bid_quantity", leg.get("bid_qty"))),
+        "ask": num(leg.get("top_ask_price", leg.get("ask"))),
+        "ask_qty": num(leg.get("top_ask_quantity", leg.get("ask_qty"))),
+        "iv": num(leg.get("iv")),
+        "delta": num(g.get("delta", leg.get("delta"))),
+        "gamma": num(g.get("gamma", leg.get("gamma"))),
+        "theta": num(g.get("theta", leg.get("theta"))),
         "vega": num(g.get("vega", leg.get("vega"))),
     }
 
@@ -93,6 +105,7 @@ def flatten_chain(data: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
         if pe:
             rows.append(norm_leg(pe, strike, "PE"))
     spot = num(root.get("underlying_ltp", root.get("underlying_price")))
+    rows.sort(key=lambda r: (r["strike"], 0 if r["side"] == "CE" else 1))
     return spot, rows
 
 
@@ -206,16 +219,34 @@ def analytics(spot: float, rows: list[dict[str, Any]], expiry: str | None = None
     expected_move = expected_move_value(spot, atm_iv, expiry)
 
     return {
-        "spot": spot, "pcr": pcr, "call_oi": call_oi, "put_oi": put_oi,
-        "call_oi_change": call_doi, "put_oi_change": put_doi, "gex": gex, "dex": dex,
-        "vanna_proxy": vanna_proxy, "iv_skew": iv_skew, "atm_iv": atm_iv,
-        "gamma_flip": gamma_flip, "gamma_walls": walls, "max_pain": max_pain(rows),
+        "spot": spot,
+        "pcr": pcr,
+        "call_oi": call_oi,
+        "put_oi": put_oi,
+        "call_oi_change": call_doi,
+        "put_oi_change": put_doi,
+        "gex": gex,
+        "dex": dex,
+        "vanna_proxy": vanna_proxy,
+        "iv_skew": iv_skew,
+        "atm_iv": atm_iv,
+        "gamma_flip": gamma_flip,
+        "gamma_walls": walls,
+        "max_pain": max_pain(rows),
         "expected_move": {"move": expected_move, "lower": spot-expected_move, "upper": spot+expected_move} if expected_move else None,
-        "support": support, "resistance": resistance, "structure": structure,
-        "dealer_flow": dealer_flow, "liquidity_score": round(liquidity, 1),
-        "bullish_score": round(score, 1), "bearish_score": round(100-score, 1),
-        "bias": bias, "confidence": round(confidence, 1), "rationale": reasons,
-        "data_integrity": "LIVE_PROVIDER", "rows": len(rows),
+        "support": support,
+        "resistance": resistance,
+        "structure": structure,
+        "dealer_flow": dealer_flow,
+        "liquidity_score": round(liquidity, 1),
+        "bullish_score": round(score, 1),
+        "bearish_score": round(100-score, 1),
+        "bias": bias,
+        "confidence": round(confidence, 1),
+        "rationale": reasons,
+        "data_integrity": "LIVE_PROVIDER",
+        "rows": len(rows),
+        "option_chain": rows,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -258,7 +289,7 @@ def api_health():
 
 @app.get("/api/v1/status")
 def status():
-    return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "cached": cache["snapshot"] is not None, "trading": "DISABLED", "analytics": ["OI_FLOW", "PCR", "GEX", "DEX", "IV_SKEW", "GAMMA_FLIP", "GAMMA_WALLS", "MAX_PAIN", "EXPECTED_MOVE", "MARKET_STRUCTURE", "DEALER_FLOW", "LIQUIDITY", "DIRECTION_SCORE"], "replay": "AVAILABLE"}
+    return {"status": "ok", "provider": "INDstocks", "provider_configured": bool(TOKEN), "cached": cache["snapshot"] is not None, "trading": "DISABLED", "analytics": ["OI_FLOW", "PCR", "GEX", "DEX", "VANNA_PROXY", "IV_SKEW", "GAMMA_FLIP", "GAMMA_WALLS", "MAX_PAIN", "EXPECTED_MOVE", "MARKET_STRUCTURE", "DEALER_FLOW", "LIQUIDITY", "DIRECTION_SCORE"], "replay": "AVAILABLE"}
 
 
 @app.get("/api/v1/market")

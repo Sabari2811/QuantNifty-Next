@@ -16,14 +16,21 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
 
           html_path = Path("apps/api/src/quantnifty/web/index.html")
           text = html_path.read_text(encoding="utf-8")
 
-          # Remove the chart-only CSS; the data table gets its own responsive styling.
-          text = re.sub(r'\\n?\\.chart-grid\\{.*?\\n', '\\n', text, count=1)
-          text = re.sub(r'\\n?\\.chart-panel\\{.*?\\n', '\\n', text, count=1)
+          chart_start = text.index('<div class="section"><h2>Market Intelligence Charts</h2>')
+          chain_start = text.index('<div class="section"><div class="chain-head">', chart_start)
+          replacement = '''<div class="section">
+          <h2>Market Intelligence Data</h2>
+          <div class="intelligence-note">Strike-level provider data replacing the charts: open interest, gamma contribution, implied volatility and OI change. All values are derived from the same normalized live option chain.</div>
+          <div class="intelligence-wrap"><table class="intelligence-table"><thead><tr>
+          <th>Strike</th><th>CE OI</th><th>PE OI</th><th>CE Gamma Contribution</th><th>PE Gamma Contribution</th><th>CE IV %</th><th>PE IV %</th><th>CE OI Δ</th><th>PE OI Δ</th>
+          </tr></thead><tbody id="intelligenceBody"><tr><td colspan="9" class="chain-empty">No provider option-chain data.</td></tr></tbody></table></div>
+          </div>
+          '''
+          text = text[:chart_start] + replacement + text[chain_start:]
 
           table_css = '''
           /* Market intelligence data table: same provider-derived values as the former charts */
@@ -42,24 +49,6 @@ jobs:
           '''
           text = text.replace('</style>', table_css + '</style>', 1)
 
-          chart_section = re.compile(
-              r'<div class="section"><h2>Market Intelligence Charts</h2>.*?</div>\\n<div class="section"><div class="chain-head">',
-              re.S,
-          )
-          replacement = '''<div class="section">
-          <h2>Market Intelligence Data</h2>
-          <div class="intelligence-note">Strike-level provider data replacing the charts: open interest, gamma contribution, implied volatility and OI change. All values are derived from the same normalized live option chain.</div>
-          <div class="intelligence-wrap"><table class="intelligence-table"><thead><tr>
-          <th>Strike</th><th>CE OI</th><th>PE OI</th><th>CE Gamma Contribution</th><th>PE Gamma Contribution</th><th>CE IV %</th><th>PE IV %</th><th>CE OI Δ</th><th>PE OI Δ</th>
-          </tr></thead><tbody id="intelligenceBody"><tr><td colspan="9" class="chain-empty">No provider option-chain data.</td></tr></tbody></table></div>
-          </div>
-          <div class="section"><div class="chain-head">'''
-          new_text, count = chart_section.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit("Market Intelligence Charts section was not found exactly once")
-          text = new_text
-
-          # Replace the chart aggregation/drawing code with a table renderer that preserves every strike.
           start = text.index("function shortNum(v)")
           end = text.index("function renderLevelMap", start)
           table_js = '''function intelligenceRows(rows){const by=new Map();rows.forEach(r=>{const strike=Number(r.strike);if(!Number.isFinite(strike))return;const side=r.side==='CE'?'CE':'PE';const oi=Number(r.oi),prev=Number(r.previous_oi),gamma=Number(r.gamma),iv=Number(r.iv);const item=by.get(strike)||{strike,CE:{},PE:{}};item[side]={oi:Number.isFinite(oi)?oi:null,oi_change:Number.isFinite(oi)&&Number.isFinite(prev)?oi-prev:null,gamma_contribution:Number.isFinite(gamma)&&Number.isFinite(oi)?gamma*oi*(side==='CE'?-1:1):null,iv:Number.isFinite(iv)?iv:null};by.set(strike,item)});return[...by.values()].sort((a,b)=>a.strike-b.strike)}
@@ -68,7 +57,7 @@ jobs:
           text = text[:start] + table_js + text[end:]
           text = text.replace('renderCharts([]);', 'renderIntelligence([]);')
           text = text.replace('currentChain=Array.isArray(d.option_chain)?d.option_chain:[];chainRows(currentChain);renderCharts(currentChain);', 'currentChain=Array.isArray(d.option_chain)?d.option_chain:[];chainRows(currentChain);renderIntelligence(currentChain);')
-          text = text.replace('window.addEventListener(\'resize\',()=>{if(currentChain.length)renderCharts(currentChain)});', '')
+          text = text.replace("window.addEventListener('resize',()=>{if(currentChain.length)renderCharts(currentChain)});", '')
           text = text.replace('All dashboard charts above are derived from this same normalized provider chain.', 'Market intelligence data above is derived from this same normalized provider chain.')
           text = text.replace('The full normalized INDstocks option chain remains the analytics source and is also exposed here for transparent inspection. Market intelligence, levels, positioning, volatility, dealer flow, scoring and reference levels are derived from the same normalized rows.', 'The full normalized INDstocks option chain remains the analytics source and is also exposed here for transparent inspection. Market intelligence, levels, positioning, volatility, dealer flow, scoring and reference levels are derived from the same normalized rows. Strike-level intelligence is shown as data in a table rather than charts.')
           html_path.write_text(text, encoding="utf-8")

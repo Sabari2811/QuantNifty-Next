@@ -1,0 +1,18 @@
+name: Finalize decision gates
+on:
+  push:
+    paths:
+      - '.github/workflows/finalize-decision-gates.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate baseline
+        run: |
+          python -m compileall -q apps/api/src
+          pip install -e ./apps/api pytest -q
+          pytest -q apps/api/tests

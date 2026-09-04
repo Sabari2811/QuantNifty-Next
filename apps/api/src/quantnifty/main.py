@@ -156,6 +156,11 @@ def intelligence_page():
 
 @app.get("/health")
 def health(): return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"timestamp":datetime.now(timezone.utc).isoformat()}
+@app.get("/backtest")
+def backtest_page():
+    path=os.path.join(os.path.dirname(__file__),"web","backtest.html")
+    return FileResponse(path)
+
 @app.get("/api/v1/health")
 def api_health(): return health()
 

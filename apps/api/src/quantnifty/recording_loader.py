@@ -7,6 +7,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from quantnifty.historical import canonicalize_snapshot, canonicalize_snapshots
+from quantnifty.report_importer import load_report_to_temporary_root
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -77,11 +78,20 @@ def load_snapshot_bundle(directory: str | Path) -> dict[str, Any]:
     return canonicalize_snapshot(snapshot, "RECORDED_HISTORICAL")
 
 
-def load_recording(root: str | Path) -> list[dict[str, Any]]:
-    base = Path(root)
-    if not base.exists():
-        raise ValueError(f"recording root does not exist: {base}")
+def _load_directory(base: Path) -> list[dict[str, Any]]:
     bundles = sorted({path.parent for path in base.rglob("runtime.json")})
     if not bundles:
         raise ValueError(f"no recorded snapshot bundles found under {base}")
     return canonicalize_snapshots([load_snapshot_bundle(path) for path in bundles], "RECORDED_HISTORICAL")
+
+
+def load_recording(root: str | Path) -> list[dict[str, Any]]:
+    base = Path(root)
+    if not base.exists():
+        raise ValueError(f"recording root does not exist: {base}")
+    if base.is_file():
+        if base.name.lower() != "data_review.txt":
+            raise ValueError(f"recording path must be a snapshot directory or data_Review.txt: {base}")
+        with load_report_to_temporary_root(base) as temp:
+            return _load_directory(Path(temp.name))
+    return _load_directory(base)

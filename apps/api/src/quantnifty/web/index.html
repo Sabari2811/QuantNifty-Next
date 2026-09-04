@@ -9,9 +9,9 @@
 h1{margin:0;font-size:30px}.sub{color:#8e9ab5}.top{display:flex;justify-content:space-between;gap:20px;align-items:end;flex-wrap:wrap}
 .status{margin-top:18px;padding:14px 16px;border:1px solid #263250;border-radius:14px;background:#10172a}.status.live{border-color:#2e7d58}.status.bad{border-color:#8b3d45}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px}.card{background:#11182b;border:1px solid #263250;border-radius:14px;padding:16px;min-height:78px}.label{color:#8e9ab5;font-size:13px}.value{font-size:25px;font-weight:750;margin-top:8px;overflow-wrap:anywhere}.small{font-size:12px;color:#8e9ab5;margin-top:7px}
-.section{margin-top:26px}.section h2{font-size:18px;margin:0 0 10px}.pill{display:inline-block;border:1px solid #33405e;border-radius:999px;padding:4px 9px;font-size:12px}.walls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.error{color:#ffb8be}.muted{color:#7d89a4}.footer{margin-top:22px;color:#69758f;font-size:12px}.range{display:flex;gap:10px;flex-wrap:wrap;margin-top:9px}.range span{border:1px solid #33405e;border-radius:8px;padding:6px 9px;font-size:13px}.controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}.controls button{background:#11182b;color:#dfe7f6;border:1px solid #33405e;border-radius:8px;padding:7px 12px;cursor:pointer}.controls button.active{border-color:#4e9f79}.table-wrap{overflow:auto;border:1px solid #263250;border-radius:14px;background:#0e1526}.chain{width:100%;border-collapse:collapse;min-width:1200px;font-size:12px}.chain th{position:sticky;top:0;background:#151e34;color:#8e9ab5;text-align:right;padding:10px;border-bottom:1px solid #263250;white-space:nowrap}.chain th:first-child,.chain td:first-child{text-align:left}.chain td{padding:9px 10px;border-bottom:1px solid #1d2942;text-align:right;white-space:nowrap}.chain tr.atm{background:#18243a}.ce{color:#b9d8ff}.pe{color:#ffd0d0}.chain-empty{padding:20px}.positive{font-weight:650}.negative{font-weight:650}
-@media(max-width:800px){.two{grid-template-columns:1fr}main{padding:20px 12px 36px}}
+.section{margin-top:26px}.section h2{font-size:18px;margin:0 0 10px}.pill{display:inline-block;border:1px solid #33405e;border-radius:999px;padding:4px 9px;font-size:12px}.walls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.levels-grid{display:grid;grid-template-columns:repeat(3,minmax(180px,1fr));gap:12px}.level-card{background:#11182b;border:1px solid #263250;border-radius:14px;padding:18px;min-height:108px}.level-card .level-name{color:#8e9ab5;font-size:13px}.level-card .level-value{font-size:28px;font-weight:800;margin-top:9px}.level-card .level-note{font-size:12px;color:#7d89a4;margin-top:6px}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.error{color:#ffb8be}.muted{color:#7d89a4}.footer{margin-top:22px;color:#69758f;font-size:12px}.range{display:flex;gap:10px;flex-wrap:wrap;margin-top:9px}.range span{border:1px solid #33405e;border-radius:8px;padding:6px 9px;font-size:13px}
+@media(max-width:900px){.levels-grid{grid-template-columns:repeat(2,minmax(160px,1fr))}}@media(max-width:800px){.two{grid-template-columns:1fr}.levels-grid{grid-template-columns:1fr}main{padding:20px 12px 36px}}
 </style>
 </head>
 <body>
@@ -22,36 +22,30 @@ h1{margin:0;font-size:30px}.sub{color:#8e9ab5}.top{display:flex;justify-content:
 
 <div class="section"><h2>Expected Move Range</h2><div id="expected" class="card"><div class="muted">No provider data yet</div></div></div>
 
-<div class="section"><h2>Gamma Walls</h2><div id="walls" class="walls"><div class="card muted">No provider data yet</div></div></div>
+<div class="section"><h2>Market Levels</h2><div id="marketLevels" class="levels-grid"><div class="level-card muted">No provider data yet</div></div></div>
 
 <div class="section two">
 <div class="card"><div class="label">Market Structure</div><div id="structure" class="value">—</div><div id="levels" class="small">Support — · Resistance —</div></div>
 <div class="card"><div class="label">Dealer Flow</div><div id="dealer" class="value">—</div><div id="rationale" class="small">No rationale yet.</div></div>
 </div>
 
-<div class="section"><h2>Live Option Chain</h2><div class="controls"><span class="small">82-row live normalized chain</span><button id="allBtn" class="active" onclick="setFilter('ALL')">All</button><button id="ceBtn" onclick="setFilter('CE')">Calls</button><button id="peBtn" onclick="setFilter('PE')">Puts</button><span id="chainMeta" class="small"></span></div><div id="chain" class="table-wrap"><div class="chain-empty muted">No provider data yet</div></div></div>
-
 <div class="section"><h2>Data Integrity</h2><div id="integrity" class="card">No snapshot received.</div></div>
-<div class="footer">No mock values are rendered. Provider failures are fail-closed. Trading endpoints remain disabled.</div>
+<div class="footer">Analytics continue to use the full normalized provider option chain. This view intentionally displays only the key market levels. No mock values are rendered. Provider failures are fail-closed. Trading endpoints remain disabled.</div>
 </main>
 <script>
-const statusEl=document.getElementById('status'),grid=document.getElementById('grid'),wallsEl=document.getElementById('walls'),integrityEl=document.getElementById('integrity'),freshEl=document.getElementById('fresh'),expectedEl=document.getElementById('expected'),chainEl=document.getElementById('chain'),chainMeta=document.getElementById('chainMeta');
+const statusEl=document.getElementById('status'),grid=document.getElementById('grid'),integrityEl=document.getElementById('integrity'),freshEl=document.getElementById('fresh'),expectedEl=document.getElementById('expected'),marketLevelsEl=document.getElementById('marketLevels');
 const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const num=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{maximumFractionDigits:d}):'—';
-let currentChain=[];let currentSpot=null;let filter='ALL';
 function card(k,v,e=''){return `<div class="card"><div class="label">${esc(k)}</div><div class="value">${esc(v)}</div>${e?`<div class="small">${esc(e)}</div>`:''}</div>`}
-function setFilter(f){filter=f;document.querySelectorAll('.controls button').forEach(b=>b.classList.remove('active'));document.getElementById(f==='ALL'?'allBtn':f==='CE'?'ceBtn':'peBtn').classList.add('active');renderChain()}
-function renderChain(){
- if(!currentChain.length){chainEl.innerHTML='<div class="chain-empty muted">No provider option-chain data.</div>';chainMeta.textContent='';return}
- const rows=currentChain.filter(r=>filter==='ALL'||r.side===filter);const atmStrike=currentSpot==null?null:currentChain.reduce((best,r)=>Math.abs(r.strike-currentSpot)<Math.abs(best-currentSpot)?r:best,currentChain[0]).strike;
- chainMeta.textContent=`Showing ${rows.length} of ${currentChain.length} rows · ATM ${num(atmStrike,0)}`;
- chainEl.innerHTML=`<table class="chain"><thead><tr><th>Side</th><th>Strike</th><th>Security ID</th><th>LTP</th><th>Prev Close</th><th>OI</th><th>OI Δ</th><th>Volume</th><th>Bid</th><th>Bid Qty</th><th>Ask</th><th>Ask Qty</th><th>IV %</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>Vega</th></tr></thead><tbody>${rows.map(r=>{const doi=Number(r.oi)-Number(r.previous_oi);return `<tr class="${r.strike===atmStrike?'atm':''}"><td class="${r.side==='CE'?'ce':'pe'}"><b>${esc(r.side)}</b></td><td><b>${num(r.strike,0)}</b></td><td>${esc(r.security_id)}</td><td>${num(r.last_price,2)}</td><td>${num(r.previous_close,2)}</td><td>${num(r.oi,0)}</td><td class="${doi>0?'positive':doi<0?'negative':''}">${num(doi,0)}</td><td>${num(r.volume,0)}</td><td>${num(r.bid,2)}</td><td>${num(r.bid_qty,0)}</td><td>${num(r.ask,2)}</td><td>${num(r.ask_qty,0)}</td><td>${num(r.iv,2)}</td><td>${num(r.delta,4)}</td><td>${num(r.gamma,6)}</td><td>${num(r.theta,2)}</td><td>${num(r.vega,2)}</td></tr>`}).join('')}</tbody></table>`;
-}
+function levelCard(name,value,note=''){return `<div class="level-card"><div class="level-name">${esc(name)}</div><div class="level-value">${esc(value)}</div>${note?`<div class="level-note">${esc(note)}</div>`:''}</div>`}
 function render(d){
  const valid=d&&d.data_integrity==='LIVE_PROVIDER'&&Number(d.spot)>0;
  statusEl.className='status '+(valid?'live':'bad');
  statusEl.innerHTML=valid?`<b>LIVE PROVIDER</b> · ${esc(d.bias)} · Confidence ${esc(d.confidence)}%`:`<b>DATA UNAVAILABLE</b> · ${esc(d?.error||'No authenticated provider snapshot')}`;
- if(!valid){freshEl.textContent='No live snapshot';grid.innerHTML='';wallsEl.innerHTML='<div class="card muted">No provider data</div>';expectedEl.innerHTML='<div class="muted">No provider data</div>';document.getElementById('structure').textContent='—';document.getElementById('levels').textContent='Support — · Resistance —';document.getElementById('dealer').textContent='—';document.getElementById('rationale').textContent='No rationale yet.';integrityEl.innerHTML='<span class="error">No fabricated or stale value is displayed.</span>';currentChain=[];renderChain();return}
+ if(!valid){
+  freshEl.textContent='No live snapshot';grid.innerHTML='';expectedEl.innerHTML='<div class="muted">No provider data</div>';marketLevelsEl.innerHTML='<div class="level-card muted">No provider market levels</div>';
+  document.getElementById('structure').textContent='—';document.getElementById('levels').textContent='Support — · Resistance —';document.getElementById('dealer').textContent='—';document.getElementById('rationale').textContent='No rationale yet.';integrityEl.innerHTML='<span class="error">No fabricated or stale value is displayed.</span>';return
+ }
  freshEl.textContent='Updated '+new Date(d.timestamp).toLocaleTimeString();
  grid.innerHTML=[
  ['NIFTY',num(d.spot)],['PCR',num(d.pcr,3)],['Call OI',num(d.call_oi,0)],['Put OI',num(d.put_oi,0)],['Call OI Δ',num(d.call_oi_change,0)],['Put OI Δ',num(d.put_oi_change,0)],
@@ -61,10 +55,17 @@ function render(d){
  ].map(x=>card(x[0],x[1])).join('');
  const em=d.expected_move;
  expectedEl.innerHTML=em?`<div class="label">1 standard deviation</div><div class="value">±${num(em.move,1)} points</div><div class="range"><span>Lower ${num(em.lower,1)}</span><span>Spot ${num(d.spot,1)}</span><span>Upper ${num(em.upper,1)}</span></div>`:'<div class="muted">Expected move unavailable.</div>';
- wallsEl.innerHTML=(d.gamma_walls||[]).map(w=>card(w.side+' wall',num(w.strike,2),'Exposure '+num(w.exposure,0))).join('')||'<div class="card muted">No gamma-wall rows.</div>';
+ const callWall=(d.gamma_walls||[]).find(w=>w.side==='CE');const putWall=(d.gamma_walls||[]).find(w=>w.side==='PE');
+ marketLevelsEl.innerHTML=[
+  levelCard('Market Level Now',num(d.spot,0),'Current NIFTY spot'),
+  levelCard('Gamma Flip',num(d.gamma_flip,0),d.structure||'Gamma regime'),
+  levelCard('Call Wall',callWall?num(callWall.strike,0):'—',callWall?'Highest call gamma wall':'Unavailable'),
+  levelCard('Put Wall',putWall?num(putWall.strike,0):'—',putWall?'Highest put gamma wall':'Unavailable'),
+  levelCard('Support',num(d.support,0),'Nearest support below spot'),
+  levelCard('Resistance',num(d.resistance,0),'Nearest resistance above spot')
+ ].join('');
  document.getElementById('structure').textContent=d.structure;document.getElementById('levels').textContent=`Support ${num(d.support,0)} · Resistance ${num(d.resistance,0)}`;document.getElementById('dealer').textContent=d.dealer_flow;document.getElementById('rationale').textContent=(d.rationale||[]).join(' · ')||'Balanced factors';
- currentSpot=Number(d.spot);currentChain=Array.isArray(d.option_chain)?d.option_chain:[];renderChain();
- integrityEl.innerHTML=`<b>LIVE_PROVIDER</b><div class="small">Source: INDstocks option-chain · Snapshot ${esc(new Date(d.timestamp).toLocaleString())} · Expiry ${esc(d.expiry)} · ${esc(d.rows)} normalized option rows · ${esc(currentChain.length)} chain rows exposed to UI</div>`;
+ integrityEl.innerHTML=`<b>LIVE_PROVIDER</b><div class="small">Source: INDstocks option-chain · Snapshot ${esc(new Date(d.timestamp).toLocaleString())} · Expiry ${esc(d.expiry)} · ${esc(d.rows)} normalized option rows used by analytics</div>`;
 }
 async function initial(){try{const r=await fetch('/api/v1/market',{cache:'no-store'});const d=await r.json();render(r.ok?d:{data_integrity:'UNAVAILABLE',error:d.detail||'Market endpoint unavailable'})}catch(e){render({data_integrity:'UNAVAILABLE',error:'Market endpoint unreachable'})}}
 function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${proto}://${location.host}/ws`);ws.onopen=()=>statusEl.textContent='Connected · waiting for authenticated provider snapshot…';ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(_){render({data_integrity:'UNAVAILABLE',error:'Invalid provider message'})}};ws.onerror=()=>{statusEl.className='status bad';statusEl.textContent='Live stream connection error'};ws.onclose=()=>{statusEl.className='status bad';statusEl.textContent='Live stream disconnected · retrying…';setTimeout(connect,3000)}}

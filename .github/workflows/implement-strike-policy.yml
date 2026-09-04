@@ -1,0 +1,150 @@
+name: Implement strike policy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Implement strike policy and validate
+        run: |
+          cat > apps/api/src/quantnifty/strike_selector.py <<'PY'
+          from __future__ import annotations
+
+          from typing import Any
+
+          def _num(value: Any, default: float = 0.0) -> float:
+              try:
+                  return float(value)
+              except (TypeError, ValueError):
+                  return default
+
+          def _is_itm(row: dict[str, Any], spot: float) -> bool:
+              strike = _num(row.get('strike'))
+              return (row.get('side') == 'CE' and strike < spot) or (row.get('side') == 'PE' and strike > spot)
+
+          def _is_otm(row: dict[str, Any], spot: float) -> bool:
+              strike = _num(row.get('strike'))
+              return (row.get('side') == 'CE' and strike > spot) or (row.get('side') == 'PE' and strike < spot)
+
+          def _score(row: dict[str, Any], spot: float, expected_move: float | None, gamma_blast: bool) -> float:
+              premium = max(_num(row.get('last_price')), 0.0)
+              delta = abs(_num(row.get('delta')))
+              gamma = abs(_num(row.get('gamma')))
+              theta = abs(_num(row.get('theta')))
+              volume = max(_num(row.get('volume')), 0.0)
+              bid, ask = _num(row.get('bid')), _num(row.get('ask'))
+              spread = max(0.0, ask - bid) if ask > 0 and bid > 0 else premium * 0.10
+              spread_pct = spread / max(premium, 1.0)
+              distance = abs(_num(row.get('strike')) - spot)
+              move_fit = 1.0
+              if expected_move and expected_move > 0:
+                  move_fit = max(0.0, 1.0 - max(0.0, distance - expected_move) / expected_move)
+              liquidity = min(1.0, volume / 100_000.0)
+              score = 45.0 * delta + 25.0 * min(1.0, gamma * 100.0) + 20.0 * move_fit + 10.0 * liquidity
+              score -= 20.0 * min(1.0, spread_pct)
+              score -= 10.0 * min(1.0, theta / max(premium, 1.0))
+              if gamma_blast:
+                  score += 25.0 * min(1.0, gamma * 100.0)
+              return round(score, 4)
+
+          def select_strikes(spot: float, rows: list[dict[str, Any]], direction: str, *, gamma_blast: bool = False, expected_move: float | None = None) -> dict[str, Any]:
+              direction = direction.upper()
+              if spot <= 0 or direction not in {'BULLISH', 'BEARISH'}:
+                  return {'eligible': False, 'reason': 'no_directional_signal', 'candidates': [], 'selected': None}
+              side = 'CE' if direction == 'BULLISH' else 'PE'
+              side_rows = [r for r in rows if r.get('side') == side and _num(r.get('last_price')) > 0]
+              if not side_rows:
+                  return {'eligible': False, 'reason': 'no_liquid_contracts', 'candidates': [], 'selected': None}
+              atm = min(side_rows, key=lambda r: abs(_num(r.get('strike')) - spot))
+              itm = sorted((r for r in side_rows if _is_itm(r, spot)), key=lambda r: abs(_num(r.get('strike')) - spot))
+              candidates = [atm] + itm[:3]
+              if gamma_blast:
+                  otm = sorted((r for r in side_rows if _is_otm(r, spot)), key=lambda r: abs(_num(r.get('strike')) - spot))
+                  if expected_move and expected_move > 0:
+                      otm = [r for r in otm if abs(_num(r.get('strike')) - spot) <= expected_move]
+                  candidates.extend(otm[:2])
+              unique = {}
+              for row in candidates:
+                  unique[f"{row.get('side')}:{_num(row.get('strike')):.4f}"] = row
+              ranked = []
+              for row in unique.values():
+                  strike = _num(row.get('strike'))
+                  classification = 'ATM' if row is atm else 'ITM' if _is_itm(row, spot) else 'OTM'
+                  ranked.append({'side': row.get('side'), 'strike': strike, 'classification': classification, 'security_id': row.get('security_id', ''), 'trading_symbol': row.get('trading_symbol', ''), 'premium': _num(row.get('last_price')), 'delta': _num(row.get('delta')), 'gamma': _num(row.get('gamma')), 'theta': _num(row.get('theta')), 'iv': _num(row.get('iv')), 'volume': _num(row.get('volume')), 'score': _score(row, spot, expected_move, gamma_blast)})
+              ranked.sort(key=lambda r: r['score'], reverse=True)
+              return {'eligible': bool(ranked), 'direction': direction, 'strategy': 'GAMMA_BLAST' if gamma_blast else 'DIRECTIONAL', 'allowed_classifications': ['ATM', 'ITM', 'OTM'] if gamma_blast else ['ATM', 'ITM'], 'selected': ranked[0] if ranked else None, 'candidates': ranked, 'reason': 'best_risk_adjusted_strike' if ranked else 'no_candidate'}
+          PY
+          cat > apps/api/tests/test_strike_selector.py <<'PY'
+          from quantnifty.strike_selector import select_strikes
+
+          def row(strike, side, premium=100, delta=0.5, gamma=0.01, theta=-2, volume=200000):
+              return {'strike': strike, 'side': side, 'last_price': premium, 'delta': delta, 'gamma': gamma, 'theta': theta, 'iv': 10, 'volume': volume, 'bid': premium-1, 'ask': premium+1, 'security_id': str(strike)+side}
+
+          def test_normal_bullish_excludes_otm():
+              r = select_strikes(24000, [row(23800,'CE',300,.75),row(24000,'CE',150,.52),row(24200,'CE',70,.28)], 'BULLISH')
+              assert r['allowed_classifications'] == ['ATM','ITM']
+              assert {x['classification'] for x in r['candidates']} <= {'ATM','ITM'}
+
+          def test_normal_bearish_excludes_otm():
+              r = select_strikes(24000, [row(24200,'PE',300,-.75),row(24000,'PE',150,-.52),row(23800,'PE',70,-.28)], 'BEARISH')
+              assert {x['classification'] for x in r['candidates']} <= {'ATM','ITM'}
+
+          def test_gamma_blast_allows_controlled_otm():
+              r = select_strikes(24000, [row(23800,'CE',300,.75),row(24000,'CE',150,.52),row(24100,'CE',80,.35),row(24200,'CE',45,.22),row(24500,'CE',10,.08)], 'BULLISH', gamma_blast=True, expected_move=220)
+              assert r['allowed_classifications'] == ['ATM','ITM','OTM']
+              assert {x['classification'] for x in r['candidates']} == {'ATM','ITM','OTM'}
+              assert all(x['strike'] <= 24200 for x in r['candidates'] if x['classification']=='OTM')
+
+          def test_neutral_no_strike():
+              r = select_strikes(24000, [], 'NEUTRAL')
+              assert not r['eligible'] and r['selected'] is None
+          PY
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('apps/api/src/quantnifty/main.py')
+          s=p.read_text()
+          s=s.replace('from quantnifty.replay import normalize_candles, replay, summary, to_dict', 'from quantnifty.replay import normalize_candles, replay, summary, to_dict\nfrom quantnifty.strike_selector import select_strikes')
+          s=s.replace('    expected_move = expected_move_value(spot, atm_iv, expiry)\n', '    expected_move = expected_move_value(spot, atm_iv, expiry)\n    strike_selection = select_strikes(spot, rows, bias, expected_move=(expected_move or None))\n')
+          s=s.replace('        "rationale": reasons,\n', '        "rationale": reasons,\n        "strike_selection": strike_selection,\n')
+          s=s.replace('"DIRECTION_SCORE"], "replay"', '"DIRECTION_SCORE", "STRIKE_SELECTION"], "replay"')
+          marker='@app.get("/api/v1/historical")'
+          endpoint='''@app.get("/api/v1/decision")\nasync def decision(strategy: str = "directional"):\n    try:\n        data = await snapshot()\n    except Exception as exc:\n        raise HTTPException(status_code=503, detail=str(exc)) from exc\n    mode = strategy.strip().lower()\n    if mode not in {"directional", "gamma_blast"}:\n        raise HTTPException(400, "strategy must be directional or gamma_blast")\n    selection = select_strikes(data["spot"], data["option_chain"], data["bias"], gamma_blast=(mode == "gamma_blast"), expected_move=(data.get("expected_move") or {}).get("move"))\n    return {"mode": "READ_ONLY", "execution": "DISABLED", "strategy": "GAMMA_BLAST" if mode == "gamma_blast" else "DIRECTIONAL", "bias": data["bias"], "confidence": data["confidence"], "strike_selection": selection}\n\n\n'''
+          s=s.replace(marker, endpoint+marker)
+          p.write_text(s)
+
+          p=Path('apps/api/src/quantnifty/web/index.html')
+          h=p.read_text()
+          css='''.strike-wrap{overflow:auto;border:1px solid #263250;border-radius:12px;background:#0d1425}.strike-table{width:100%;min-width:980px;border-collapse:collapse;font-size:11px}.strike-table th{background:#162038;color:#8e9ab5;text-align:right;padding:9px 10px;border-bottom:1px solid #33405e;white-space:nowrap}.strike-table th:first-child,.strike-table td:first-child{text-align:left}.strike-table td{padding:8px 10px;border-bottom:1px solid #202b46;text-align:right;white-space:nowrap}.strike-table tr.selected{background:#1a2743}.strike-table tr.otm{background:#211b27}.strike-note{font-size:11px;color:#7d89a4;margin:5px 0 10px}.'''
+          h=h.replace('</style>',css+'\n</style>')
+          section='''<div class="section panel"><div class="panel-title">Trade Strike Selection</div><div class="panel-sub">Normal trades allow ATM + ITM only. OTM is eligible only for Gamma Blast and only within the expected-move distance.</div><div id="strikeDecision" class="strike-wrap"><div class="muted">Waiting for provider decision data…</div></div></div>\n'''
+          h=h.replace('<div class="section two"><div class="panel"><div class="panel-title">Positioning & Volatility</div>',section+'<div class="section two"><div class="panel"><div class="panel-title">Positioning & Volatility</div>')
+          fn='''function renderStrikeSelection(s){const el=$(\'strikeDecision\');if(!el)return;if(!s||!s.eligible){el.innerHTML=`<div class="strike-note">No eligible directional strike: ${esc(s?.reason||\'No signal\')}</div>`;return}const rows=s.candidates||[];el.innerHTML=`<div class="strike-note"><b>${esc(s.strategy)}</b> · ${esc(s.direction)} · Allowed: ${esc((s.allowed_classifications||[]).join(\' + \'))} · Selected: <b>${esc(s.selected?.strike??\'—\')}</b> ${esc(s.selected?.classification||\'\')}</div><table class="strike-table"><thead><tr><th>Type</th><th>Strike</th><th>Premium</th><th>Delta</th><th>Gamma</th><th>Theta</th><th>IV %</th><th>Volume</th><th>Score</th></tr></thead><tbody>${rows.map(r=>`<tr class="${r===s.selected?\'selected \':\'\'}${r.classification===\'OTM\'?\'otm\':\'\'}"><td>${esc(r.classification)}</td><td>${esc(n(r.strike,0))}</td><td>${esc(n(r.premium,2))}</td><td>${esc(n(r.delta,2))}</td><td>${esc(n(r.gamma,4))}</td><td>${esc(n(r.theta,2))}</td><td>${esc(n(r.iv,2))}</td><td>${esc(n(r.volume,0))}</td><td>${esc(n(r.score,2))}</td></tr>`).join(\'\')}</tbody></table>`}\n'''
+          h=h.replace('function render(d){',fn+'function render(d){')
+          h=h.replace('renderLevelMap(d,cw,pw);walls.innerHTML=', 'renderLevelMap(d,cw,pw);renderStrikeSelection(d.strike_selection);walls.innerHTML=')
+          p.write_text(h)
+          PY
+          pip install -e ./apps/api pytest
+          python -m compileall -q apps/api/src
+          pytest -q apps/api/tests
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/api/src/quantnifty/strike_selector.py apps/api/src/quantnifty/main.py apps/api/tests/test_strike_selector.py apps/api/src/quantnifty/web/index.html
+          git commit -m 'Implement dynamic ATM ITM and Gamma Blast strike selection'
+          git push
+      - name: Remove one-time workflow
+        run: |
+          git rm .github/workflows/implement-strike-policy.yml
+          git commit -m 'Remove one-time strike policy workflow'
+          git push

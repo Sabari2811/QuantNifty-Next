@@ -6,69 +6,63 @@
 <style>
 :root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:#080d19;color:#e8edf7}
 *{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0b1020,#080d19);min-height:100vh}main{max-width:1600px;margin:auto;padding:28px 20px 48px}
-h1{margin:0;font-size:30px}.sub{color:#8e9ab5}.top{display:flex;justify-content:space-between;gap:20px;align-items:end;flex-wrap:wrap}
+h1{margin:0;font-size:30px}.sub{color:#8e9ab5}.top{display:flex;justify-content:space-between;gap:20px;align-items:end;flex-wrap:wrap}.pill{display:inline-block;border:1px solid #33405e;border-radius:999px;padding:5px 10px;font-size:12px}
 .status{margin-top:18px;padding:14px 16px;border:1px solid #263250;border-radius:14px;background:#10172a}.status.live{border-color:#2e7d58}.status.bad{border-color:#8b3d45}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px}.card{background:#11182b;border:1px solid #263250;border-radius:14px;padding:16px;min-height:78px}.label{color:#8e9ab5;font-size:13px}.value{font-size:25px;font-weight:750;margin-top:8px;overflow-wrap:anywhere}.small{font-size:12px;color:#8e9ab5;margin-top:7px}
-.section{margin-top:26px}.section h2{font-size:18px;margin:0 0 10px}.pill{display:inline-block;border:1px solid #33405e;border-radius:999px;padding:4px 9px;font-size:12px}.walls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.levels-grid{display:grid;grid-template-columns:repeat(3,minmax(180px,1fr));gap:12px}.level-card{background:#11182b;border:1px solid #263250;border-radius:14px;padding:18px;min-height:108px}.level-card .level-name{color:#8e9ab5;font-size:13px}.level-card .level-value{font-size:28px;font-weight:800;margin-top:9px}.level-card .level-note{font-size:12px;color:#7d89a4;margin-top:6px}.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.error{color:#ffb8be}.muted{color:#7d89a4}.footer{margin-top:22px;color:#69758f;font-size:12px}.range{display:flex;gap:10px;flex-wrap:wrap;margin-top:9px}.range span{border:1px solid #33405e;border-radius:8px;padding:6px 9px;font-size:13px}
-@media(max-width:900px){.levels-grid{grid-template-columns:repeat(2,minmax(160px,1fr))}}@media(max-width:800px){.two{grid-template-columns:1fr}.levels-grid{grid-template-columns:1fr}main{padding:20px 12px 36px}}
+.section{margin-top:26px}.section h2{font-size:18px;margin:0 0 10px}.grid{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:10px;margin-top:14px}.card{background:#11182b;border:1px solid #263250;border-radius:14px;padding:15px;min-height:82px}.label{color:#8e9ab5;font-size:12px}.value{font-size:23px;font-weight:780;margin-top:8px;overflow-wrap:anywhere}.small{font-size:12px;color:#8e9ab5;margin-top:7px}.muted{color:#7d89a4}.error{color:#ffb8be}
+.levels-grid{display:grid;grid-template-columns:repeat(6,minmax(150px,1fr));gap:10px}.level-card{background:#11182b;border:1px solid #263250;border-radius:14px;padding:17px;min-height:112px}.level-name{color:#8e9ab5;font-size:12px}.level-value{font-size:27px;font-weight:820;margin-top:9px}.level-note{font-size:11px;color:#7d89a4;margin-top:6px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}.three{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.panel{background:#11182b;border:1px solid #263250;border-radius:14px;padding:17px}.panel-title{font-weight:700;font-size:14px;margin-bottom:13px}.metric-row{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid #202b46}.metric-row:last-child{border-bottom:0}.metric-row span:first-child{color:#8e9ab5}.metric-row span:last-child{font-weight:700;text-align:right}.range{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}.range span{border:1px solid #33405e;border-radius:8px;padding:7px 10px;font-size:13px}.wall{display:flex;justify-content:space-between;align-items:center;border:1px solid #263250;border-radius:10px;padding:12px;margin-top:9px}.wall .wall-side{color:#8e9ab5;font-size:12px}.wall .wall-strike{font-size:22px;font-weight:800}.wall .wall-exp{font-size:11px;color:#7d89a4}.score{font-size:30px;font-weight:850}.bar{height:8px;border-radius:99px;background:#202b46;overflow:hidden;margin-top:9px}.bar>i{display:block;height:100%;background:#8e9ab5}.note{line-height:1.55;color:#a7b2c8;font-size:13px}
+.footer{margin-top:22px;color:#69758f;font-size:12px;line-height:1.5}
+@media(max-width:1200px){.grid{grid-template-columns:repeat(4,minmax(150px,1fr))}.levels-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}}@media(max-width:800px){.grid{grid-template-columns:repeat(2,minmax(140px,1fr))}.levels-grid,.three,.two{grid-template-columns:1fr}main{padding:20px 12px 36px}}
 </style>
 </head>
 <body>
 <main>
 <div class="top"><div><h1>QuantNifty Next</h1><div class="sub">NIFTY options intelligence · read-only / no order execution</div></div><div id="fresh" class="pill">Waiting for provider data</div></div>
 <div id="status" class="status">Connecting to live stream…</div>
-<div class="grid" id="grid"></div>
 
-<div class="section"><h2>Expected Move Range</h2><div id="expected" class="card"><div class="muted">No provider data yet</div></div></div>
+<div class="section"><h2>Market Snapshot</h2><div class="grid" id="grid"></div></div>
 
-<div class="section"><h2>Market Levels</h2><div id="marketLevels" class="levels-grid"><div class="level-card muted">No provider data yet</div></div></div>
+<div class="section"><h2>Key Market Levels</h2><div id="marketLevels" class="levels-grid"><div class="level-card muted">No provider market levels</div></div></div>
 
-<div class="section two">
-<div class="card"><div class="label">Market Structure</div><div id="structure" class="value">—</div><div id="levels" class="small">Support — · Resistance —</div></div>
-<div class="card"><div class="label">Dealer Flow</div><div id="dealer" class="value">—</div><div id="rationale" class="small">No rationale yet.</div></div>
+<div class="section"><h2>Gamma Walls</h2><div id="walls" class="two"><div class="panel muted">No provider gamma-wall data</div></div></div>
+
+<div class="section"><h2>Expected Move</h2><div id="expected" class="panel"><div class="muted">No provider data yet</div></div></div>
+
+<div class="section three">
+<div class="panel"><div class="panel-title">Market Structure</div><div class="metric-row"><span>Regime</span><span id="structure">—</span></div><div class="metric-row"><span>Spot vs Gamma Flip</span><span id="spotFlip">—</span></div><div class="metric-row"><span>Support</span><span id="support">—</span></div><div class="metric-row"><span>Resistance</span><span id="resistance">—</span></div></div>
+<div class="panel"><div class="panel-title">Dealer Flow</div><div class="metric-row"><span>Classification</span><span id="dealer">—</span></div><div class="metric-row"><span>Call OI Δ</span><span id="callFlow">—</span></div><div class="metric-row"><span>Put OI Δ</span><span id="putFlow">—</span></div><div class="metric-row"><span>Rationale</span><span id="rationale">—</span></div></div>
+<div class="panel"><div class="panel-title">Directional Score</div><div class="metric-row"><span>Bullish</span><span id="bullish">—</span></div><div class="bar"><i id="bullBar" style="width:0%"></i></div><div class="metric-row"><span>Bearish</span><span id="bearish">—</span></div><div class="bar"><i id="bearBar" style="width:0%"></i></div><div class="metric-row"><span>Bias / Confidence</span><span id="bias">—</span></div></div>
 </div>
 
-<div class="section"><h2>Data Integrity</h2><div id="integrity" class="card">No snapshot received.</div></div>
-<div class="footer">Analytics continue to use the full normalized provider option chain. This view intentionally displays only the key market levels. No mock values are rendered. Provider failures are fail-closed. Trading endpoints remain disabled.</div>
+<div class="section two">
+<div class="panel"><div class="panel-title">Positioning & Volatility</div><div class="metric-row"><span>PCR</span><span id="pcr">—</span></div><div class="metric-row"><span>Call OI</span><span id="callOi">—</span></div><div class="metric-row"><span>Put OI</span><span id="putOi">—</span></div><div class="metric-row"><span>GEX</span><span id="gex">—</span></div><div class="metric-row"><span>DEX</span><span id="dex">—</span></div><div class="metric-row"><span>Vanna Proxy</span><span id="vanna">—</span></div><div class="metric-row"><span>IV Skew</span><span id="ivSkew">—</span></div><div class="metric-row"><span>ATM IV</span><span id="atmIv">—</span></div></div>
+<div class="panel"><div class="panel-title">Reference Levels & Feed</div><div class="metric-row"><span>Max Pain</span><span id="maxPain">—</span></div><div class="metric-row"><span>Gamma Flip</span><span id="gammaFlip">—</span></div><div class="metric-row"><span>Call Wall</span><span id="callWall">—</span></div><div class="metric-row"><span>Put Wall</span><span id="putWall">—</span></div><div class="metric-row"><span>Liquidity</span><span id="liquidity">—</span></div><div class="metric-row"><span>Normalized Rows</span><span id="rows">—</span></div><div class="metric-row"><span>Expiry</span><span id="expiry">—</span></div><div class="metric-row"><span>Provider</span><span>INDstocks · LIVE_PROVIDER</span></div></div>
+</div>
+
+<div class="section"><h2>Data Integrity</h2><div id="integrity" class="panel">No snapshot received.</div></div>
+<div class="footer">The full normalized INDstocks option chain remains the analytics source. This dashboard is a focused intelligence view: key levels, positioning, volatility, dealer flow, scoring and reference levels are displayed without rendering the raw 82-row chain. No mock values are rendered. Provider failures are fail-closed. Trading endpoints remain disabled.</div>
 </main>
 <script>
-const statusEl=document.getElementById('status'),grid=document.getElementById('grid'),integrityEl=document.getElementById('integrity'),freshEl=document.getElementById('fresh'),expectedEl=document.getElementById('expected'),marketLevelsEl=document.getElementById('marketLevels');
+const $=id=>document.getElementById(id);const statusEl=$('status'),grid=$('grid'),fresh=$('fresh'),levels=$('marketLevels'),walls=$('walls'),expected=$('expected'),integrity=$('integrity');
 const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const num=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{maximumFractionDigits:d}):'—';
-function card(k,v,e=''){return `<div class="card"><div class="label">${esc(k)}</div><div class="value">${esc(v)}</div>${e?`<div class="small">${esc(e)}</div>`:''}</div>`}
-function levelCard(name,value,note=''){return `<div class="level-card"><div class="level-name">${esc(name)}</div><div class="level-value">${esc(value)}</div>${note?`<div class="level-note">${esc(note)}</div>`:''}</div>`}
+const n=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{maximumFractionDigits:d}):'—';
+function level(name,value,note){return `<div class="level-card"><div class="level-name">${esc(name)}</div><div class="level-value">${esc(value)}</div><div class="level-note">${esc(note)}</div></div>`}
 function render(d){
- const valid=d&&d.data_integrity==='LIVE_PROVIDER'&&Number(d.spot)>0;
- statusEl.className='status '+(valid?'live':'bad');
- statusEl.innerHTML=valid?`<b>LIVE PROVIDER</b> · ${esc(d.bias)} · Confidence ${esc(d.confidence)}%`:`<b>DATA UNAVAILABLE</b> · ${esc(d?.error||'No authenticated provider snapshot')}`;
- if(!valid){
-  freshEl.textContent='No live snapshot';grid.innerHTML='';expectedEl.innerHTML='<div class="muted">No provider data</div>';marketLevelsEl.innerHTML='<div class="level-card muted">No provider market levels</div>';
-  document.getElementById('structure').textContent='—';document.getElementById('levels').textContent='Support — · Resistance —';document.getElementById('dealer').textContent='—';document.getElementById('rationale').textContent='No rationale yet.';integrityEl.innerHTML='<span class="error">No fabricated or stale value is displayed.</span>';return
- }
- freshEl.textContent='Updated '+new Date(d.timestamp).toLocaleTimeString();
- grid.innerHTML=[
- ['NIFTY',num(d.spot)],['PCR',num(d.pcr,3)],['Call OI',num(d.call_oi,0)],['Put OI',num(d.put_oi,0)],['Call OI Δ',num(d.call_oi_change,0)],['Put OI Δ',num(d.put_oi_change,0)],
- ['GEX',num(d.gex,0)],['DEX',num(d.dex,0)],['Vanna Proxy',num(d.vanna_proxy,0)],['IV Skew',num(d.iv_skew)],['ATM IV',num(d.atm_iv)],['Gamma Flip',num(d.gamma_flip)],
- ['Max Pain',num(d.max_pain)],['Expected Move',d.expected_move?num(d.expected_move.move,1):'—'],['Bullish Score',num(d.bullish_score,1)],['Bearish Score',num(d.bearish_score,1)],['Confidence',num(d.confidence,1)+'%'],
- ['Liquidity',num(d.liquidity_score,1)],['Option Rows',num(d.rows,0)],['Expiry',d.expiry]
- ].map(x=>card(x[0],x[1])).join('');
- const em=d.expected_move;
- expectedEl.innerHTML=em?`<div class="label">1 standard deviation</div><div class="value">±${num(em.move,1)} points</div><div class="range"><span>Lower ${num(em.lower,1)}</span><span>Spot ${num(d.spot,1)}</span><span>Upper ${num(em.upper,1)}</span></div>`:'<div class="muted">Expected move unavailable.</div>';
- const callWall=(d.gamma_walls||[]).find(w=>w.side==='CE');const putWall=(d.gamma_walls||[]).find(w=>w.side==='PE');
- marketLevelsEl.innerHTML=[
-  levelCard('Market Level Now',num(d.spot,0),'Current NIFTY spot'),
-  levelCard('Gamma Flip',num(d.gamma_flip,0),d.structure||'Gamma regime'),
-  levelCard('Call Wall',callWall?num(callWall.strike,0):'—',callWall?'Highest call gamma wall':'Unavailable'),
-  levelCard('Put Wall',putWall?num(putWall.strike,0):'—',putWall?'Highest put gamma wall':'Unavailable'),
-  levelCard('Support',num(d.support,0),'Nearest support below spot'),
-  levelCard('Resistance',num(d.resistance,0),'Nearest resistance above spot')
- ].join('');
- document.getElementById('structure').textContent=d.structure;document.getElementById('levels').textContent=`Support ${num(d.support,0)} · Resistance ${num(d.resistance,0)}`;document.getElementById('dealer').textContent=d.dealer_flow;document.getElementById('rationale').textContent=(d.rationale||[]).join(' · ')||'Balanced factors';
- integrityEl.innerHTML=`<b>LIVE_PROVIDER</b><div class="small">Source: INDstocks option-chain · Snapshot ${esc(new Date(d.timestamp).toLocaleString())} · Expiry ${esc(d.expiry)} · ${esc(d.rows)} normalized option rows used by analytics</div>`;
+ const valid=d&&d.data_integrity==='LIVE_PROVIDER'&&Number(d.spot)>0;statusEl.className='status '+(valid?'live':'bad');statusEl.innerHTML=valid?`<b>LIVE PROVIDER</b> · ${esc(d.bias)} · Confidence ${esc(d.confidence)}%`:`<b>DATA UNAVAILABLE</b> · ${esc(d?.error||'No authenticated provider snapshot')}`;
+ if(!valid){fresh.textContent='No live snapshot';grid.innerHTML='';levels.innerHTML='<div class="level-card muted">No provider market levels</div>';walls.innerHTML='<div class="panel muted">No provider gamma-wall data</div>';expected.innerHTML='<div class="muted">No provider expected-move data</div>';integrity.innerHTML='<span class="error">No fabricated or stale value is displayed.</span>';return}
+ fresh.textContent='Updated '+new Date(d.timestamp).toLocaleTimeString();
+ grid.innerHTML=[['NIFTY',n(d.spot,1)],['PCR',n(d.pcr,3)],['Call OI',n(d.call_oi,0)],['Put OI',n(d.put_oi,0)],['Call OI Δ',n(d.call_oi_change,0)],['Put OI Δ',n(d.put_oi_change,0)],['GEX',n(d.gex,0)],['DEX',n(d.dex,0)],['Vanna Proxy',n(d.vanna_proxy,0)],['IV Skew',n(d.iv_skew,2)],['ATM IV',n(d.atm_iv,2)],['Max Pain',n(d.max_pain,0)],['Expected Move',d.expected_move?n(d.expected_move.move,1):'—'],['Bullish Score',n(d.bullish_score,1)],['Bearish Score',n(d.bearish_score,1)],['Confidence',n(d.confidence,1)+'%'],['Liquidity',n(d.liquidity_score,1)],['Option Rows',n(d.rows,0)],['Expiry',d.expiry],['Bias',d.bias]].map(x=>`<div class="card"><div class="label">${esc(x[0])}</div><div class="value">${esc(x[1])}</div></div>`).join('');
+ const cw=(d.gamma_walls||[]).find(w=>w.side==='CE'),pw=(d.gamma_walls||[]).find(w=>w.side==='PE');
+ levels.innerHTML=[level('Market Level Now',n(d.spot,0),'Current NIFTY spot'),level('Gamma Flip',n(d.gamma_flip,0),d.structure||'Gamma regime'),level('Call Wall',cw?n(cw.strike,0):'—',cw?`Exposure ${n(cw.exposure,2)}`:'Unavailable'),level('Put Wall',pw?n(pw.strike,0):'—',pw?`Exposure ${n(pw.exposure,2)}`:'Unavailable'),level('Support',n(d.support,0),'Nearest support at/below spot'),level('Resistance',n(d.resistance,0),'Nearest resistance at/above spot')].join('');
+ walls.innerHTML=[cw,pw].filter(Boolean).length?`<div class="panel"><div class="panel-title">Call Gamma Wall</div><div class="wall"><div><div class="wall-side">CALL / CE</div><div class="wall-strike">${esc(n(cw?.strike,0))}</div></div><div class="wall-exp">Exposure<br><b>${esc(n(cw?.exposure,2))}</b></div></div></div><div class="panel"><div class="panel-title">Put Gamma Wall</div><div class="wall"><div><div class="wall-side">PUT / PE</div><div class="wall-strike">${esc(n(pw?.strike,0))}</div></div><div class="wall-exp">Exposure<br><b>${esc(n(pw?.exposure,2))}</b></div></div></div>`:'<div class="panel muted">Gamma walls unavailable</div>';
+ const em=d.expected_move;if(em){expected.innerHTML=`<div class="metric-row"><span>1σ Expected Move</span><span>±${esc(n(em.move,1))} points</span></div><div class="range"><span>Lower ${esc(n(em.lower,1))}</span><span>Spot ${esc(n(d.spot,1))}</span><span>Upper ${esc(n(em.upper,1))}</span></div>`}else expected.innerHTML='<div class="muted">Expected move unavailable.</div>';
+ $('structure').textContent=d.structure||'—';$('spotFlip').textContent=d.gamma_flip==null?'—':`${n(d.spot,0)} · ${d.spot>d.gamma_flip?'ABOVE':'BELOW'} ${n(d.gamma_flip,0)}`;$('support').textContent=n(d.support,0);$('resistance').textContent=n(d.resistance,0);$('dealer').textContent=d.dealer_flow||'—';$('callFlow').textContent=n(d.call_oi_change,0);$('putFlow').textContent=n(d.put_oi_change,0);$('rationale').textContent=(d.rationale||[]).join(' · ')||'Balanced factors';
+ $('bullish').textContent=n(d.bullish_score,1);$('bearish').textContent=n(d.bearish_score,1);$('bullBar').style.width=Math.max(0,Math.min(100,Number(d.bullish_score)||0))+'%';$('bearBar').style.width=Math.max(0,Math.min(100,Number(d.bearish_score)||0))+'%';$('bias').textContent=`${d.bias||'—'} · ${n(d.confidence,1)}%`;
+ $('pcr').textContent=n(d.pcr,3);$('callOi').textContent=n(d.call_oi,0);$('putOi').textContent=n(d.put_oi,0);$('gex').textContent=n(d.gex,0);$('dex').textContent=n(d.dex,0);$('vanna').textContent=n(d.vanna_proxy,0);$('ivSkew').textContent=n(d.iv_skew,2);$('atmIv').textContent=n(d.atm_iv,2);$('maxPain').textContent=n(d.max_pain,0);$('gammaFlip').textContent=n(d.gamma_flip,0);$('callWall').textContent=cw?n(cw.strike,0):'—';$('putWall').textContent=pw?n(pw.strike,0):'—';$('liquidity').textContent=n(d.liquidity_score,1);$('rows').textContent=n(d.rows,0);$('expiry').textContent=d.expiry||'—';
+ integrity.innerHTML=`<b>LIVE_PROVIDER</b><div class="small">Source: INDstocks option-chain · Snapshot ${esc(new Date(d.timestamp).toLocaleString())} · Expiry ${esc(d.expiry)} · ${esc(d.rows)} normalized option rows consumed by analytics</div>`;
 }
 async function initial(){try{const r=await fetch('/api/v1/market',{cache:'no-store'});const d=await r.json();render(r.ok?d:{data_integrity:'UNAVAILABLE',error:d.detail||'Market endpoint unavailable'})}catch(e){render({data_integrity:'UNAVAILABLE',error:'Market endpoint unreachable'})}}
-function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${proto}://${location.host}/ws`);ws.onopen=()=>statusEl.textContent='Connected · waiting for authenticated provider snapshot…';ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(_){render({data_integrity:'UNAVAILABLE',error:'Invalid provider message'})}};ws.onerror=()=>{statusEl.className='status bad';statusEl.textContent='Live stream connection error'};ws.onclose=()=>{statusEl.className='status bad';statusEl.textContent='Live stream disconnected · retrying…';setTimeout(connect,3000)}}
+function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${proto}://${location.host}/ws`);ws.onopen=()=>{statusEl.className='status';statusEl.textContent='Connected · waiting for authenticated provider snapshot…'};ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(_){render({data_integrity:'UNAVAILABLE',error:'Invalid provider message'})}};ws.onerror=()=>{statusEl.className='status bad';statusEl.textContent='Live stream connection error'};ws.onclose=()=>{statusEl.className='status bad';statusEl.textContent='Live stream disconnected · retrying…';setTimeout(connect,3000)}}
 initial();connect();
 </script>
 </body>

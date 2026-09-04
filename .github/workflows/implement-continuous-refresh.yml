@@ -1,0 +1,60 @@
+name: Implement continuous market refresh
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/implement-continuous-refresh.yml'
+permissions:
+  contents: write
+jobs:
+  implement:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Implement refresh loop
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('apps/api/src/quantnifty/web/index.html')
+          s=p.read_text()
+          marker='<div class="status" id="status">'
+          if 'id="refreshIndicator"' not in s:
+              s=s.replace(marker, '<div id="refreshIndicator" style="font-size:12px;opacity:.8;margin-bottom:8px">Live refresh: starting…</div>\n'+marker, 1)
+          if 'function startLiveRefresh' not in s:
+              anchor='</script>'
+              js='''\nfunction startLiveRefresh(){\n  const indicator=document.getElementById("refreshIndicator");\n  let timer=null;\n  async function refresh(){\n    try{\n      const r=await fetch("/api/v1/market",{cache:"no-store"});\n      if(!r.ok) throw new Error("HTTP "+r.status);\n      const data=await r.json();\n      if(typeof render === "function") render(data);\n      if(indicator) indicator.textContent="Live refresh: "+new Date().toLocaleTimeString()+" • provider data updated";\n    }catch(e){\n      if(indicator) indicator.textContent="Live refresh: retrying • "+e.message;\n    }\n  }\n  refresh();\n  timer=setInterval(refresh,15000);\n  document.addEventListener("visibilitychange",()=>{if(!document.hidden) refresh();});\n  window.addEventListener("beforeunload",()=>clearInterval(timer));\n}\nif(document.readyState === "loading") document.addEventListener("DOMContentLoaded",startLiveRefresh); else startLiveRefresh();\n'''
+              s=s.replace(anchor, js+anchor, 1)
+          p.write_text(s)
+
+          main=Path('apps/api/src/quantnifty/main.py')
+          m=main.read_text()
+          m=m.replace('POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))','POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))')
+          if 'async def market_refresh_loop' not in m:
+              needle='@app.on_event("startup")'
+              if needle in m:
+                  start=m.index(needle)
+                  # leave existing startup intact; add independent task helper before it
+                  helper='''async def market_refresh_loop():\n    while True:\n        try:\n            await snapshot(force=True)\n        except Exception:\n            pass\n        await asyncio.sleep(POLL_SECONDS)\n\n'''
+                  m=m[:start]+helper+m[start:]
+                  m=m.replace('    asyncio.create_task(market_refresh_loop())','    asyncio.create_task(market_refresh_loop())')
+              else:
+                  m += '\n'+helper
+          main.write_text(m)
+          PY
+      - name: Validate
+        run: |
+          python -m compileall -q apps/api/src
+          pip install -e ./apps/api pytest -q
+          pytest -q apps/api/tests
+      - name: Commit and cleanup
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/api/src/quantnifty/main.py apps/api/src/quantnifty/web/index.html
+          git diff --cached --quiet || git commit -m 'Enable continuous market refresh'
+          git push
+          git rm .github/workflows/implement-continuous-refresh.yml
+          git commit -m 'Remove one-time refresh implementation workflow'
+          git push

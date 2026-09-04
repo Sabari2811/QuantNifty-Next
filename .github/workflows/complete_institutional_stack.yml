@@ -2,10 +2,8 @@ name: Complete institutional stack
 on:
   push:
     branches: [main]
-
 permissions:
   contents: write
-
 jobs:
   implement:
     runs-on: ubuntu-latest
@@ -13,6 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Implement and validate
         run: |
+          python -m pip install -e apps/api pytest
           python - <<'PY'
           from pathlib import Path
           p=Path('apps/api/src/quantnifty/market_brain.py')
@@ -25,16 +24,13 @@ jobs:
               raise SystemExit('market_brain return contract not found')
           s=s.replace(old,new)
           p.write_text(s)
-
           h=Path('apps/api/src/quantnifty/web/intelligence.html')
           s=h.read_text()
           marker='<div class="footer">Provider-derived intelligence only.'
           panel='''<div id="institutional" class="two" style="margin-top:12px"><div class="panel"><div class="title">Institutional Signal Engine</div><div id="signalStack" class="muted">Waiting for signal stack</div></div><div class="panel"><div class="title">Risk &amp; Final Decision</div><div id="riskStack" class="muted">Waiting for risk decision</div></div></div><div class="panel" style="margin-top:12px"><div class="title">Execution Plan · Read Only</div><div id="executionStack" class="muted">No plan yet</div></div>'''
-          if 'id="institutional"' not in s:
-              s=s.replace(marker,panel+marker)
+          if 'id="institutional"' not in s: s=s.replace(marker,panel+marker)
           needle="const p=x.pressure_map||[];"
-          if 'const stack=x.institutional_signal||{};' not in s:
-              s=s.replace(needle,needle+" const stack=x.institutional_signal||{}; const risk=x.risk_engine||{}; const plan=x.execution_plan||{}; const fd=x.final_decision||{};")
+          if 'const stack=x.institutional_signal||{};' not in s: s=s.replace(needle,needle+" const stack=x.institutional_signal||{}; const risk=x.risk_engine||{}; const plan=x.execution_plan||{}; const fd=x.final_decision||{};")
           render_needle="$('pressure').innerHTML=p.map(r=>'<tr>"
           if "$('signalStack').innerHTML" not in s:
               insertion="$('signalStack').innerHTML='<div class=\"big\">'+(stack.direction||'NEUTRAL')+'</div><div class=\"metric\"><span>Confidence</span><b>'+n(stack.confidence,1)+'</b></div><div class=\"metric\"><span>Gamma</span><b>'+((stack.gamma||{}).regime||'—')+'</b></div><div class=\"metric\"><span>OI Flow</span><b>'+((stack.oi_flow||{}).bias||'—')+'</b></div><div class=\"metric\"><span>Dealer Alignment</span><b>'+((stack.dealer||{}).alignment||'—')+'</b></div><div class=\"muted\">'+((stack.evidence||[]).join(' · ')||'No qualifying institutional evidence')+'</div>';\n$('riskStack').innerHTML='<div class=\"big\">'+(fd.status||'NO_TRADE')+'</div><div class=\"metric\"><span>Approved</span><b>'+String(risk.approved||false).toUpperCase()+'</b></div><div class=\"metric\"><span>Max risk</span><b>'+n(risk.max_risk_pct,2)+'%</b></div><div class=\"muted\">Blocked gates: '+((risk.reasons||[]).join(', ')||'none')+'</div>';\n$('executionStack').innerHTML='<div class=\"metric\"><span>Direction</span><b>'+(plan.direction||'—')+'</b></div><div class=\"metric\"><span>Instrument</span><b>'+((plan.instrument&&plan.instrument.strike)||'WAIT')+'</b></div><div class=\"metric\"><span>Entry</span><b>'+(plan.entry||'BLOCKED')+'</b></div><div class=\"metric\"><span>Stop / Target</span><b>'+(plan.stop_points==null?'—':n(plan.stop_points,2)+' / '+n(plan.target_points,2))+'</b></div><div class=\"metric\"><span>R:R</span><b>'+(plan.risk_reward==null?'—':n(plan.risk_reward,1)+'R')+'</b></div><div class=\"muted\">'+(plan.note||'Read-only')+'</div>';\n"
@@ -47,7 +43,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apps/api/src/quantnifty/market_brain.py apps/api/src/quantnifty/web/intelligence.html apps/api/src/quantnifty/institutional_engine.py .github/workflows/complete_institutional_stack.yml
+          git add apps/api/src/quantnifty/market_brain.py apps/api/src/quantnifty/web/intelligence.html apps/api/src/quantnifty/institutional_engine.py
           git rm .github/workflows/complete_institutional_stack.yml
           git commit -m "Complete institutional signal risk execution and replay stack"
           git push

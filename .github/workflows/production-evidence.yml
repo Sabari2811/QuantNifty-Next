@@ -82,6 +82,12 @@ jobs:
           with sync_playwright() as p:
               browser=p.chromium.launch(headless=True)
               page=browser.new_page()
+
+              page.goto(base+'backtest.html', wait_until='networkidle', timeout=60000)
+              assert page.url.rstrip('/').endswith('/backtest'), page.url
+              assert 'Backtest & Validation' in page.locator('body').inner_text()
+              print('BACKTEST_ROUTE_E2E=PASS')
+
               page.goto(base, wait_until='networkidle', timeout=60000)
               page.wait_for_function("document.body.innerText.includes('LIVE_PROVIDER')", timeout=60000)
               text=page.locator('body').inner_text()

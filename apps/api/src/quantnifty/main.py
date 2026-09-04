@@ -16,6 +16,7 @@ from quantnifty.market_brain import decision_intelligence
 from quantnifty.replay import normalize_candles, replay, summary, to_dict
 from quantnifty.strike_selector import select_strikes
 from quantnifty.institutional_engine import final_decision, replay_signal_stack
+from quantnifty.backtest import BacktestConfig, run_backtest, validation_report
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -160,7 +161,7 @@ def api_health(): return health()
 
 @app.get("/api/v1/status")
 def status():
-    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN"],"replay":"AVAILABLE"}
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
 
 @app.get("/api/v1/market")
 async def market():
@@ -221,6 +222,40 @@ async def replay_api(payload: dict[str,Any]):
         if not snapshots: raise HTTPException(400,"snapshots must be a non-empty list")
         return {"mode":"READ_ONLY_REPLAY","decision_stack":replay_signal_stack([x for x in snapshots if isinstance(x,dict)])}
     points=replay(normalize_candles(payload,payload.get("scrip_code"))); return {"mode":"READ_ONLY_REPLAY","summary":summary(points),"points":to_dict(points)}
+
+@app.post("/api/v1/backtest")
+async def backtest_api(payload: dict[str, Any]):
+    snapshots = payload.get("snapshots")
+    if not isinstance(snapshots, list) or len(snapshots) < 2:
+        raise HTTPException(400, "snapshots must contain at least 2 snapshot objects")
+    if any(not isinstance(x, dict) for x in snapshots):
+        raise HTTPException(400, "every snapshot must be an object")
+    mode = str(payload.get("strategy") or "directional").strip().lower()
+    if mode not in {"directional", "gamma_blast"}:
+        raise HTTPException(400, "strategy must be directional or gamma_blast")
+    raw = payload.get("config") or {}
+    try:
+        cfg = BacktestConfig(**{k: raw[k] for k in raw if k in BacktestConfig.__dataclass_fields__})
+        return run_backtest(snapshots, mode, cfg)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, f"invalid backtest configuration: {exc}") from exc
+
+
+@app.post("/api/v1/validation")
+async def validation_api(payload: dict[str, Any]):
+    snapshots = payload.get("snapshots")
+    if not isinstance(snapshots, list) or len(snapshots) < 2:
+        raise HTTPException(400, "snapshots must contain at least 2 snapshot objects")
+    mode = str(payload.get("strategy") or "directional").strip().lower()
+    if mode not in {"directional", "gamma_blast"}:
+        raise HTTPException(400, "strategy must be directional or gamma_blast")
+    raw = payload.get("config") or {}
+    try:
+        cfg = BacktestConfig(**{k: raw[k] for k in raw if k in BacktestConfig.__dataclass_fields__})
+        return validation_report(snapshots, mode, cfg)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, f"invalid validation configuration: {exc}") from exc
+
 
 @app.get("/api/v1/trading/status")
 def trading_status(): return {"enabled":False,"mode":"READ_ONLY","order_placement":False,"order_modification":False,"order_cancellation":False}

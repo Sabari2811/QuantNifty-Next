@@ -57,6 +57,7 @@
 - [x] Directional bullish / bearish score and confidence
 - [x] Positioning & volatility detail panel
 - [x] Reference levels & provider feed panel
+- [x] Market intelligence data table replacing chart visualizations: strike, CE/PE OI, CE/PE gamma contribution, CE/PE IV, CE/PE OI change
 - [x] Data-integrity state
 - [x] No fabricated fallback values
 - [x] Full normalized option-chain exposed in UI

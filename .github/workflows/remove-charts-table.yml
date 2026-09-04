@@ -32,10 +32,10 @@ jobs:
           '''
           text = text[:chart_start] + replacement + text[chain_start:]
 
-          # Remove the entire chart-only style block from .chart-grid through .level-map.
           css_start = text.index('.chart-grid{')
           css_end = text.index('.level-map{', css_start)
           text = text[:css_start] + text[css_end:]
+          text = text.replace('.chart-grid,', '')
 
           table_css = '''
           /* Market intelligence data table: same provider-derived values as the former charts */

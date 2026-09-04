@@ -1,3 +1,6 @@
+from datetime import datetime, timezone
+
+from quantnifty.main import expected_move_value
 from quantnifty.replay import Candle, normalize_candles, replay, summary
 
 
@@ -26,3 +29,15 @@ def test_summary():
     assert result["end"] == 105
     assert result["net_return_pct"] == 5.0
     assert result["up_bars"] == 1
+
+
+def test_expected_move_treats_iv_as_percentage():
+    now = datetime(2026, 9, 4, tzinfo=timezone.utc)
+    move = expected_move_value(25000, 10.0, "2026-09-11", now)
+    assert move is not None
+    assert round(move, 2) == 329.11
+
+
+def test_expected_move_rejects_missing_or_invalid_inputs():
+    assert expected_move_value(0, 10.0) is None
+    assert expected_move_value(25000, 0) is None

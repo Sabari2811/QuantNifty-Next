@@ -1,1 +1,42 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QuantNifty</title><style>body{font-family:Inter,system-ui;background:#0b1020;color:#e8edf7;margin:0;padding:28px}main{max-width:1200px;margin:auto}h1{margin-bottom:4px}.sub{color:#8e9ab5}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:24px}.card{background:#131b31;border:1px solid #263250;border-radius:14px;padding:18px}.v{font-size:28px;font-weight:700;margin-top:8px}</style></head><body><main><h1>QuantNifty Next</h1><div class="sub">Live NIFTY options analytics</div><div id="state" class="card" style="margin-top:18px">Connecting…</div><div class="grid" id="grid"></div></main><script>const state=document.getElementById('state'),grid=document.getElementById('grid');function card(k,v){return `<div class="card"><div class="sub">${k}</div><div class="v">${v??'—'}</div></div>`}function render(d){state.innerHTML=`<b>${d.bias||'UNAVAILABLE'}</b> · Confidence ${d.confidence??'—'}% · ${d.data_integrity||'UNKNOWN'}`;grid.innerHTML=[['NIFTY',d.spot],['PCR',d.pcr],['Bullish',d.bullish_score],['Bearish',d.bearish_score],['GEX',Math.round(d.gex||0)],['DEX',Math.round(d.dex||0)],['IV Skew',(d.iv_skew||0).toFixed(2)],['Gamma Flip',d.gamma_flip??'—'],['Structure',d.structure],['Expiry',d.expiry]].map(x=>card(x[0],x[1])).join('')}const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${proto}://${location.host}/ws`);ws.onopen=()=>state.textContent='Connected';ws.onmessage=e=>render(JSON.parse(e.data));ws.onerror=()=>state.textContent='Connection error';</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QuantNifty Next</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;background:#080d19;color:#e8edf7}
+body{margin:0;background:linear-gradient(180deg,#0b1020,#080d19);min-height:100vh}main{max-width:1320px;margin:auto;padding:28px 20px 48px}h1{margin:0;font-size:30px}.sub{color:#8e9ab5}.top{display:flex;justify-content:space-between;gap:20px;align-items:end;flex-wrap:wrap}.status{margin-top:18px;padding:14px 16px;border:1px solid #263250;border-radius:14px;background:#10172a}.status.live{border-color:#2e7d58}.status.bad{border-color:#8b3d45}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px;margin-top:14px}.card{background:#11182b;border:1px solid #263250;border-radius:14px;padding:16px;min-height:78px}.label{color:#8e9ab5;font-size:13px}.value{font-size:25px;font-weight:750;margin-top:8px;overflow-wrap:anywhere}.small{font-size:12px;color:#8e9ab5;margin-top:7px}.section{margin-top:26px}.section h2{font-size:18px;margin:0 0 10px}.pill{display:inline-block;border:1px solid #33405e;border-radius:999px;padding:4px 9px;font-size:12px}.walls{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.error{color:#ffb8be}.muted{color:#7d89a4}.footer{margin-top:22px;color:#69758f;font-size:12px}
+</style>
+</head>
+<body><main>
+<div class="top"><div><h1>QuantNifty Next</h1><div class="sub">Authoritative live NIFTY options analytics</div></div><div id="fresh" class="pill">Waiting for provider data</div></div>
+<div id="status" class="status">Connecting to live stream…</div>
+<div class="grid" id="grid"></div>
+<div class="section"><h2>Gamma Walls</h2><div id="walls" class="walls"><div class="card muted">No provider data yet</div></div></div>
+<div class="section"><h2>Data integrity</h2><div id="integrity" class="card">No snapshot received.</div></div>
+<div class="footer">No mock values are rendered. Provider failures are shown as unavailable.</div>
+</main>
+<script>
+const statusEl=document.getElementById('status'),grid=document.getElementById('grid'),wallsEl=document.getElementById('walls'),integrityEl=document.getElementById('integrity'),freshEl=document.getElementById('fresh');
+const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const num=(v,d=2)=>Number.isFinite(Number(v))?Number(v).toLocaleString(undefined,{maximumFractionDigits:d}):'—';
+function card(k,v,extra=''){return `<div class="card"><div class="label">${esc(k)}</div><div class="value">${esc(v)}</div>${extra?`<div class="small">${esc(extra)}</div>`:''}</div>`}
+function render(d){
+ const valid=d&&d.data_integrity==='LIVE_PROVIDER'&&Number(d.spot)>0;
+ statusEl.className='status '+(valid?'live':'bad');
+ statusEl.innerHTML=valid?`<b>LIVE PROVIDER</b> · ${esc(d.bias||'NEUTRAL')} · Confidence ${esc(d.confidence)}%`:`<b>DATA UNAVAILABLE</b> · ${esc(d?.error||'No authenticated provider snapshot')}`;
+ if(!valid){freshEl.textContent='No live snapshot';grid.innerHTML='';wallsEl.innerHTML='<div class="card muted">No provider data</div>';integrityEl.innerHTML='<span class="error">No fabricated/stale value is displayed.</span>';return;}
+ freshEl.textContent='Updated '+new Date(d.timestamp).toLocaleTimeString();
+ grid.innerHTML=[
+ ['NIFTY',num(d.spot,2)],['PCR',num(d.pcr,3)],['Call OI',num(d.call_oi,0)],['Put OI',num(d.put_oi,0)],
+ ['Call OI Δ',num(d.call_oi_change,0)],['Put OI Δ',num(d.put_oi_change,0)],['GEX',num(d.gex,0)],['DEX',num(d.dex,0)],
+ ['IV Skew',num(d.iv_skew,2)],['Gamma Flip',d.gamma_flip==null?'—':num(d.gamma_flip,2)],['Structure',d.structure],['Expiry',d.expiry],
+ ['Bullish Score',num(d.bullish_score,1)],['Bearish Score',num(d.bearish_score,1)],['Confidence',num(d.confidence,1)+'%'],['Option Rows',num(d.rows,0)]
+ ].map(x=>card(x[0],x[1])).join('');
+ wallsEl.innerHTML=(d.gamma_walls||[]).map(w=>card(w.side+' wall',num(w.strike,2),'Exposure '+num(w.exposure,0))).join('')||'<div class="card muted">Provider returned no gamma-wall rows.</div>';
+ integrityEl.innerHTML=`<b>LIVE_PROVIDER</b><div class="small">Source: INDstocks option-chain response · Snapshot: ${esc(new Date(d.timestamp).toLocaleString())} · Expiry: ${esc(d.expiry)} · Rows: ${esc(d.rows)}</div>`;
+}
+async function initial(){try{const r=await fetch('/api/v1/market',{cache:'no-store'});const d=await r.json();render(r.ok?d:{data_integrity:'UNAVAILABLE',error:d.detail||'Market endpoint unavailable'});}catch(e){render({data_integrity:'UNAVAILABLE',error:'Market endpoint unreachable'});}}
+function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${proto}://${location.host}/ws`);ws.onopen=()=>statusEl.textContent='Connected · waiting for authenticated provider snapshot…';ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(_){render({data_integrity:'UNAVAILABLE',error:'Invalid provider message'})}};ws.onerror=()=>{statusEl.className='status bad';statusEl.textContent='Live stream connection error';};ws.onclose=()=>{statusEl.className='status bad';statusEl.textContent='Live stream disconnected · retrying…';setTimeout(connect,3000)}}
+initial();connect();
+</script></body></html>

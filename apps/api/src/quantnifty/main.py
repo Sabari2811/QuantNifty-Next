@@ -192,7 +192,7 @@ async def final_decision_api(strategy: str="directional"):
     if mode not in {"directional","gamma_blast"}: raise HTTPException(400,"strategy must be directional or gamma_blast")
     try: data=await snapshot()
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
-    result=final_decision(data,data.get("previous_snapshot"),mode)
+    result=final_decision(data,cache.get("previous_snapshot"),mode)
     return {"mode":"READ_ONLY","strategy":mode,"timestamp":data["timestamp"],"spot":data["spot"],"decision":result}
 
 @app.post("/api/v1/replay/decisions")

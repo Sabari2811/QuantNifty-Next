@@ -74,8 +74,15 @@
 - [x] Production deployment of previously completed UI/API changes observed live
 
 ## Final evidence gates
-- [ ] Authenticated live-market response observed after the latest UI/API deployment
-- [ ] Full browser E2E with live provider response after the latest UI/API deployment
-- [ ] Production historical replay run with real provider candles
+- [x] Authenticated live-market response observed after the latest UI/API deployment
+- [x] Full browser E2E with live provider response after the latest UI/API deployment
+- [x] Production historical replay run with real provider candles
 
-These final three gates remain evidence-gated. They cannot be marked complete from source inspection alone. QuantNifty Next remains production-read-only until authenticated live-provider evidence is observed after the latest deployment.
+## Production verification evidence
+- Production health: HTTP 200; provider INDstocks; provider configured
+- Live market: LIVE_PROVIDER; NIFTY spot 23,897.7; 82 normalized option rows; expiry 2026-09-08
+- Historical provider candles: 225 real 5-minute NIFTY candles
+- Read-only replay: 225 replay points; replay count exactly matched provider candles
+- Browser E2E: dashboard loaded from production, live-provider state rendered, complete analytics sections present, full option chain rendered, All/Calls/Puts filters exercised successfully
+
+QuantNifty Next is feature-complete and production-verified for its current read-only scope. Real order execution remains intentionally disabled.

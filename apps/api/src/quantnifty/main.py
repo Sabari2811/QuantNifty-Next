@@ -17,6 +17,7 @@ from quantnifty.replay import normalize_candles, replay, summary, to_dict
 from quantnifty.strike_selector import select_strikes
 from quantnifty.institutional_engine import final_decision, replay_signal_stack
 from quantnifty.backtest import BacktestConfig, run_backtest, validation_report
+from quantnifty.recording_api import router as recording_router
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -28,6 +29,7 @@ POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 app = FastAPI(title="QuantNifty Next", version="1.8.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
+app.include_router(recording_router)
 
 async def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     if not TOKEN: raise RuntimeError("INDSTOCKS_API_TOKEN is not configured")

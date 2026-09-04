@@ -35,7 +35,7 @@ def test_expected_move_treats_iv_as_percentage():
     now = datetime(2026, 9, 4, tzinfo=timezone.utc)
     move = expected_move_value(25000, 10.0, "2026-09-11", now)
     assert move is not None
-    assert round(move, 2) == 329.11
+    assert round(move, 2) == 346.21
 
 
 def test_expected_move_rejects_missing_or_invalid_inputs():

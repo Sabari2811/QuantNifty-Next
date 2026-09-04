@@ -1,0 +1,59 @@
+name: Apply Simple Level Table
+
+on: push
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply table styling
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          html_path = Path('apps/api/src/quantnifty/web/index.html')
+          text = html_path.read_text(encoding='utf-8')
+          marker = '</style>'
+          if marker not in text:
+              raise SystemExit('style block not found')
+          override = '''
+          /* Simple, readable market-level table */
+          #levelMap{margin-top:10px;border:0;background:transparent;padding:0}
+          #levelMapList{display:grid;grid-template-columns:1fr;gap:0;border:1px solid #263250;border-radius:10px;overflow:hidden;background:#0d1425}
+          #levelMapList:before{content:'Level|Price|Reference';display:grid;grid-template-columns:1.2fr 1fr 2fr;align-items:center;padding:10px 14px;background:#162038;color:#8e9ab5;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;white-space:pre}
+          #levelMapList .level-item{display:grid;grid-template-columns:1.2fr 1fr 2fr;align-items:center;gap:12px;border:0;border-top:1px solid #202b46;border-radius:0;padding:11px 14px;text-align:left;background:#11182b;min-height:0}
+          #levelMapList .level-item:nth-child(even){background:#0f1728}
+          #levelMapList .level-item .name,#levelMapList .level-item .price,#levelMapList .level-item .note{display:block;margin:0}
+          #levelMapList .level-item .name{color:#aeb9d0;font-size:12px;font-weight:650}
+          #levelMapList .level-item .price{font-size:16px;font-weight:800}
+          #levelMapList .level-item .note{color:#69758f;font-size:11px}
+          #levelMapList .level-item.primary{background:#15213a;border-left:3px solid #6f86b5;padding-left:11px}
+          #levelMapList .level-item.primary .name{color:#e8edf7}
+          @media(max-width:600px){#levelMapList:before,#levelMapList .level-item{grid-template-columns:1fr .9fr 1.5fr;padding-left:10px;padding-right:10px;gap:8px}#levelMapList .level-item .price{font-size:14px}#levelMapList .level-item .note{font-size:10px}}
+          '''
+          if 'Simple, readable market-level table' not in text:
+              text = text.replace(marker, override + marker, 1)
+          html_path.write_text(text, encoding='utf-8')
+
+          test_path = Path('apps/api/tests/test_dashboard_ui_contract.py')
+          test = test_path.read_text(encoding='utf-8')
+          addition = '''\n\n\ndef test_market_level_map_uses_simple_tabular_layout():\n    text = HTML.read_text(encoding="utf-8")\n    assert "Simple, readable market-level table" in text\n    assert "#levelMapList:before" in text\n    assert "grid-template-columns:1.2fr 1fr 2fr" in text\n    assert "Level|Price|Reference" in text\n'''
+          if 'test_market_level_map_uses_simple_tabular_layout' not in test:
+              test_path.write_text(test + addition, encoding='utf-8')
+          PY
+
+      - name: Commit changes and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add apps/api/src/quantnifty/web/index.html apps/api/tests/test_dashboard_ui_contract.py
+          git diff --cached --quiet || git commit -m 'Use tabular market level map'
+          git push
+          git rm .github/workflows/apply-level-table.yml
+          git commit -m 'Remove one-time level table workflow'
+          git push

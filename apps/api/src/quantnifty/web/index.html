@@ -45,9 +45,37 @@ h1{margin:0;font-size:30px;letter-spacing:-.4px}.sub{color:#8e9ab5}.top{display:
 .intelligence-note{font-size:11px;color:#7d89a4;margin:-5px 0 10px}
 @media(max-width:900px){.intelligence-table{min-width:1080px}}
 .strike-wrap{overflow:auto;border:1px solid #263250;border-radius:12px;background:#0d1425}.strike-table{width:100%;min-width:980px;border-collapse:collapse;font-size:11px}.strike-table th{background:#162038;color:#8e9ab5;text-align:right;padding:9px 10px;border-bottom:1px solid #33405e;white-space:nowrap}.strike-table th:first-child,.strike-table td:first-child{text-align:left}.strike-table td{padding:8px 10px;border-bottom:1px solid #202b46;text-align:right;white-space:nowrap}.strike-table tr.selected{background:#1a2743}.strike-table tr.otm{background:#211b27}.strike-note{font-size:11px;color:#7d89a4;margin:5px 0 10px}.
+
+/* QuantNifty screen drawer */
+.qn-drawer-toggle{position:fixed;left:0;top:42%;z-index:1001;width:34px;height:76px;border:1px solid #33405e;border-left:0;border-radius:0 12px 12px 0;background:#111a2d;color:#e8edf7;cursor:pointer;box-shadow:0 8px 24px #0005;font-size:16px}
+.qn-drawer{position:fixed;left:0;top:0;bottom:0;z-index:1000;width:238px;padding:22px 14px;background:rgba(10,15,28,.98);border-right:1px solid #263250;box-shadow:16px 0 40px #0007;transform:translateX(-100%);transition:transform .22s ease;display:flex;flex-direction:column;gap:12px}
+.qn-drawer.open{transform:translateX(0)}
+.qn-drawer-title{font-size:14px;font-weight:800;letter-spacing:.04em;padding:4px 10px 8px;color:#e8edf7}
+.qn-drawer-sub{font-size:10px;color:#69758f;padding:0 10px 8px}
+.qn-nav{display:flex;flex-direction:column;gap:8px}
+.qn-nav a{display:block;text-decoration:none;color:#aeb9d0;border:1px solid #263250;background:#11182b;border-radius:10px;padding:11px 12px;font-size:12px;font-weight:700}
+.qn-nav a:hover{border-color:#52698f;background:#15213a;color:#fff}
+.qn-nav a.active{border-color:#6f86b5;background:#18243d;color:#fff}
+.qn-nav small{display:block;color:#69758f;font-weight:500;margin-top:4px;font-size:10px}
+.qn-drawer-note{margin-top:auto;border-top:1px solid #202b46;padding:12px 10px;color:#69758f;font-size:10px;line-height:1.5}
+@media(max-width:600px){.qn-drawer{width:218px}.qn-drawer-toggle{top:35%;height:68px}}
+
 </style>
 </head>
 <body>
+<!-- QuantNifty screen drawer -->
+
+<button class="qn-drawer-toggle" id="qnDrawerToggle" aria-label="Open screen navigation" title="Screen navigation">☰</button>
+<aside class="qn-drawer" id="qnDrawer" aria-label="QuantNifty screen navigation">
+  <div class="qn-drawer-title">QuantNifty Next</div>
+  <div class="qn-drawer-sub">Choose the data view</div>
+  <nav class="qn-nav">
+    <a data-qn-nav="intelligence" href="/intelligence">Market Intelligence<small>Market state, events &amp; decisions</small></a>
+    <a data-qn-nav="raw" href="/">Raw Data<small>Live provider market &amp; option-chain data</small></a>
+  </nav>
+  <div class="qn-drawer-note">Read-only mode · no orders are placed, modified or cancelled.</div>
+</aside>
+
 <main>
 <div class="top"><div><h1>QuantNifty Next</h1><div class="sub">NIFTY options intelligence · read-only / no order execution</div></div><div id="fresh" class="pill">Waiting for provider data</div></div>
 <div id="status" class="status">Connecting to live stream…</div>
@@ -85,5 +113,18 @@ async function initial(){try{const r=await fetch('/api/v1/market',{cache:'no-sto
 function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${proto}://${location.host}/ws`);ws.onopen=()=>{statusEl.className='status';statusEl.textContent='Connected · waiting for authenticated provider snapshot…'};ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(_){render({data_integrity:'UNAVAILABLE',error:'Invalid provider message'})}};ws.onerror=()=>{statusEl.className='status bad';statusEl.textContent='Live stream connection error'};ws.onclose=()=>{statusEl.className='status bad';statusEl.textContent='Live stream disconnected · retrying…';setTimeout(connect,3000)}}
 initial();connect();
 </script>
+
+<script>
+(function(){
+  const drawer=document.getElementById('qnDrawer'), toggle=document.getElementById('qnDrawerToggle');
+  if(!drawer||!toggle)return;
+  toggle.addEventListener('click',()=>drawer.classList.toggle('open'));
+  drawer.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>drawer.classList.remove('open')));
+  const path=location.pathname;
+  drawer.querySelector('[data-qn-nav="intelligence"]').classList.toggle('active',path==='/intelligence');
+  drawer.querySelector('[data-qn-nav="raw"]').classList.toggle('active',path==='/'||path==='');
+})();
+</script>
+
 </body>
 </html>

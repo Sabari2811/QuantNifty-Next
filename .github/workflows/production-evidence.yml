@@ -85,10 +85,17 @@ jobs:
               page.goto(base, wait_until='networkidle', timeout=60000)
               page.wait_for_function("document.body.innerText.includes('LIVE_PROVIDER')", timeout=60000)
               text=page.locator('body').inner_text()
-              for label in ['QuantNifty Next','Market Snapshot','Key Market Levels','Gamma Walls','Expected Move Range','Market Structure','Dealer Flow','Directional Score','Positioning & Volatility','Reference Levels & Feed','Live Option Chain','Data Integrity','Security ID','Theta','Vega']:
+              for label in ['QuantNifty Next','Market Snapshot','Key Market Levels','Market Level Map','Gamma Walls','Expected Move Range','Market Structure','Dealer Flow','Directional Score','Positioning & Volatility','Reference Levels & Feed','Market Intelligence Data','Live Option Chain','Data Integrity','Security ID','Theta','Vega','CE Gamma Contribution','PE Gamma Contribution','CE IV %','PE IV %','CE OI Δ','PE OI Δ']:
                   assert label in text, f'missing UI label: {label}'
+              assert 'Market Intelligence Charts' not in text
+              assert 'OI Distribution' not in text
+              assert 'Gamma Profile' not in text
+              assert 'IV Smile' not in text
+              assert 'Dealer Positioning' not in text
               assert 'LIVE_PROVIDER' in text
               assert 'No mock values are rendered' in text
+              assert page.locator('#intelligenceBody tr').count() >= 2
+              assert page.locator('#intelligenceBody td').count() >= 18
               assert page.locator('#chainBody tr').count() >= 2
               page.locator('#callsBtn').click()
               page.wait_for_timeout(500)

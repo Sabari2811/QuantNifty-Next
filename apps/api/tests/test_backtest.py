@@ -13,7 +13,7 @@ def snap(ts: str, spot: float, option: float) -> dict:
         "data_integrity": "LIVE_PROVIDER",
         "option_chain": [{
             "strike": 25000, "side": "CE", "security_id": "CE1", "trading_symbol": "NIFTYCE",
-            "last_price": option, "bid": option - 0.5, "ask": option + 0.5,
+            "last_price": option, "bid": option - 0.5, "ask": option + 0.5, "oi": 1000, "volume": 5000,
         }],
         "strike_selection": [{"strike": 25000, "side": "CE", "security_id": "CE1"}],
         "expected_move": {"move": 100, "lower": spot - 100, "upper": spot + 100},

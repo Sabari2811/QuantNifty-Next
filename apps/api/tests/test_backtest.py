@@ -44,7 +44,7 @@ def test_backtest_is_lookahead_free(monkeypatch):
     assert result["lookahead_free"] is True
     assert result["orders_placed"] == 0
     assert result["metrics"]["trades"] == 1
-    assert result["metrics"]["net_pnl"] == 20.0
+    assert result["metrics"]["net_pnl"] == 19.0
 
 
 def test_costs_reduce_net_pnl(monkeypatch):

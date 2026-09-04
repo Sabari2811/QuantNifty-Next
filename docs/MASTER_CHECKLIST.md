@@ -12,10 +12,12 @@
 - [x] PCR / OI
 - [x] OI change
 - [x] GEX / DEX
+- [x] Vanna proxy
 - [x] IV skew / ATM IV
 - [x] Gamma flip / gamma walls
 - [x] Max pain
 - [x] Expected move — IV percentage and days-to-expiry handled correctly
+- [x] Expected move lower / spot / upper range exposed in UI
 - [x] Support / resistance
 - [x] Dealer-flow classification
 - [x] Liquidity score
@@ -42,9 +44,17 @@
 - [x] Live provider state
 - [x] Live freshness timestamp
 - [x] Analytics cards
+- [x] Vanna proxy
+- [x] Expected move value and lower/upper range
 - [x] Gamma walls
 - [x] Market structure
 - [x] Dealer flow / rationale
+- [x] Complete normalized live option-chain table
+- [x] CE / PE chain filtering
+- [x] Security ID / trading-symbol source mapping
+- [x] LTP / previous close / OI / OI change / volume mapping
+- [x] Bid / ask and top-of-book quantities mapping
+- [x] IV / Delta / Gamma / Theta / Vega mapping
 - [x] Data-integrity state
 - [x] No fabricated fallback values
 
@@ -54,12 +64,11 @@
 - [x] WebSocket client-disconnect handling
 - [x] CI compile validation
 - [x] CI replay/analytics regression tests
-- [x] Successful CI run observed for the implementation fixes
-- [x] Production Render deployment previously observed live
+- [x] Production deployment of the completed UI/API changes observed live
 
 ## Final evidence gates
-- [ ] Authenticated live-market response observed in cloud runtime
-- [ ] Full browser E2E with live provider response
+- [ ] Authenticated live-market response observed after the latest UI/API deployment
+- [ ] Full browser E2E with live provider response after the latest UI/API deployment
 - [ ] Production historical replay run with real provider candles
 
-These final three gates remain evidence-gated. They cannot be marked complete from source inspection alone. QuantNifty Next remains production-read-only until authenticated live-provider evidence is observed.
+These final three gates remain evidence-gated. They cannot be marked complete from source inspection alone. QuantNifty Next remains production-read-only until authenticated live-provider evidence is observed after the latest deployment.

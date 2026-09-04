@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from quantnifty.market_brain import decision_intelligence
 from quantnifty.replay import normalize_candles, replay, summary, to_dict
 from quantnifty.strike_selector import select_strikes
+from quantnifty.institutional_engine import final_decision, replay_signal_stack
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -23,7 +24,7 @@ NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
 POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
-app = FastAPI(title="QuantNifty Next", version="1.7.0")
+app = FastAPI(title="QuantNifty Next", version="1.8.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
 
@@ -159,7 +160,7 @@ def api_health(): return health()
 
 @app.get("/api/v1/status")
 def status():
-    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE"],"replay":"AVAILABLE"}
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN"],"replay":"AVAILABLE"}
 
 @app.get("/api/v1/market")
 async def market():
@@ -185,6 +186,23 @@ async def decision(strategy: str="directional"):
     previous=cache.get("previous_snapshot") or {}; pg,cg=previous.get("gex"),data.get("gex"); gamma_acceleration=pg is not None and cg is not None and abs(cg)>abs(pg)*1.10; old_em=(previous.get("expected_move") or {}).get("move") if isinstance(previous.get("expected_move"),dict) else None; move_expansion=em is not None and (old_em is None or em>old_em*1.05); volume_ok=data.get("rows",0)>=20 and sum(r.get("volume",0) for r in data.get("option_chain",[]))>0; gamma_blast_qualified=all([directional_ok,confidence_ok,liquidity_ok,gamma_position_ok,dealer_ok,gamma_acceleration,move_expansion,volume_ok]); selection=select_strikes(data["spot"],data["option_chain"],bias,gamma_blast=(mode=="gamma_blast"),expected_move=em,gamma_blast_qualified=gamma_blast_qualified); trade_allowed=directional_ok and confidence_ok and liquidity_ok and selection["eligible"]
     return {"mode":"READ_ONLY","execution":"DISABLED","strategy":"GAMMA_BLAST" if mode=="gamma_blast" else "DIRECTIONAL","bias":bias,"confidence":data["confidence"],"risk_gate":{"directional_signal":directional_ok,"confidence":confidence_ok,"liquidity":liquidity_ok,"gamma_position":gamma_position_ok,"dealer_flow":dealer_ok,"gamma_acceleration":gamma_acceleration,"expected_move_expansion":move_expansion,"volume":volume_ok,"trade_allowed":trade_allowed},"strike_selection":selection,"intelligence":data.get("intelligence")}
 
+@app.get("/api/v1/final-decision")
+async def final_decision_api(strategy: str="directional"):
+    mode=strategy.strip().lower()
+    if mode not in {"directional","gamma_blast"}: raise HTTPException(400,"strategy must be directional or gamma_blast")
+    try: data=await snapshot()
+    except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
+    result=final_decision(data,data.get("previous_snapshot"),mode)
+    return {"mode":"READ_ONLY","strategy":mode,"timestamp":data["timestamp"],"spot":data["spot"],"decision":result}
+
+@app.post("/api/v1/replay/decisions")
+async def replay_decisions_api(payload: dict[str,Any]):
+    snapshots=payload.get("snapshots")
+    if not isinstance(snapshots,list) or not snapshots: raise HTTPException(400,"snapshots must be a non-empty list")
+    clean=[x for x in snapshots if isinstance(x,dict)]
+    if len(clean)!=len(snapshots): raise HTTPException(400,"every snapshot must be an object")
+    return {"mode":"READ_ONLY_REPLAY","decision_stack":replay_signal_stack(clean)}
+
 @app.get("/api/v1/historical")
 async def historical(interval: str="5minute",start_time: int|None=None,end_time: int|None=None,scrip_codes: str|None=None):
     if not start_time or not end_time: raise HTTPException(400,"start_time and end_time are required as epoch milliseconds")
@@ -198,6 +216,10 @@ async def historical(interval: str="5minute",start_time: int|None=None,end_time:
 
 @app.post("/api/v1/replay")
 async def replay_api(payload: dict[str,Any]):
+    if isinstance(payload.get("snapshots"),list):
+        snapshots=payload.get("snapshots")
+        if not snapshots: raise HTTPException(400,"snapshots must be a non-empty list")
+        return {"mode":"READ_ONLY_REPLAY","decision_stack":replay_signal_stack([x for x in snapshots if isinstance(x,dict)])}
     points=replay(normalize_candles(payload,payload.get("scrip_code"))); return {"mode":"READ_ONLY_REPLAY","summary":summary(points),"points":to_dict(points)}
 
 @app.get("/api/v1/trading/status")

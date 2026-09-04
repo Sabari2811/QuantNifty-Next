@@ -47,3 +47,12 @@ def test_dashboard_level_map_is_simple_and_provider_bound():
     assert "sort((a,b)=>Number(a[1])-Number(b[1]))" in text
     assert "$('levelMapList').innerHTML='<div class=\"muted\">No provider market levels</div>';" in text
     assert "class=\"marker\"" not in text
+
+
+
+def test_market_level_map_uses_simple_tabular_layout():
+    text = HTML.read_text(encoding="utf-8")
+    assert "Simple, readable market-level table" in text
+    assert "#levelMapList:before" in text
+    assert "grid-template-columns:1.2fr 1fr 2fr" in text
+    assert "Level|Price|Reference" in text

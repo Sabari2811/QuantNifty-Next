@@ -17,6 +17,20 @@ h1{margin:0;font-size:30px;letter-spacing:-.4px}.sub{color:#8e9ab5}.top{display:
 .footer{margin-top:22px;color:#69758f;font-size:12px;line-height:1.5}.source-note{font-size:11px;color:#69758f;margin-top:8px}
 @media(max-width:1350px){.grid{grid-template-columns:repeat(4,minmax(150px,1fr))}.levels-grid{grid-template-columns:repeat(3,minmax(150px,1fr))}.hero{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:900px){.grid{grid-template-columns:repeat(2,minmax(140px,1fr))}.levels-grid,.three,.two,.chart-grid,.hero{grid-template-columns:1fr}main{padding:20px 12px 36px}.hero-card.primary{min-height:84px}}
+
+/* Simple, readable market-level table */
+#levelMap{margin-top:10px;border:0;background:transparent;padding:0}
+#levelMapList{display:grid;grid-template-columns:1fr;gap:0;border:1px solid #263250;border-radius:10px;overflow:hidden;background:#0d1425}
+#levelMapList:before{content:'Level|Price|Reference';display:grid;grid-template-columns:1.2fr 1fr 2fr;align-items:center;padding:10px 14px;background:#162038;color:#8e9ab5;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;white-space:pre}
+#levelMapList .level-item{display:grid;grid-template-columns:1.2fr 1fr 2fr;align-items:center;gap:12px;border:0;border-top:1px solid #202b46;border-radius:0;padding:11px 14px;text-align:left;background:#11182b;min-height:0}
+#levelMapList .level-item:nth-child(even){background:#0f1728}
+#levelMapList .level-item .name,#levelMapList .level-item .price,#levelMapList .level-item .note{display:block;margin:0}
+#levelMapList .level-item .name{color:#aeb9d0;font-size:12px;font-weight:650}
+#levelMapList .level-item .price{font-size:16px;font-weight:800}
+#levelMapList .level-item .note{color:#69758f;font-size:11px}
+#levelMapList .level-item.primary{background:#15213a;border-left:3px solid #6f86b5;padding-left:11px}
+#levelMapList .level-item.primary .name{color:#e8edf7}
+@media(max-width:600px){#levelMapList:before,#levelMapList .level-item{grid-template-columns:1fr .9fr 1.5fr;padding-left:10px;padding-right:10px;gap:8px}#levelMapList .level-item .price{font-size:14px}#levelMapList .level-item .note{font-size:10px}}
 </style>
 </head>
 <body>

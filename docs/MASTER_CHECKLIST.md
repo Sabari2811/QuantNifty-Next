@@ -46,17 +46,17 @@
 - [x] Analytics cards
 - [x] Vanna proxy
 - [x] Expected move value and lower/upper range
-- [x] Gamma walls
-- [x] Market structure
-- [x] Dealer flow / rationale
-- [x] Complete normalized live option-chain table
-- [x] CE / PE chain filtering
-- [x] Security ID / trading-symbol source mapping
-- [x] LTP / previous close / OI / OI change / volume mapping
-- [x] Bid / ask and top-of-book quantities mapping
-- [x] IV / Delta / Gamma / Theta / Vega mapping
+- [x] Focused Market Levels display
+- [x] Current NIFTY market level
+- [x] Gamma flip level
+- [x] Call wall level
+- [x] Put wall level
+- [x] Support level
+- [x] Resistance level
+- [x] Gamma walls / market structure / dealer flow context
 - [x] Data-integrity state
 - [x] No fabricated fallback values
+- [x] Full normalized option-chain remains backend analytics input; raw chain table intentionally not displayed
 
 ## Deployment / reliability
 - [x] Render Python service configuration aligned with repository
@@ -64,7 +64,7 @@
 - [x] WebSocket client-disconnect handling
 - [x] CI compile validation
 - [x] CI replay/analytics regression tests
-- [x] Production deployment of the completed UI/API changes observed live
+- [x] Production deployment of completed UI/API changes observed live
 
 ## Final evidence gates
 - [ ] Authenticated live-market response observed after the latest UI/API deployment

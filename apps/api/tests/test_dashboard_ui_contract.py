@@ -20,20 +20,20 @@ def test_dashboard_retains_all_current_analytics_sections():
     required = [
         "Market Snapshot", "Key Market Levels", "Market Level Map", "Gamma Walls", "Expected Move Range",
         "Market Structure", "Dealer Flow", "Directional Score", "Positioning & Volatility",
-        "Reference Levels & Feed", "Market Intelligence Charts", "OI Distribution", "Gamma Profile",
-        "IV Smile", "Dealer Positioning", "Vanna Proxy", "IV Skew", "Gamma Flip", "Max Pain",
-        "Liquidity", "Bullish Score", "Bearish Score",
+        "Reference Levels & Feed", "Market Intelligence Data", "Vanna Proxy", "IV Skew", "Gamma Flip",
+        "Max Pain", "Liquidity", "Bullish Score", "Bearish Score", "CE Gamma Contribution",
+        "PE Gamma Contribution", "CE IV %", "PE IV %", "CE OI Δ", "PE OI Δ",
     ]
     for label in required:
         assert label in text, f"missing analytics UI detail: {label}"
 
 
-def test_dashboard_binds_visualizations_and_chain_to_provider_payload():
+def test_dashboard_binds_table_and_chain_to_provider_payload():
     text = HTML.read_text(encoding="utf-8")
     assert "d.option_chain" in text
     assert "currentChain=Array.isArray(d.option_chain)?d.option_chain:[]" in text
-    assert "renderCharts(currentChain)" in text
-    assert "strikeSeries(rows,'oi')" in text
+    assert "renderIntelligence(currentChain)" in text
+    assert "intelligenceRows(rows)" in text
     assert "gamma_contribution" in text
     assert "LIVE_PROVIDER" in text
     assert "No mock values are rendered" in text
@@ -49,10 +49,20 @@ def test_dashboard_level_map_is_simple_and_provider_bound():
     assert "class=\"marker\"" not in text
 
 
-
-def test_market_level_map_uses_simple_tabular_layout():
+def test_market_intelligence_uses_simple_data_table_instead_of_charts():
     text = HTML.read_text(encoding="utf-8")
-    assert "Simple, readable market-level table" in text
-    assert "#levelMapList:before" in text
-    assert "grid-template-columns:1.2fr 1fr 2fr" in text
-    assert "Level|Price|Reference" in text
+    assert "Market Intelligence Data" in text
+    assert "Market Intelligence Charts" not in text
+    assert "oiChart" not in text
+    assert "gammaChart" not in text
+    assert "ivChart" not in text
+    assert "flowChart" not in text
+    assert "chart-grid" not in text
+    assert "chart-panel" not in text
+    assert "intelligenceBody" in text
+    assert "CE Gamma Contribution" in text
+    assert "PE Gamma Contribution" in text
+    assert "CE IV %" in text
+    assert "PE IV %" in text
+    assert "CE OI Δ" in text
+    assert "PE OI Δ" in text

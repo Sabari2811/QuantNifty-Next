@@ -7,6 +7,7 @@ from statistics import mean, pstdev
 from typing import Any
 
 from quantnifty.institutional_engine import final_decision
+from quantnifty.historical import historical_data_status, canonicalize_snapshots
 
 
 @dataclass(frozen=True)
@@ -106,33 +107,28 @@ def _metrics(trades: list[Trade], initial_capital: float, observations: int) -> 
     equity = initial_capital
     peak = equity
     max_dd = 0.0
-    curve = [equity]
     for p in pnls:
         equity += p
         peak = max(peak, equity)
         max_dd = max(max_dd, peak - equity)
-        curve.append(equity)
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
     mean_pnl = mean(pnls) if pnls else 0.0
-    daily = []
     by_day: dict[str, float] = {}
+    confidence = [t.confidence for t in trades]
     for t in trades:
         dt = _timestamp({"timestamp": t.timestamp})
         key = dt.date().isoformat() if dt else str(t.entry_index)
         by_day[key] = by_day.get(key, 0.0) + t.net_pnl
     daily = list(by_day.values())
     sharpe = (mean(daily) / pstdev(daily) * sqrt(252)) if len(daily) > 1 and pstdev(daily) > 0 else 0.0
-    streak = max_loss_streak = 0
-    max_win_streak = 0
+    max_win_streak = max_loss_streak = 0
     current_win = current_loss = 0
     for p in pnls:
         if p > 0:
-            current_win += 1; current_loss = 0
-            max_win_streak = max(max_win_streak, current_win)
+            current_win += 1; current_loss = 0; max_win_streak = max(max_win_streak, current_win)
         elif p < 0:
-            current_loss += 1; current_win = 0
-            max_loss_streak = max(max_loss_streak, current_loss)
+            current_loss += 1; current_win = 0; max_loss_streak = max(max_loss_streak, current_loss)
     costs = sum(t.costs for t in trades)
     return {
         "observations": observations,
@@ -155,10 +151,11 @@ def _metrics(trades: list[Trade], initial_capital: float, observations: int) -> 
         "ending_equity": round(equity, 2),
         "sharpe_like": round(sharpe, 3),
         "return_pct": round((equity - initial_capital) / initial_capital * 100, 2) if initial_capital else 0.0,
+        "avg_signal_confidence": round(mean(confidence), 2) if confidence else 0.0,
     }
 
 
-def _trade_slice(trades: list[Trade], snapshots: list[dict[str, Any]], start: int, end: int) -> list[Trade]:
+def _trade_slice(trades: list[Trade], start: int, end: int) -> list[Trade]:
     return [t for t in trades if start <= t.entry_index < end]
 
 
@@ -167,9 +164,9 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
     mode = strategy.strip().lower()
     if mode not in {"directional", "gamma_blast"}:
         raise ValueError("strategy must be directional or gamma_blast")
-    ordered = sorted((s for s in snapshots if isinstance(s, dict)), key=lambda s: _timestamp(s) or datetime.min.replace(tzinfo=timezone.utc))
+    ordered = canonicalize_snapshots(snapshots, "RECORDED_HISTORICAL" if snapshots and all(s.get("data_integrity") == "RECORDED_HISTORICAL" for s in snapshots if isinstance(s, dict)) else "LIVE_PROVIDER")
     if len(ordered) < 2:
-        return {"status": "INSUFFICIENT_DATA", "strategy": mode, "metrics": _metrics([], cfg.initial_capital, len(ordered)), "trades": [], "regimes": {}, "split": {}}
+        return {"status": "INSUFFICIENT_DATA", "strategy": mode, "historical_data": historical_data_status(ordered), "metrics": _metrics([], cfg.initial_capital, len(ordered)), "trades": [], "regimes": {}, "split": {}}
 
     trades: list[Trade] = []
     blocked = approved = 0
@@ -223,12 +220,13 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
     n = len(ordered)
     train_end = max(1, int(n * 0.60)); val_end = max(train_end + 1, int(n * 0.80)) if n > 2 else n
     splits = {"in_sample": [0, train_end], "validation": [train_end, min(val_end, n)], "out_of_sample": [min(val_end, n), n]}
-    split_metrics = {name: _metrics(_trade_slice(trades, ordered, a, b), cfg.initial_capital, b - a) for name, (a, b) in splits.items()}
+    split_metrics = {name: _metrics(_trade_slice(trades, a, b), cfg.initial_capital, b - a) for name, (a, b) in splits.items()}
     regimes: dict[str, list[Trade]] = {}
     for t in trades:
-        regimes.setdefault(_regime(ordered[min(t.entry_index, n - 1)]), []).append(t)
-        dt = _timestamp(ordered[min(t.entry_index, n - 1)])
-        expiry = str(ordered[min(t.entry_index, n - 1)].get("expiry") or "")[:10]
+        entry_snapshot = ordered[min(t.entry_index, n - 1)]
+        regimes.setdefault(_regime(entry_snapshot), []).append(t)
+        dt = _timestamp(entry_snapshot)
+        expiry = str(entry_snapshot.get("expiry") or "")[:10]
         if dt and expiry and dt.date().isoformat() == expiry:
             regimes.setdefault("EXPIRY_DAY", []).append(t)
             if dt.hour == 9 and dt.minute < 30:
@@ -237,6 +235,8 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
             if minutes >= 15 * 60 + 15:
                 regimes.setdefault("EXPIRY_FINAL_15M", []).append(t)
     regime_metrics = {name: _metrics(ts, cfg.initial_capital, len(ts)) for name, ts in regimes.items()}
+    risk_gate = {"approved": approved, "blocked": blocked, "block_rate_pct": round(blocked / (approved + blocked) * 100, 2) if approved + blocked else 0.0}
+    signal_quality = {"traded_signals": len(trades), "trade_win_rate_pct": _metrics(trades, cfg.initial_capital, len(trades))["win_rate_pct"], "avg_confidence": _metrics(trades, cfg.initial_capital, len(trades))["avg_signal_confidence"]}
     return {
         "status": "OK",
         "mode": "READ_ONLY_BACKTEST",
@@ -245,8 +245,11 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
         "entry_rule": "decision at t, fill at t+1 available quote",
         "exit_rule": "next-snapshot spot stop/target, otherwise max-hold time",
         "cost_model": asdict(cfg),
+        "historical_data": historical_data_status(ordered),
         "approved_signals": approved,
         "blocked_signals": blocked,
+        "risk_gate_effectiveness": risk_gate,
+        "signal_quality": signal_quality,
         "metrics": _metrics(trades, cfg.initial_capital, n),
         "split": split_metrics,
         "regimes": regime_metrics,
@@ -263,9 +266,11 @@ def validation_report(snapshots: list[dict[str, Any]], strategy: str = "directio
         "status": result.get("status"),
         "strategy": result.get("strategy"),
         "lookahead_free": result.get("lookahead_free"),
+        "historical_data": result.get("historical_data"),
         "oos": oos,
         "overall": result.get("metrics"),
-        "risk_gate": {"approved": result.get("approved_signals", 0), "blocked": result.get("blocked_signals", 0)},
+        "risk_gate": result.get("risk_gate_effectiveness", {"approved": result.get("approved_signals", 0), "blocked": result.get("blocked_signals", 0)}),
+        "signal_quality": result.get("signal_quality", {}),
         "regimes": result.get("regimes", {}),
         "research_only": True,
         "orders_placed": 0,

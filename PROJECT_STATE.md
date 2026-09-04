@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Branch: `main`
-- Latest verified commit: `e9aa4380255baf0761700c387798109d950e2a6c`
+- The GitHub `main` branch is authoritative; this document is a governance/state summary and intentionally does not pin a stale commit SHA.
 - Trading remains disabled/read-only.
 
 ## Current architecture
@@ -12,6 +12,7 @@
 - Backtest and validation metrics: `backtest.py`
 - Strike policy: `strike_selector.py`
 - Canonical historical snapshot contract: `historical.py`
+- Recorded Parquet + JSON ingestion: `recording_loader.py`
 - Backtest UI: `web/backtest.html`
 
 ## Backtest status
@@ -29,6 +30,7 @@ Implemented and unit-tested:
 - expiry-day / expiry-open / final-15-minute classification when timestamp and expiry data are present
 - risk-gate effectiveness and signal-confidence summary
 - canonical snapshot validation and provenance isolation
+- recorded Parquet option-chain + Greeks ingestion
 
 ## Historical data evidence
 `data_Review.txt` was reviewed outside the repository because it is not present on `main`.
@@ -43,7 +45,7 @@ The reviewed recorder export contains:
 - 45 snapshots referencing 04-Aug-2026 expiry and 22 referencing 11-Aug-2026 expiry
 - expiry-day snapshots on 04-Aug-2026 are present, including pre-expiry and post-rollover observations
 
-The option-chain and greeks files are Parquet and are not yet committed to the repository. They must be decoded and mapped into the canonical snapshot contract before any empirical P&L result is accepted.
+The recorder data is structurally sufficient to attempt canonical reconstruction. It is not committed to the repository, so production empirical results are not claimed until the actual bundle is supplied to the ingestion path and successfully replayed.
 
 ## Empirical-result rule
 No historical P&L, win rate, profit factor, expectancy, drawdown, Sharpe-like result, Gamma Blast result, or CAS result is considered empirical until the recorded option-chain data is successfully decoded, canonicalized, and replayed through the same live intelligence -> FinalDecision -> RiskEngine -> ExecutionPlan path.
@@ -51,8 +53,8 @@ No historical P&L, win rate, profit factor, expectancy, drawdown, Sharpe-like re
 Index-only historical candles are not sufficient to claim option-strategy backtest results.
 
 ## Remaining highest-priority work
-1. Add a production-safe recorded-snapshot ingestion/decoder for the recorder Parquet + JSON bundle.
-2. Reconstruct canonical snapshots without forward-looking fields.
+1. Wire the recorded-snapshot loader into the API/UI without introducing a second data source of truth.
+2. Reconstruct canonical snapshots from the actual recorder export and verify all timestamps, expiry, option identity and Greeks.
 3. Replay the actual recorded snapshots through the authoritative decision/risk path.
 4. Validate directional and Gamma Blast strike policy, including qualified-only OTM.
 5. Validate expiry/CAS behavior only where recorded timestamps and expiry support it.

@@ -1,5 +1,4 @@
-# QuantNifty-Next
+# QuantNifty Next
+Live NIFTY options analytics using INDstocks/INDMoney market data.
 
-Fresh production-grade quantitative trading platform.
-
-This repository is being developed incrementally with Codex.
+Runtime secret: `INDSTOCKS_TOKEN`.

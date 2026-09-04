@@ -1,0 +1,104 @@
+name: QuantNifty Production Evidence
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  production-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install smoke-test dependencies
+        run: pip install requests websocket-client playwright
+      - name: Install Chromium
+        run: playwright install --with-deps chromium
+      - name: Wait for production deployment
+        run: |
+          python - <<'PY'
+          import time, requests
+          base='https://quantnifty-api.onrender.com'
+          for i in range(60):
+              try:
+                  r=requests.get(base+'/health',timeout=15)
+                  if r.ok:
+                      print('production health:', r.status_code, r.text)
+                      break
+              except Exception as e:
+                  print('waiting:', e)
+              time.sleep(10)
+          else:
+              raise SystemExit('production health endpoint did not become reachable')
+          PY
+      - name: Authenticated live-market and historical replay evidence
+        run: |
+          python - <<'PY'
+          import json, time
+          from datetime import datetime, timezone, timedelta
+          import requests
+          base='https://quantnifty-api.onrender.com'
+          health=requests.get(base+'/health',timeout=30); health.raise_for_status()
+          h=health.json()
+          assert h['status']=='ok'
+          assert h['provider']=='INDstocks'
+          assert h['provider_configured'] is True
+
+          market=requests.get(base+'/api/v1/market',timeout=45); market.raise_for_status()
+          m=market.json()
+          assert m['data_integrity']=='LIVE_PROVIDER', m
+          assert float(m['spot'])>0
+          assert len(m['option_chain'])>=2
+          assert m['rows']==len(m['option_chain'])
+          print('LIVE_MARKET_EVIDENCE=PASS')
+          print('spot=',m['spot'],'rows=',m['rows'],'expiry=',m.get('expiry'))
+
+          end=int(datetime.now(timezone.utc).timestamp()*1000)
+          start=int((datetime.now(timezone.utc)-timedelta(days=3)).timestamp()*1000)
+          hist=requests.get(base+'/api/v1/historical',params={'interval':'5minute','start_time':start,'end_time':end,'scrip_codes':'NSE_40000001'},timeout=45)
+          hist.raise_for_status(); hp=hist.json()
+          provider=hp['data']
+          raw=provider.get('data') or {}
+          series=raw.get('NSE_40000001') or {}
+          candles=series.get('candles') or []
+          assert len(candles)>=2, 'provider returned fewer than 2 candles'
+          replay=requests.post(base+'/api/v1/replay',json={'data':raw},timeout=45)
+          replay.raise_for_status(); rp=replay.json()
+          assert rp['mode']=='READ_ONLY_REPLAY'
+          assert rp['summary']['count']==len(candles)
+          assert rp['summary']['count']>=2
+          print('PRODUCTION_REPLAY_EVIDENCE=PASS')
+          print('candles=',len(candles),'replay_points=',len(rp['points']))
+          PY
+      - name: Browser E2E against production
+        run: |
+          python - <<'PY'
+          from playwright.sync_api import sync_playwright
+          base='https://quantnifty-api.onrender.com/'
+          with sync_playwright() as p:
+              browser=p.chromium.launch(headless=True)
+              page=browser.new_page()
+              page.goto(base, wait_until='networkidle', timeout=60000)
+              page.wait_for_function("document.body.innerText.includes('LIVE_PROVIDER')", timeout=60000)
+              text=page.locator('body').inner_text()
+              for label in ['QuantNifty Next','Market Snapshot','Key Market Levels','Gamma Walls','Expected Move Range','Market Structure','Dealer Flow','Directional Score','Positioning & Volatility','Reference Levels & Feed','Live Option Chain','Data Integrity','Security ID','Theta','Vega']:
+                  assert label in text, f'missing UI label: {label}'
+              assert 'LIVE_PROVIDER' in text
+              assert 'No mock values are rendered' in text
+              assert page.locator('#chainBody tr').count() >= 2
+              page.locator('#callsBtn').click()
+              page.wait_for_timeout(500)
+              assert page.locator('#chainBody tr').count() >= 1
+              page.locator('#putsBtn').click()
+              page.wait_for_timeout(500)
+              assert page.locator('#chainBody tr').count() >= 1
+              page.locator('#allBtn').click()
+              page.wait_for_timeout(500)
+              assert page.locator('#chainBody tr').count() >= 2
+              print('BROWSER_E2E_EVIDENCE=PASS')
+              browser.close()
+          PY

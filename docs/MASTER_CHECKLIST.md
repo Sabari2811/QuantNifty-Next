@@ -15,7 +15,7 @@
 - [x] IV skew / ATM IV
 - [x] Gamma flip / gamma walls
 - [x] Max pain
-- [x] Expected move
+- [x] Expected move — IV percentage and days-to-expiry handled correctly
 - [x] Support / resistance
 - [x] Dealer-flow classification
 - [x] Liquidity score
@@ -29,6 +29,7 @@
 - [x] Read-only replay API
 - [x] Historical interval validation
 - [x] Five-instrument request limit enforcement
+- [x] Historical/replay capability exposed through API; UI remains signal-dashboard focused
 
 ## Trading safety
 - [x] Explicit READ_ONLY mode
@@ -47,11 +48,18 @@
 - [x] Data-integrity state
 - [x] No fabricated fallback values
 
-## Validation
-- [x] Python compile validation in CI
-- [x] Replay unit tests in CI
+## Deployment / reliability
+- [x] Render Python service configuration aligned with repository
+- [x] Render health endpoint contract
+- [x] WebSocket client-disconnect handling
+- [x] CI compile validation
+- [x] CI replay/analytics regression tests
+- [x] Successful CI run observed for the prior implementation pass
+- [x] Production Render deployment previously observed live
+
+## Final evidence gates
 - [ ] Authenticated live-market response observed in cloud runtime
 - [ ] Full browser E2E with live provider response
 - [ ] Production historical replay run with real provider candles
 
-The remaining unchecked items require an authenticated provider response to be observable from the deployed runtime; they are deliberately not marked green from static/source inspection alone.
+These final three gates remain evidence-gated. Source code, CI, deployment status, or an unauthenticated request is not sufficient to mark them green. The system therefore remains production-read-only until authenticated live-provider evidence is observed.

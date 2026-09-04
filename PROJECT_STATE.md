@@ -2,7 +2,7 @@
 
 ## Source of truth
 - Branch: `main`
-- The GitHub `main` branch is authoritative; this document is a governance/state summary and intentionally does not pin a stale commit SHA.
+- The GitHub `main` branch is authoritative; this document does not pin a stale commit SHA.
 - Trading remains disabled/read-only.
 
 ## Current architecture
@@ -13,24 +13,26 @@
 - Strike policy: `strike_selector.py`
 - Canonical historical snapshot contract: `historical.py`
 - Recorded Parquet + JSON ingestion: `recording_loader.py`
+- Recorded historical API: `recording_api.py`
 - Backtest UI: `web/backtest.html`
 
 ## Backtest status
 Implemented and unit-tested:
 - decision-at-t / fill-at-t+1 replay boundary
-- FinalDecision path through RiskEngine and ExecutionPlan
+- authoritative FinalDecision → RiskEngine → ExecutionPlan path
 - bid/ask-aware entry/exit fallback
-- slippage and fixed transaction costs
+- configurable slippage and fixed transaction costs
 - P&L, win/loss counts and distribution
 - profit factor and expectancy
 - maximum drawdown and drawdown percentage
 - Sharpe-like daily metric
-- in-sample / validation / out-of-sample split
+- deterministic in-sample / validation / out-of-sample split
 - regime classification
 - expiry-day / expiry-open / final-15-minute classification when timestamp and expiry data are present
 - risk-gate effectiveness and signal-confidence summary
 - canonical snapshot validation and provenance isolation
 - recorded Parquet option-chain + Greeks ingestion
+- read-only recorded-history API endpoints and Backtest UI integration
 
 ## Historical data evidence
 `data_Review.txt` was reviewed outside the repository because it is not present on `main`.
@@ -43,20 +45,24 @@ The reviewed recorder export contains:
 - runtime timestamps spanning 27-Jul-2026 through 07-Aug-2026
 - 23 snapshots during NSE market hours in the reviewed export
 - 45 snapshots referencing 04-Aug-2026 expiry and 22 referencing 11-Aug-2026 expiry
-- expiry-day snapshots on 04-Aug-2026 are present, including pre-expiry and post-rollover observations
+- expiry-day snapshots on 04-Aug-2026 are present
 
-The recorder data is structurally sufficient to attempt canonical reconstruction. It is not committed to the repository, so production empirical results are not claimed until the actual bundle is supplied to the ingestion path and successfully replayed.
+The recorder export is structurally sufficient to attempt canonical reconstruction. It is not committed to `main` and is not mounted in the Render service. Therefore no empirical P&L or strategy result is claimed from inspection alone.
 
 ## Empirical-result rule
-No historical P&L, win rate, profit factor, expectancy, drawdown, Sharpe-like result, Gamma Blast result, or CAS result is considered empirical until the recorded option-chain data is successfully decoded, canonicalized, and replayed through the same live intelligence -> FinalDecision -> RiskEngine -> ExecutionPlan path.
+No historical P&L, win rate, profit factor, expectancy, drawdown, Sharpe-like result, Gamma Blast result, or CAS result is considered empirical until recorded option-chain data is successfully decoded, canonicalized, and replayed through the same live intelligence → FinalDecision → RiskEngine → ExecutionPlan path.
 
 Index-only historical candles are not sufficient to claim option-strategy backtest results.
 
-## Remaining highest-priority work
-1. Wire the recorded-snapshot loader into the API/UI without introducing a second data source of truth.
-2. Reconstruct canonical snapshots from the actual recorder export and verify all timestamps, expiry, option identity and Greeks.
-3. Replay the actual recorded snapshots through the authoritative decision/risk path.
-4. Validate directional and Gamma Blast strike policy, including qualified-only OTM.
-5. Validate expiry/CAS behavior only where recorded timestamps and expiry support it.
-6. Produce empirical metrics and expose their provenance in the backtest UI/API.
-7. Add production E2E coverage for the historical validation surface.
+## Current remaining work
+1. Supply/mount the reviewed recorder export to `QUANTNIFTY_RECORDING_ROOT` on the execution environment.
+2. Run recorded-history validation against the real bundles and verify Parquet decoding and canonical reconstruction.
+3. Produce empirical directional and Gamma Blast results only from successfully decoded recorded snapshots.
+4. Verify ATM/ITM directional policy, qualified-only OTM for Gamma Blast, and CAS expiry-day behavior against supported recorded timestamps.
+5. Capture and retain empirical validation evidence in CI or another authoritative project record.
+
+## Validation evidence
+- Latest completed CI before the recording API wiring passed the existing test suite.
+- Production evidence workflow passed live-provider, historical candle replay and browser E2E checks.
+- Render service `quantnifty-api` is configured for automatic deployment from `main` in Singapore.
+- No real trading or order execution is enabled.

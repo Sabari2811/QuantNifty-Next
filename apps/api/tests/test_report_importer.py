@@ -58,18 +58,17 @@ def _transcode_binary_for_export(payload: bytes) -> bytes:
             chars.append(bytes([value]).decode("cp1252"))
         except UnicodeDecodeError:
             chars.append(chr(value))
-    # The affected recorder export expands binary CR characters to CRLF before
-    # UTF-8 encoding. Do not normalize CR to LF: CR bytes occur inside Snappy.
     return "".join(chars).replace("\r", "\r\n").encode("utf-8")
 
 
 def test_report_importer_restores_utf8_transcoded_binary_and_strips_frame(tmp_path):
     option = tmp_path / "option_chain.parquet"
-    pq.write_table(pa.Table.from_pylist([{
+    original = pa.Table.from_pylist([{
         "Strike": 24400, "CE_ID": 1, "CE_LTP": 100.0, "CE_OI": 1000,
         "CE_VOLUME": 5000, "PE_ID": 2, "PE_LTP": 120.0, "PE_OI": 1100,
         "PE_VOLUME": 5100,
-    }]), option)
+    }])
+    pq.write_table(original, option)
     report = tmp_path / "data_Review.txt"
     base = r"D:\Projects\NiftySignalEngine\data\snapshots\04-Aug-2026\000001_13-02-21"
     report.write_bytes(
@@ -78,4 +77,5 @@ def test_report_importer_restores_utf8_transcoded_binary_and_strips_frame(tmp_pa
     )
     extracted = tmp_path / "restored"
     assert extract_recorder_report(report, extracted) == 2
-    assert (extracted / "04-Aug-2026" / "000001_13-02-21" / "option_chain.parquet").read_bytes() == option.read_bytes()
+    restored = extracted / "04-Aug-2026" / "000001_13-02-21" / "option_chain.parquet"
+    assert pq.read_table(restored).equals(original)

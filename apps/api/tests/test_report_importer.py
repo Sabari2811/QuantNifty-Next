@@ -57,7 +57,9 @@ def _transcode_binary_for_export(payload: bytes) -> bytes:
             chars.append(bytes([value]).decode("cp1252"))
         except UnicodeDecodeError:
             chars.append(chr(value))
-    return "".join(chars).replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+    # The affected recorder export expands binary CR characters to CRLF before
+    # UTF-8 encoding. Do not normalize CR to LF: CR bytes occur inside Snappy.
+    return "".join(chars).replace("\r", "\r\n").encode("utf-8")
 
 
 def test_report_importer_restores_utf8_transcoded_binary(tmp_path):

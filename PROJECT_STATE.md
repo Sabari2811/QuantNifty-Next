@@ -32,6 +32,7 @@ Implemented and unit-tested:
 - risk-gate effectiveness and signal-confidence summary
 - canonical snapshot validation and provenance isolation
 - recorded Parquet option-chain + Greeks ingestion
+- UTF-8/CP1252-transcoded recorder export recovery
 - read-only recorded-history API endpoints and Backtest UI integration
 
 ## Historical data evidence
@@ -55,14 +56,14 @@ No historical P&L, win rate, profit factor, expectancy, drawdown, Sharpe-like re
 Index-only historical candles are not sufficient to claim option-strategy backtest results.
 
 ## Current remaining work
-1. Supply/mount the reviewed recorder export to `QUANTNIFTY_RECORDING_ROOT` on the execution environment.
+1. Upload the reviewed recorder export through the Backtest UI validation endpoint.
 2. Run recorded-history validation against the real bundles and verify Parquet decoding and canonical reconstruction.
 3. Produce empirical directional and Gamma Blast results only from successfully decoded recorded snapshots.
 4. Verify ATM/ITM directional policy, qualified-only OTM for Gamma Blast, and CAS expiry-day behavior against supported recorded timestamps.
 5. Capture and retain empirical validation evidence in CI or another authoritative project record.
 
 ## Validation evidence
-- Latest completed CI before the recording API wiring passed the existing test suite.
-- Production evidence workflow passed live-provider, historical candle replay and browser E2E checks.
+- Latest CI validation covers the historical replay mode, report importer, backtest session boundaries and existing backtest safeguards.
+- Production evidence workflow passed live-provider, historical candle replay and browser E2E checks for the application deployment available at the time of validation.
 - Render service `quantnifty-api` is configured for automatic deployment from `main` in Singapore.
 - No real trading or order execution is enabled.

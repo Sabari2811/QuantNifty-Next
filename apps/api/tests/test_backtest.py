@@ -29,7 +29,7 @@ def snap(ts: str, spot: float, option: float) -> dict:
     }
 
 
-def fake_decision(data, previous=None, strategy="directional"):
+def fake_decision(data, previous=None, strategy="directional", mode="LIVE"):
     return {
         "signal": {"direction": "BULLISH", "confidence": 80},
         "risk": {"approved": True},

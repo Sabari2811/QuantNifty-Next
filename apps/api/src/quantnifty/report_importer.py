@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 _HEADER = re.compile(
     rb"FILE : (?P<name>[^\r\n]+)\r\nPATH : (?P<path>[^\r\n]+)\r\n(?P<sep>=+)(?:\r\n|\n)"
 )
-_NEXT = b"\r\n======================================================================\r\nFILE :"
 
 
 def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
@@ -33,11 +32,7 @@ def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
             continue
         content_start = match.end()
         content_end = matches[index + 1].start() if index + 1 < len(matches) else len(data)
-        # A report section is terminated by the separator immediately before
-        # the next FILE header. Remove that framing, but preserve raw bytes.
         framed = data[content_start:content_end]
-        if framed.endswith(_NEXT[len(b"\r\n======================================================================\r\nFILE :"):]):
-            pass
         separator = framed.rfind(b"\r\n======================================================================\r\nFILE :")
         if separator >= 0:
             framed = framed[:separator]

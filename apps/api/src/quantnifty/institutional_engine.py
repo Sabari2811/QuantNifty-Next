@@ -47,9 +47,13 @@ def oi_flow_analyzer(data: dict[str, Any]) -> dict[str, Any]:
         notional[flow] = notional.get(flow, 0.0) + weight
         if side in by_side: by_side[side][flow] = by_side[side].get(flow, 0.0) + weight
         classified.append({"strike": r.get("strike"), "side": side, "flow": flow, "oi_change": round(doi, 2), "price_change": round(_f(r.get("last_price")) - _f(r.get("previous_close")), 4)})
+    recorded_bias = str(data.get("recorded_oi_flow_bias") or "").upper()
+    if recorded_bias in {"BULLISH", "BEARISH", "NEUTRAL"}:
+        bias = recorded_bias
+    else:
+        directional = {"BULLISH": notional.get("SHORT_COVERING", 0) + notional.get("LONG_BUILDUP", 0), "BEARISH": notional.get("SHORT_BUILDUP", 0) + notional.get("LONG_UNWINDING", 0)}
+        bias = "BULLISH" if directional["BULLISH"] > directional["BEARISH"] * 1.15 else "BEARISH" if directional["BEARISH"] > directional["BULLISH"] * 1.15 else "NEUTRAL"
     dominant = max(notional, key=notional.get) if notional else "NEUTRAL"
-    directional = {"BULLISH": notional.get("SHORT_COVERING", 0) + notional.get("LONG_BUILDUP", 0), "BEARISH": notional.get("SHORT_BUILDUP", 0) + notional.get("LONG_UNWINDING", 0)}
-    bias = "BULLISH" if directional["BULLISH"] > directional["BEARISH"] * 1.15 else "BEARISH" if directional["BEARISH"] > directional["BULLISH"] * 1.15 else "NEUTRAL"
     return {"dominant_flow": dominant, "bias": bias, "counts": counts, "notional": {k: round(v, 2) for k, v in notional.items()}, "by_side": by_side, "rows": classified}
 
 
@@ -101,20 +105,21 @@ def institutional_signal(data: dict[str, Any], previous: dict[str, Any] | None =
     return {"direction": direction, "confidence": round(confidence, 1), "scores": {k: round(v, 1) for k, v in raw.items()}, "evidence": evidence, "gamma": gamma, "oi_flow": oi, "volatility": vol, "dealer": dealer}
 
 
-def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "directional") -> dict[str, Any]:
+def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
     state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""
+    historical_replay = mode.upper() in {"BACKTEST", "REPLAY"}
     gates = {
         "direction": signal.get("direction") in {"BULLISH", "BEARISH"},
         "confidence": _f(signal.get("confidence")) >= 60,
         "liquidity": _f(data.get("liquidity_score")) >= 50,
         "market_state": state not in {"LIQUIDITY_RISK", "COMPRESSION"},
-        "data_integrity": data.get("data_integrity") == "LIVE_PROVIDER",
+        "data_integrity": data.get("data_integrity") == "LIVE_PROVIDER" or (historical_replay and data.get("data_integrity") == "RECORDED_HISTORICAL"),
     }
     if strategy == "gamma_blast":
         gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE_GAMMA"
         gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
     reasons = [k for k, ok in gates.items() if not ok]
-    return {"strategy": strategy, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": 0.5 if strategy == "gamma_blast" else 1.0}
+    return {"strategy": strategy, "mode": mode.upper(), "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": 0.5 if strategy == "gamma_blast" else 1.0}
 
 
 def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str, Any]) -> dict[str, Any]:
@@ -125,15 +130,15 @@ def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str,
     return {"status": "APPROVED_READ_ONLY" if approved else "BLOCKED", "execution_enabled": False, "direction": direction, "instrument": chosen, "entry": "WAIT_FOR_TRIGGER" if approved else None, "stop_points": round(stop_distance, 2) if approved else None, "target_points": round(target_distance, 2) if approved else None, "risk_reward": 2.0 if approved else None, "order_action": "DISABLED", "note": "Plan only. No broker order can be submitted by this engine."}
 
 
-def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None, strategy: str = "directional") -> dict[str, Any]:
-    signal = institutional_signal(data, previous); risk = risk_engine(data, signal, strategy); plan = execution_plan(data, signal, risk)
-    return {"signal": signal, "risk": risk, "execution_plan": plan, "status": "TRADE_CANDIDATE" if risk["approved"] else "NO_TRADE", "authoritative": "FINAL_DECISION", "trading": "DISABLED"}
+def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None, strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
+    signal = institutional_signal(data, previous); risk = risk_engine(data, signal, strategy, mode); plan = execution_plan(data, signal, risk)
+    return {"signal": signal, "risk": risk, "execution_plan": plan, "status": "TRADE_CANDIDATE" if risk["approved"] else "NO_TRADE", "authoritative": "FINAL_DECISION", "trading": "DISABLED", "mode": mode.upper()}
 
 
-def replay_signal_stack(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
+def replay_signal_stack(snapshots: list[dict[str, Any]], mode: str = "REPLAY") -> dict[str, Any]:
     results = []; previous = None
     for snap in snapshots:
-        result = final_decision(snap, previous, "directional"); results.append({"timestamp": snap.get("timestamp"), "spot": snap.get("spot"), "decision": result})
+        result = final_decision(snap, previous, "directional", mode); results.append({"timestamp": snap.get("timestamp"), "spot": snap.get("spot"), "decision": result})
         previous = snap
     candidates = sum(r["decision"]["status"] == "TRADE_CANDIDATE" for r in results)
     return {"count": len(results), "trade_candidates": candidates, "no_trade": len(results) - candidates, "results": results, "signal_neutral": True, "orders_placed": 0}

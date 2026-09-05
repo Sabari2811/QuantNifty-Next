@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, time
 from math import sqrt
 from statistics import mean, pstdev
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from quantnifty.institutional_engine import final_decision
 from quantnifty.historical import historical_data_status, canonicalize_snapshots
+
+IST = ZoneInfo("Asia/Kolkata")
+MARKET_OPEN = time(9, 15)
+MARKET_CLOSE = time(15, 30)
 
 
 @dataclass(frozen=True)
@@ -59,16 +64,27 @@ def _timestamp(s: dict[str, Any]) -> datetime | None:
         return None
 
 
-def _expiry_date(value: Any) -> str | None:
+def _expiry_datetime(value: Any) -> datetime | None:
     raw = str(value or "").strip()
-    if not raw:
-        return None
-    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+    for fmt in ("%m/%d/%Y %H:%M", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M", "%m/%d/%Y", "%d/%m/%Y", "%Y-%m-%d"):
         try:
-            return datetime.strptime(raw, fmt).date().isoformat()
+            return datetime.strptime(raw, fmt).replace(tzinfo=IST)
         except ValueError:
             pass
-    return raw[:10] if len(raw) >= 10 and raw[4:5] == "-" else None
+    return None
+
+
+def _expiry_date(value: Any) -> str | None:
+    dt = _expiry_datetime(value)
+    return dt.date().isoformat() if dt else None
+
+
+def _is_market_session(snapshot: dict[str, Any]) -> bool:
+    dt = _timestamp(snapshot)
+    if dt is None:
+        return False
+    local = dt.astimezone(IST)
+    return local.weekday() < 5 and MARKET_OPEN <= local.time() <= MARKET_CLOSE
 
 
 def _find_leg(snapshot: dict[str, Any], instrument: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -86,7 +102,7 @@ def _find_leg(snapshot: dict[str, Any], instrument: dict[str, Any] | None) -> di
             return row
         if symbol and str(row.get("trading_symbol") or "") == symbol:
             return row
-        if strike and abs(_f(row.get("strike")) - strike) < 0.001 and (not side or str(row.get("side") or "").upper() == side):
+        if not sid and not symbol and strike and abs(_f(row.get("strike")) - strike) < 0.001 and (not side or str(row.get("side") or "").upper() == side):
             return row
     return None
 
@@ -157,9 +173,10 @@ def _canonical_backtest_input(snapshots: list[dict[str, Any]]) -> list[dict[str,
 def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional", config: BacktestConfig | None = None) -> dict[str, Any]:
     cfg = config or BacktestConfig(); mode = strategy.strip().lower()
     if mode not in {"directional", "gamma_blast"}: raise ValueError("strategy must be directional or gamma_blast")
-    ordered = _canonical_backtest_input(snapshots); data_status = historical_data_status(ordered)
+    canonical = _canonical_backtest_input(snapshots); data_status = historical_data_status(canonical)
+    ordered = [snapshot for snapshot in canonical if _is_market_session(snapshot)]
     if len(ordered) < 2:
-        return {"status":"INSUFFICIENT_DATA","strategy":mode,"historical_data":data_status,"metrics":_metrics([],cfg.initial_capital,len(ordered)),"trades":[],"regimes":{},"split":{}}
+        return {"status":"INSUFFICIENT_DATA","strategy":mode,"historical_data":data_status,"session_filter":{"market_hours_only":True,"observations":len(ordered)},"metrics":_metrics([],cfg.initial_capital,len(ordered)),"trades":[],"regimes":{},"split":{}}
     trades: list[Trade] = []; blocked = approved = 0; i = 0; previous = None
     while i < len(ordered) - 1:
         decision = final_decision(ordered[i], previous, mode, "BACKTEST"); previous = ordered[i]; risk = decision.get("risk") or {}
@@ -172,11 +189,17 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
         if option_side and str(leg.get("side") or "").upper() != option_side: i += 1; continue
         entry = _mid_or_last(leg, "BUY"); entry_spot = _f(entry_snap.get("spot"))
         if entry <= 0 or entry_spot <= 0: i += 1; continue
+        expiry = _expiry_datetime(entry_snap.get("expiry"))
         max_j = min(len(ordered) - 1, i + max(1, cfg.max_hold_bars)); exit_j, reason = max_j, "TIME"
         for j in range(i + 1, max_j + 1):
+            ts = _timestamp(ordered[j])
+            if expiry and ts and ts.astimezone(IST) > expiry:
+                exit_j, reason = j - 1, "EXPIRY"
+                break
             spot = _f(ordered[j].get("spot")); favorable = (spot-entry_spot)/entry_spot if direction == "BULLISH" else (entry_spot-spot)/entry_spot
             if favorable <= -abs(cfg.stop_pct): exit_j, reason = j, "STOP"; break
             if favorable >= abs(cfg.target_pct): exit_j, reason = j, "TARGET"; break
+        if exit_j <= i: i += 1; continue
         exit_leg = _find_leg(ordered[exit_j], instrument)
         if not exit_leg: i = exit_j; continue
         exit_price = _mid_or_last(exit_leg, "SELL")
@@ -191,15 +214,16 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
     regimes:dict[str,list[Trade]]={}
     for t in trades:
         entry_snapshot=ordered[min(t.entry_index,n-1)]; regimes.setdefault(_regime(entry_snapshot),[]).append(t)
-        dt=_timestamp(entry_snapshot); expiry=_expiry_date(entry_snapshot.get("expiry"))
-        if dt and expiry and dt.date().isoformat()==expiry:
+        dt=_timestamp(entry_snapshot); expiry_date=_expiry_date(entry_snapshot.get("expiry"))
+        if dt and expiry_date and dt.astimezone(IST).date().isoformat()==expiry_date:
             regimes.setdefault("EXPIRY_DAY",[]).append(t)
-            if dt.hour==9 and dt.minute<30: regimes.setdefault("EXPIRY_OPEN",[]).append(t)
-            if dt.hour*60+dt.minute>=15*60+15: regimes.setdefault("EXPIRY_FINAL_15M",[]).append(t)
+            local=dt.astimezone(IST)
+            if local.hour==9 and local.minute<30: regimes.setdefault("EXPIRY_OPEN",[]).append(t)
+            if local.hour*60+local.minute>=15*60+15: regimes.setdefault("EXPIRY_FINAL_15M",[]).append(t)
     regime_metrics={name:_metrics(ts,cfg.initial_capital,len(ts)) for name,ts in regimes.items()}; risk_gate={"approved":approved,"blocked":blocked,"block_rate_pct":round(blocked/(approved+blocked)*100,2) if approved+blocked else 0.0}; overall=_metrics(trades,cfg.initial_capital,n)
-    return {"status":"OK","mode":"READ_ONLY_BACKTEST","strategy":mode,"lookahead_free":True,"entry_rule":"decision at t, fill at t+1 available quote","exit_rule":"next-snapshot spot stop/target, otherwise max-hold time","cost_model":asdict(cfg),"historical_data":data_status,"approved_signals":approved,"blocked_signals":blocked,"risk_gate_effectiveness":risk_gate,"signal_quality":{"traded_signals":len(trades),"trade_win_rate_pct":overall["win_rate_pct"],"avg_confidence":overall["avg_signal_confidence"]},"metrics":overall,"split":split_metrics,"regimes":regime_metrics,"trades":[asdict(t) for t in trades],"orders_placed":0,"trading_enabled":False}
+    return {"status":"OK","mode":"READ_ONLY_BACKTEST","strategy":mode,"lookahead_free":True,"entry_rule":"decision at t, fill at t+1 available quote","exit_rule":"spot stop/target, max-hold, or contract expiry boundary","cost_model":asdict(cfg),"historical_data":data_status,"session_filter":{"market_hours_only":True,"observations":n},"approved_signals":approved,"blocked_signals":blocked,"risk_gate_effectiveness":risk_gate,"signal_quality":{"traded_signals":len(trades),"trade_win_rate_pct":overall["win_rate_pct"],"avg_confidence":overall["avg_signal_confidence"]},"metrics":overall,"split":split_metrics,"regimes":regime_metrics,"trades":[asdict(t) for t in trades],"orders_placed":0,"trading_enabled":False}
 
 
 def validation_report(snapshots: list[dict[str, Any]], strategy: str = "directional", config: BacktestConfig | None = None) -> dict[str, Any]:
     result=run_backtest(snapshots,strategy,config)
-    return {"status":result.get("status"),"strategy":result.get("strategy"),"lookahead_free":result.get("lookahead_free"),"historical_data":result.get("historical_data"),"oos":result.get("split",{}).get("out_of_sample",{}),"overall":result.get("metrics"),"risk_gate":result.get("risk_gate_effectiveness",{}),"signal_quality":result.get("signal_quality",{}),"regimes":result.get("regimes",{}),"research_only":True,"orders_placed":0}
+    return {"status":result.get("status"),"strategy":result.get("strategy"),"lookahead_free":result.get("lookahead_free"),"historical_data":result.get("historical_data"),"oos":result.get("split",{}).get("out_of_sample",{}),"overall":result.get("metrics"),"risk_gate":result.get("risk_gate_effectiveness",{}),"signal_quality":result.get("signal_quality",{}),"regimes":result.get("regimes",{}),"session_filter":result.get("session_filter",{}),"research_only":True,"orders_placed":0}

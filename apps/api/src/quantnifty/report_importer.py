@@ -9,12 +9,63 @@ _HEADER = re.compile(
 )
 
 
+def _inverse_cp1252() -> dict[int, int]:
+    inverse: dict[int, int] = {}
+    for value in range(256):
+        try:
+            char = bytes([value]).decode("cp1252")
+            inverse[ord(char)] = value
+        except UnicodeDecodeError:
+            inverse[value] = value
+    return inverse
+
+
+_CP1252_INVERSE = _inverse_cp1252()
+
+
+def _restore_exported_binary(content: bytes) -> bytes:
+    """Restore Parquet bytes when a text export UTF-8-transcoded CP1252 data.
+
+    Some recorder exports were produced by reading binary files as Windows text
+    and then writing UTF-8. That expands bytes above 0x7f and can normalize LF
+    to CRLF, making the apparent Parquet payload undecodable. Reversing that
+    transformation is lossless for the affected export format. Byte-preserving
+    uploads remain supported through the raw fallback.
+    """
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    normalized = text.replace("\r\n", "\n")
+    restored = bytearray()
+    try:
+        for char in normalized:
+            codepoint = ord(char)
+            restored.append(_CP1252_INVERSE[codepoint])
+    except (KeyError, ValueError):
+        return content
+    candidate = bytes(restored)
+    if not _looks_like_parquet(candidate):
+        return content
+    return candidate
+
+
+def _looks_like_parquet(data: bytes) -> bool:
+    if len(data) < 12 or data[:4] != b"PAR1" or data[-4:] != b"PAR1":
+        return False
+    try:
+        footer_len = int.from_bytes(data[-8:-4], "little", signed=False)
+    except Exception:
+        return False
+    footer_start = len(data) - 8 - footer_len
+    return footer_start >= 4 and footer_start < len(data) - 8 and data[footer_start] == 0x15
+
+
 def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
     """Extract recorder snapshot files from the textual data_Review export.
 
-    The export is a concatenation of file headers and raw file bytes. Only
-    snapshot runtime JSON and Parquet files are materialized; unrelated files
-    from the report are deliberately ignored.
+    The export is a concatenation of file headers and file bytes. Snapshot
+    runtime JSON and Parquet files are materialized; unrelated files are ignored.
     """
     source = Path(report)
     target = Path(destination)
@@ -39,6 +90,8 @@ def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
         elif framed.endswith(b"\r\n======================================================================\r\n"):
             framed = framed[:-len(b"\r\n======================================================================\r\n")]
         content = framed.rstrip(b"\r\n") if name.endswith(".parquet") else framed.strip(b"\r\n")
+        if name.endswith(".parquet"):
+            content = _restore_exported_binary(content)
         output = target / relative
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(content)

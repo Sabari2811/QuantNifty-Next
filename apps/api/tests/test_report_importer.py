@@ -51,7 +51,13 @@ def test_report_importer_preserves_parquet_and_json(tmp_path):
 
 
 def _transcode_binary_for_export(payload: bytes) -> bytes:
-    return payload.decode("cp1252").replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+    chars = []
+    for value in payload:
+        try:
+            chars.append(bytes([value]).decode("cp1252"))
+        except UnicodeDecodeError:
+            chars.append(chr(value))
+    return "".join(chars).replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
 
 
 def test_report_importer_restores_utf8_transcoded_binary(tmp_path):

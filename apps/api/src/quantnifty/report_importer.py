@@ -24,27 +24,24 @@ _CP1252_INVERSE = _inverse_cp1252()
 
 
 def _restore_exported_binary(content: bytes) -> bytes:
-    """Restore Parquet bytes when a text export UTF-8-transcoded CP1252 data.
+    """Restore Parquet bytes from the recorder's UTF-8/CP1252 text export.
 
-    Some recorder exports were produced by reading binary files as Windows text
-    and then writing UTF-8. That expands bytes above 0x7f and can normalize LF
-    to CRLF, making the apparent Parquet payload undecodable. Reversing that
-    transformation is lossless for the affected export format. Byte-preserving
-    uploads remain supported through the raw fallback.
+    The affected recorder export converts binary CR (0x0d) characters into
+    CRLF text line endings while also UTF-8 encoding CP1252 characters. For
+    Parquet payloads those CR bytes can be part of Snappy-compressed data, so
+    restoring CRLF to LF corrupts the compressed stream. Reverse the observed
+    transformation with CRLF -> CR. Byte-preserving uploads remain supported
+    when the payload is already valid Parquet.
     """
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         return content
-    normalized = text.replace("\r\n", "\n")
-    restored = bytearray()
+    restored_text = text.replace("\r\n", "\r")
     try:
-        for char in normalized:
-            codepoint = ord(char)
-            restored.append(_CP1252_INVERSE[codepoint])
+        candidate = bytes(_CP1252_INVERSE[ord(char)] for char in restored_text)
     except (KeyError, ValueError):
         return content
-    candidate = bytes(restored)
     if not _looks_like_parquet(candidate):
         return content
     return candidate

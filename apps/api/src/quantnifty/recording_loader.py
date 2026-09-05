@@ -57,7 +57,6 @@ def _recorded_intelligence(analytics: dict[str, Any], rows: list[dict[str, Any]]
     iv_skew = analytics.get("iv_skew") or {}
     expected = analytics.get("expected_move") or {}
     market_structure = analytics.get("market_structure") or {}
-    institutional = (analytics.get("institutional_score") or {}).get("liquidity_score") or {}
     smart = analytics.get("smart_strike") or {}
     option_type = str(smart.get("option_type") or "").upper()
     strike = _number(smart.get("strike"))
@@ -70,9 +69,8 @@ def _recorded_intelligence(analytics: dict[str, Any], rows: list[dict[str, Any]]
         selection["side"] = option_type
     elif option_type:
         selection["side"] = option_type
-    max_score = _number(institutional.get("max_score"))
-    score = _number(institutional.get("score"))
-    liquidity_score = score / max_score * 100.0 if max_score else 0.0
+    smart_reasons = smart.get("reasons") or []
+    liquidity_score = 100.0 if "Good Liquidity" in smart_reasons else 0.0
     avg_call_iv = _number(iv_skew.get("average_call_iv"))
     avg_put_iv = _number(iv_skew.get("average_put_iv"))
     return {

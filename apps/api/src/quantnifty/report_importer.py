@@ -44,7 +44,6 @@ def _restore_exported_binary(content: bytes) -> bytes:
         return content
 
     candidates: list[bytes] = []
-    # Most likely export variants. Keep the original order deterministic.
     variants = (
         text.replace("\r\n", "\n"),
         text.replace("\r\n", "\r"),
@@ -61,9 +60,6 @@ def _restore_exported_binary(content: bytes) -> bytes:
     if len(candidates) == 1:
         return candidates[0]
 
-    # PyArrow is already a runtime dependency of the recorder loader. Use it
-    # here to distinguish structurally valid Parquet candidates whose Snappy
-    # page bytes differ. If unavailable, retain the first structural candidate.
     try:
         import pyarrow.parquet as parquet
         import pyarrow as pa
@@ -113,9 +109,10 @@ def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
         content_start = match.end()
         content_end = matches[index + 1].start() if index + 1 < len(matches) else len(data)
         framed = data[content_start:content_end]
-        # The recorder places the framing separator after the payload. It may
-        # be preceded by an extra CRLF because Parquet itself ends in PAR1.
-        separator = re.search(rb"(?:\r\n){1,2}={10,}\r\n$", framed)
+        # Remove the recorder's framing separator before decoding binary data.
+        # For non-final sections the next FILE header follows immediately after
+        # this marker; for the final section the marker reaches EOF.
+        separator = re.search(rb"(?:\r\n){1,3}={10,}\r\n(?:FILE :|$)", framed)
         if separator:
             framed = framed[:separator.start()]
         content = framed.rstrip(b"\r\n") if name.endswith(".parquet") else framed.strip(b"\r\n")

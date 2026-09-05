@@ -113,6 +113,17 @@ jobs:
               assert 'Backtest & Validation' in page.locator('body').inner_text()
               print('BACKTEST_ROUTE_E2E=PASS')
 
+              page.goto(base+'intelligence', wait_until='networkidle', timeout=60000)
+              nav=page.locator('[data-qn-nav="backtest"]')
+              assert nav.count()==1
+              assert nav.is_visible()
+              assert 'Backtest & Validation' in nav.inner_text()
+              nav.click()
+              page.wait_for_load_state('networkidle')
+              assert page.url.rstrip('/').endswith('/backtest'), page.url
+              assert 'Backtest & Validation' in page.locator('body').inner_text()
+              print('INTELLIGENCE_BACKTEST_NAV_E2E=PASS')
+
               page.goto(base, wait_until='networkidle', timeout=60000)
               page.wait_for_function("document.body.innerText.includes('LIVE_PROVIDER')", timeout=60000)
               text=page.locator('body').inner_text()

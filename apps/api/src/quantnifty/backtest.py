@@ -162,7 +162,7 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
         return {"status":"INSUFFICIENT_DATA","strategy":mode,"historical_data":data_status,"metrics":_metrics([],cfg.initial_capital,len(ordered)),"trades":[],"regimes":{},"split":{}}
     trades: list[Trade] = []; blocked = approved = 0; i = 0; previous = None
     while i < len(ordered) - 1:
-        decision = final_decision(ordered[i], previous, mode); previous = ordered[i]; risk = decision.get("risk") or {}
+        decision = final_decision(ordered[i], previous, mode, "BACKTEST"); previous = ordered[i]; risk = decision.get("risk") or {}
         if not risk.get("approved"): blocked += 1; i += 1; continue
         approved += 1; instrument = (decision.get("execution_plan") or {}).get("instrument"); entry_snap = ordered[i + 1]
         leg = _find_leg(entry_snap, instrument)

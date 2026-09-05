@@ -30,60 +30,91 @@ def _decode_cp1252_utf8(text: str) -> bytes | None:
         return None
 
 
+def _candidate_from_text(text: str, newline: str) -> bytes | None:
+    if newline == "lf":
+        text = text.replace("\r\n", "\n")
+    elif newline == "cr":
+        text = text.replace("\r\n", "\r")
+    elif newline == "crlf":
+        text = text.replace("\r\r\n", "\r\n")
+    return _decode_cp1252_utf8(text)
+
+
+def _parquet_footer_start(data: bytes) -> int | None:
+    if len(data) < 12 or data[:4] != b"PAR1" or data[-4:] != b"PAR1":
+        return None
+    footer_len = int.from_bytes(data[-8:-4], "little", signed=False)
+    start = len(data) - 8 - footer_len
+    if start < 4 or start >= len(data) - 8:
+        return None
+    return start
+
+
+def _hybrid_data_candidate(lf_candidate: bytes, cr_candidate: bytes) -> bytes | None:
+    """Use LF reconstruction for footer metadata and CR for binary pages."""
+    if len(lf_candidate) != len(cr_candidate):
+        return None
+    footer_start = _parquet_footer_start(lf_candidate)
+    if footer_start is None or _parquet_footer_start(cr_candidate) != footer_start:
+        return None
+    return cr_candidate[:footer_start] + lf_candidate[footer_start:]
+
+
 def _restore_exported_binary(content: bytes) -> bytes:
     """Restore Parquet bytes from the recorder's text export.
 
-    The export may have passed binary Parquet through a Windows text/UTF-8
-    conversion. That can alter both bytes above 0x7f and newline bytes inside
-    Snappy-compressed pages. Try the observed newline reversals and, when
-    available, let PyArrow select the candidate that is actually readable.
+    The export can make binary CR bytes appear as LF while the Parquet footer
+    can contain genuine LF bytes. Therefore test both reconstructions and then
+    combine CR-based data pages with the LF-based footer when needed.
     """
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         return content
 
-    candidates: list[bytes] = []
-    variants = (
-        text.replace("\r\n", "\n"),
-        text.replace("\r\n", "\r"),
-        text.replace("\r\r\n", "\n"),
-        text.replace("\r\r\n", "\r"),
-    )
-    for variant in variants:
-        candidate = _decode_cp1252_utf8(variant)
-        if candidate is not None and candidate not in candidates and _looks_like_parquet(candidate):
-            candidates.append(candidate)
+    candidates: dict[str, bytes] = {}
+    for newline in ("lf", "cr", "crlf"):
+        candidate = _candidate_from_text(text, newline)
+        if candidate is not None and _looks_like_parquet(candidate):
+            candidates[newline] = candidate
 
     if not candidates:
         return content
-    if len(candidates) == 1:
-        return candidates[0]
 
     try:
-        import pyarrow.parquet as parquet
         import pyarrow as pa
+        import pyarrow.parquet as parquet
 
-        for candidate in candidates:
+        # Prefer a directly readable reconstruction.
+        for newline in ("lf", "cr", "crlf"):
+            candidate = candidates.get(newline)
+            if candidate is None:
+                continue
             try:
                 parquet.read_table(pa.BufferReader(candidate))
                 return candidate
             except Exception:
-                continue
+                pass
+
+        # Known recorder failure mode: LF footer + CR data pages.
+        lf_candidate = candidates.get("lf")
+        cr_candidate = candidates.get("cr")
+        if lf_candidate is not None and cr_candidate is not None:
+            hybrid = _hybrid_data_candidate(lf_candidate, cr_candidate)
+            if hybrid is not None:
+                try:
+                    parquet.read_table(pa.BufferReader(hybrid))
+                    return hybrid
+                except Exception:
+                    pass
     except ImportError:
         pass
-    return candidates[0]
+
+    return candidates.get("lf") or candidates.get("cr") or candidates["crlf"]
 
 
 def _looks_like_parquet(data: bytes) -> bool:
-    if len(data) < 12 or data[:4] != b"PAR1" or data[-4:] != b"PAR1":
-        return False
-    try:
-        footer_len = int.from_bytes(data[-8:-4], "little", signed=False)
-    except Exception:
-        return False
-    footer_start = len(data) - 8 - footer_len
-    return footer_start >= 4 and footer_start < len(data) - 8 and data[footer_start] == 0x15
+    return _parquet_footer_start(data) is not None
 
 
 def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
@@ -109,9 +140,6 @@ def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
         content_start = match.end()
         content_end = matches[index + 1].start() if index + 1 < len(matches) else len(data)
         framed = data[content_start:content_end]
-        # Remove the recorder's framing separator before decoding binary data.
-        # For non-final sections the next FILE header follows immediately after
-        # this marker; for the final section the marker reaches EOF.
         separator = re.search(rb"(?:\r\n){1,3}={10,}\r\n(?:FILE :|$)", framed)
         if separator:
             framed = framed[:separator.start()]

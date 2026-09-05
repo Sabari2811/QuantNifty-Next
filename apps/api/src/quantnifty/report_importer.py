@@ -30,96 +30,13 @@ def _decode_cp1252_utf8(text: str) -> bytes | None:
         return None
 
 
-def _candidate_from_text(text: str, newline: str) -> bytes | None:
-    if newline == "lf":
-        text = text.replace("\r\n", "\n")
-    elif newline == "cr":
-        text = text.replace("\r\n", "\r")
-    elif newline == "crlf":
-        text = text.replace("\r\r\n", "\r\n")
-    return _decode_cp1252_utf8(text)
-
-
-def _repair_snappy_chunks(candidate: bytes) -> bytes:
-    """Repair ambiguous CR/LF bytes inside Snappy column chunks.
-
-    The recorder's text export can make an original binary CR or LF appear as
-    CRLF. The Parquet footer remains readable, so use PyArrow metadata to find
-    each column chunk and try the alternate LF->CR representation only for
-    columns that are not readable as-is. This is deliberately constrained to
-    chunk ranges; footer bytes and framing are never rewritten.
-    """
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as parquet
-    except ImportError:
-        return candidate
-
-    current = bytearray(candidate)
-    try:
-        reader = parquet.ParquetFile(pa.BufferReader(bytes(current)))
-        metadata = reader.metadata
-    except Exception:
-        return candidate
-
-    def column_name(column) -> str | None:
-        value = getattr(column, "path_in_schema", None)
-        if value is None:
-            return None
-        if isinstance(value, bytes):
-            value = value.decode("utf-8", "replace")
-        return str(value).split(".")[-1]
-
-    changed = False
-    for row_group_index in range(metadata.num_row_groups):
-        row_group = metadata.row_group(row_group_index)
-        for column_index in range(row_group.num_columns):
-            column = row_group.column(column_index)
-            name = column_name(column)
-            start = getattr(column, "dictionary_page_offset", None)
-            if start is None:
-                start = column.data_page_offset
-            end = column.data_page_offset + column.total_compressed_size
-            if start is None or end is None or start < 0 or end <= start or end > len(current):
-                continue
-            chunk = bytes(current[start:end])
-            if b"\n" not in chunk:
-                continue
-
-            original_ok = False
-            try:
-                parquet.read_table(pa.BufferReader(bytes(current)), columns=[name] if name else None)
-                original_ok = True
-            except Exception:
-                pass
-            if original_ok:
-                continue
-
-            repaired = chunk.replace(b"\n", b"\r")
-            if repaired == chunk:
-                continue
-            trial = bytearray(current)
-            trial[start:end] = repaired
-            try:
-                parquet.read_table(pa.BufferReader(bytes(trial)), columns=[name] if name else None)
-            except Exception:
-                continue
-            current = trial
-            changed = True
-
-    if not changed:
-        return candidate
-    return bytes(current)
-
-
 def _restore_exported_binary(content: bytes) -> bytes:
     """Restore Parquet bytes from the recorder's text export.
 
-    First reconstruct the recorder's observed CR-based newline expansion. If
-    that candidate is not readable, also try LF normalization. Finally repair
-    individual unreadable Snappy column chunks where the export made LF/CR
-    ambiguous. Validation is performed by PyArrow, not merely by PAR1/footer
-    shape, so a structurally valid but Snappy-corrupt candidate is rejected.
+    The export may have passed binary Parquet through a Windows text/UTF-8
+    conversion. That can alter both bytes above 0x7f and newline bytes inside
+    Snappy-compressed pages. Try the observed newline reversals and, when
+    available, let PyArrow select the candidate that is actually readable.
     """
     try:
         text = content.decode("utf-8")
@@ -127,35 +44,34 @@ def _restore_exported_binary(content: bytes) -> bytes:
         return content
 
     candidates: list[bytes] = []
-    for newline in ("cr", "lf", "crlf"):
-        candidate = _candidate_from_text(text, newline)
+    variants = (
+        text.replace("\r\n", "\n"),
+        text.replace("\r\n", "\r"),
+        text.replace("\r\r\n", "\n"),
+        text.replace("\r\r\n", "\r"),
+    )
+    for variant in variants:
+        candidate = _decode_cp1252_utf8(variant)
         if candidate is not None and candidate not in candidates and _looks_like_parquet(candidate):
             candidates.append(candidate)
 
     if not candidates:
         return content
+    if len(candidates) == 1:
+        return candidates[0]
 
     try:
-        import pyarrow as pa
         import pyarrow.parquet as parquet
+        import pyarrow as pa
 
         for candidate in candidates:
             try:
                 parquet.read_table(pa.BufferReader(candidate))
                 return candidate
             except Exception:
-                repaired = _repair_snappy_chunks(candidate)
-                if repaired != candidate:
-                    try:
-                        parquet.read_table(pa.BufferReader(repaired))
-                        return repaired
-                    except Exception:
-                        pass
+                continue
     except ImportError:
         pass
-
-    # Preserve the recorder's historically observed representation when the
-    # runtime cannot perform semantic Parquet validation.
     return candidates[0]
 
 
@@ -193,6 +109,9 @@ def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
         content_start = match.end()
         content_end = matches[index + 1].start() if index + 1 < len(matches) else len(data)
         framed = data[content_start:content_end]
+        # Remove the recorder's framing separator before decoding binary data.
+        # For non-final sections the next FILE header follows immediately after
+        # this marker; for the final section the marker reaches EOF.
         separator = re.search(rb"(?:\r\n){1,3}={10,}\r\n(?:FILE :|$)", framed)
         if separator:
             framed = framed[:separator.start()]

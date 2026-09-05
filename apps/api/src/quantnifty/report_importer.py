@@ -56,6 +56,14 @@ def _looks_like_parquet(data: bytes) -> bool:
 
 
 def _column_chunk_bounds(metadata) -> list[tuple[str, int, int]]:
+    """Return exact byte ranges occupied by each Parquet column chunk.
+
+    ``total_compressed_size`` is the complete column-chunk size, including a
+    dictionary page when one exists. Therefore the end offset is measured from
+    the chunk start (dictionary_page_offset when present), not from
+    data_page_offset. Using the latter truncates the dictionary page and makes
+    mixed-newline repair impossible for columns such as PE_ID.
+    """
     bounds: list[tuple[str, int, int]] = []
     for row_group_index in range(metadata.num_row_groups):
         row_group = metadata.row_group(row_group_index)
@@ -68,10 +76,13 @@ def _column_chunk_bounds(metadata) -> list[tuple[str, int, int]]:
             start = getattr(column, "dictionary_page_offset", None)
             if start is None:
                 start = column.data_page_offset
-            end = column.data_page_offset + column.total_compressed_size
-            if start is None or end is None or start < 0 or end <= start:
+            total = getattr(column, "total_compressed_size", None)
+            if start is None or total is None or start < 0 or total <= 0:
                 continue
-            bounds.append((name, int(start), int(end)))
+            end = int(start) + int(total)
+            if end <= int(start):
+                continue
+            bounds.append((name, int(start), end))
     return bounds
 
 
@@ -88,12 +99,10 @@ def _repair_mixed_newlines(lf_candidate: bytes, cr_candidate: bytes) -> bytes | 
 
     The recorder export loses whether an original binary 0x0A or 0x0D produced
     a CRLF sequence. A whole-file newline choice is therefore unsafe. The LF
-    candidate supplies the readable footer metadata; the CR candidate supplies
-    the generally valid Snappy page bytes. For each column that still fails,
-    search only its ambiguous bytes and accept the first semantically readable
-    reconstruction. Chunk-local search keeps the ambiguity bounded (the
-    supplied recordings have at most a small number of ambiguous bytes per
-    column chunk) and avoids modifying unrelated footer bytes.
+    candidate supplies readable footer metadata; the CR candidate supplies the
+    generally valid Snappy page bytes. For each column that still fails, search
+    only its own ambiguous bytes and accept the first semantically readable
+    reconstruction.
     """
     try:
         import pyarrow as pa
@@ -111,11 +120,18 @@ def _repair_mixed_newlines(lf_candidate: bytes, cr_candidate: bytes) -> bytes | 
 
     current = bytearray(cr_candidate[:footer_start] + lf_candidate[footer_start:])
     for name, start, end in _column_chunk_bounds(metadata):
-        ambiguous = [offset for offset in range(start, end) if lf_candidate[offset] != cr_candidate[offset]]
+        ambiguous = [
+            offset
+            for offset in range(start, end)
+            if lf_candidate[offset] != cr_candidate[offset]
+        ]
         if not ambiguous or _readable(parquet, pa, bytes(current), name):
             continue
 
         found = None
+        # Prefer the CR reconstruction and progressively substitute only the
+        # bytes that differ from it. This is bounded by the ambiguity inside a
+        # single column chunk rather than the complete Parquet file.
         for count in range(1, len(ambiguous) + 1):
             for indexes in itertools.combinations(range(len(ambiguous)), count):
                 trial = bytearray(current)

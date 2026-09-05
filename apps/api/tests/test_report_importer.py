@@ -8,10 +8,11 @@ from quantnifty.report_importer import extract_recorder_report
 
 
 SEP = b"=" * 70
+FRAME = b"\r\n" + SEP + b"\r\n"
 
 
 def _section(name: str, path: str, payload: bytes) -> bytes:
-    return b"FILE : " + name.encode() + b"\r\nPATH : " + path.encode() + b"\r\n" + SEP + b"\r\n" + payload + b"\r\n"
+    return b"FILE : " + name.encode() + b"\r\nPATH : " + path.encode() + b"\r\n" + SEP + b"\r\n" + payload + b"\r\n" + FRAME
 
 
 def test_report_importer_preserves_parquet_and_json(tmp_path):
@@ -62,7 +63,7 @@ def _transcode_binary_for_export(payload: bytes) -> bytes:
     return "".join(chars).replace("\r", "\r\n").encode("utf-8")
 
 
-def test_report_importer_restores_utf8_transcoded_binary(tmp_path):
+def test_report_importer_restores_utf8_transcoded_binary_and_strips_frame(tmp_path):
     option = tmp_path / "option_chain.parquet"
     pq.write_table(pa.Table.from_pylist([{
         "Strike": 24400, "CE_ID": 1, "CE_LTP": 100.0, "CE_OI": 1000,
@@ -71,7 +72,10 @@ def test_report_importer_restores_utf8_transcoded_binary(tmp_path):
     }]), option)
     report = tmp_path / "data_Review.txt"
     base = r"D:\Projects\NiftySignalEngine\data\snapshots\04-Aug-2026\000001_13-02-21"
-    report.write_bytes(_section("option_chain.parquet", base + r"\option_chain.parquet", _transcode_binary_for_export(option.read_bytes())))
+    report.write_bytes(
+        _section("option_chain.parquet", base + r"\option_chain.parquet", _transcode_binary_for_export(option.read_bytes()))
+        + _section("runtime.json", base + r"\runtime.json", b"{}")
+    )
     extracted = tmp_path / "restored"
-    assert extract_recorder_report(report, extracted) == 1
+    assert extract_recorder_report(report, extracted) == 2
     assert (extracted / "04-Aug-2026" / "000001_13-02-21" / "option_chain.parquet").read_bytes() == option.read_bytes()

@@ -82,16 +82,10 @@ def _recorded_intelligence(analytics: dict[str, Any], rows: list[dict[str, Any]]
         "gamma_flip": gamma_flip.get("gamma_flip"),
         "atm_iv": (avg_call_iv + avg_put_iv) / 2.0 if avg_call_iv or avg_put_iv else 0.0,
         "iv_skew": iv_skew.get("iv_skew"),
-        "expected_move": {
-            "move": _number(expected.get("expected_move")),
-            "lower": expected.get("lower"),
-            "upper": expected.get("upper"),
-        },
+        "expected_move": {"move": _number(expected.get("expected_move")), "lower": expected.get("lower"), "upper": expected.get("upper")},
         "recorded_oi_flow_bias": str(oi_summary.get("market_bias") or "NEUTRAL").upper(),
         "liquidity_score": liquidity_score,
-        "intelligence": {
-            "market_state": {"state": str(dealer.get("market_mode") or "UNKNOWN")},
-        },
+        "intelligence": {"market_state": {"state": str(dealer.get("market_mode") or "UNKNOWN")}},
         "strike_selection": [selection] if selection else [],
         "recorded_analytics": analytics,
         "recorded_liquidity": liquidity,
@@ -145,8 +139,11 @@ def load_recording(root: str | Path) -> list[dict[str, Any]]:
     if not base.exists():
         raise ValueError(f"recording root does not exist: {base}")
     if base.is_file():
-        if base.name.lower() != "data_review.txt":
-            raise ValueError(f"recording path must be a snapshot directory or data_Review.txt: {base}")
+        # Uploads are staged under generated temporary names (for example
+        # quantnifty-report-abc123.txt). The API validates the original client
+        # filename; the importer validates the actual report contents.
+        if base.suffix.lower() != ".txt":
+            raise ValueError(f"recording path must be a snapshot directory or .txt recorder export: {base}")
         with load_report_to_temporary_root(base) as temp:
             return _load_directory(Path(temp))
     return _load_directory(base)

@@ -4,7 +4,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from quantnifty.recording_loader import load_recording
-from quantnifty.report_importer import extract_recorder_report
+from quantnifty.report_importer import (
+    _column_metadata_entries,
+    _parquet_footer_start,
+    _parse_thrift_struct,
+    _serialize_thrift_struct,
+    _set_field,
+    _repair_footer_and_get_chunks,
+    extract_recorder_report,
+)
 
 
 SEP = b"=" * 70
@@ -78,4 +86,29 @@ def test_report_importer_restores_utf8_transcoded_binary_and_strips_frame(tmp_pa
     extracted = tmp_path / "restored"
     assert extract_recorder_report(report, extracted) == 2
     restored = extracted / "04-Aug-2026" / "000001_13-02-21" / "option_chain.parquet"
+    assert pq.read_table(restored).equals(original)
+
+
+def test_footer_offset_recovery_uses_page_structure(tmp_path):
+    option = tmp_path / "option_chain.parquet"
+    original = pa.Table.from_pylist([{
+        "Strike": 24400, "CE_ID": 1, "CE_LTP": 100.0, "CE_OI": 1000,
+        "CE_VOLUME": 5000, "PE_ID": 2, "PE_LTP": 120.0, "PE_OI": 1100,
+        "PE_VOLUME": 5100,
+    }])
+    pq.write_table(original, option)
+    raw = option.read_bytes()
+    footer_start = _parquet_footer_start(raw)
+    assert footer_start is not None
+
+    footer = _parse_thrift_struct(raw[footer_start:-8])
+    first_column = _column_metadata_entries(footer)[0]
+    _set_field(first_column, 11, 0)
+    corrupted_footer = _serialize_thrift_struct(footer)
+    corrupted = raw[:footer_start] + corrupted_footer + len(corrupted_footer).to_bytes(4, "little") + b"PAR1"
+
+    rebuilt, chunks = _repair_footer_and_get_chunks(corrupted, raw)
+    assert chunks
+    restored = tmp_path / "restored.parquet"
+    restored.write_bytes(rebuilt)
     assert pq.read_table(restored).equals(original)

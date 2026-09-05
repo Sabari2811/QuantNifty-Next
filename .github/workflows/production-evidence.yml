@@ -114,10 +114,13 @@ jobs:
               print('BACKTEST_ROUTE_E2E=PASS')
 
               page.goto(base+'intelligence', wait_until='networkidle', timeout=60000)
+              drawer=page.locator('#qnDrawer')
               nav=page.locator('[data-qn-nav="backtest"]')
               assert nav.count()==1
-              assert nav.is_visible()
               assert 'Backtest & Validation' in nav.inner_text()
+              if 'open' not in (drawer.get_attribute('class') or '').split():
+                  page.locator('#qnDrawerToggle').click()
+              assert nav.is_visible()
               nav.click()
               page.wait_for_load_state('networkidle')
               assert page.url.rstrip('/').endswith('/backtest'), page.url

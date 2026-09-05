@@ -65,7 +65,8 @@ def load_snapshot_bundle(directory: str | Path) -> dict[str, Any]:
     greek_by_strike = {_number(row.get("Strike")): row for row in greeks}
     rows: list[dict[str, Any]] = []
     for row in options:
-        strike = _number(row.get("Strike")); greek = greek_by_strike.get(strike, {})
+        strike = _number(row.get("Strike"))
+        greek = greek_by_strike.get(strike, {})
         for side in ("CE", "PE"):
             prefix = side + "_"
             leg = {"strike": strike, "side": side, "security_id": _identifier(row.get(prefix + "ID")), "last_price": _number(row.get(prefix + "LTP")), "oi": _number(row.get(prefix + "OI")), "volume": _number(row.get(prefix + "VOLUME"))}
@@ -93,5 +94,5 @@ def load_recording(root: str | Path) -> list[dict[str, Any]]:
         if base.name.lower() != "data_review.txt":
             raise ValueError(f"recording path must be a snapshot directory or data_Review.txt: {base}")
         with load_report_to_temporary_root(base) as temp:
-            return _load_directory(Path(temp.name))
+            return _load_directory(Path(temp))
     return _load_directory(base)

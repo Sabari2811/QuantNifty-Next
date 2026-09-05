@@ -70,20 +70,31 @@ def select_strikes(
     side_rows = [r for r in rows if r.get("side") == side and _num(r.get("last_price")) > 0]
     if not side_rows:
         return {"eligible": False, "reason": "no_liquid_contracts", "candidates": [], "selected": None}
-    atm = min(side_rows, key=lambda r: abs(_num(r.get("strike")) - spot))
-    itm = sorted((r for r in side_rows if _is_itm(r, spot)), key=lambda r: abs(_num(r.get("strike")) - spot))
-    candidates = [atm] + itm[:3]
+
     if gamma_blast:
-        otm = sorted((r for r in side_rows if _is_otm(r, spot)), key=lambda r: abs(_num(r.get("strike")) - spot))
+        # Gamma Blast is deliberately restricted to qualified OTM contracts.
+        # ATM/ITM contracts remain valid for normal directional signals only.
+        candidates = sorted(
+            (r for r in side_rows if _is_otm(r, spot)),
+            key=lambda r: abs(_num(r.get("strike")) - spot),
+        )
         if expected_move and expected_move > 0:
-            otm = [r for r in otm if abs(_num(r.get("strike")) - spot) <= expected_move]
-        candidates.extend(otm[:2])
+            candidates = [r for r in candidates if abs(_num(r.get("strike")) - spot) <= expected_move]
+        candidates = candidates[:2]
+    else:
+        atm = min(side_rows, key=lambda r: abs(_num(r.get("strike")) - spot))
+        itm = sorted((r for r in side_rows if _is_itm(r, spot)), key=lambda r: abs(_num(r.get("strike")) - spot))
+        candidates = [atm] + itm[:3]
+
     unique: dict[str, dict[str, Any]] = {}
     for row in candidates:
         unique[f"{row.get('side')}:{_num(row.get('strike')):.4f}"] = row
     ranked = []
     for row in unique.values():
-        classification = "ATM" if row is atm else "ITM" if _is_itm(row, spot) else "OTM"
+        classification = "OTM" if gamma_blast else (
+            "ATM" if abs(_num(row.get("strike")) - spot) == min(abs(_num(r.get("strike")) - spot) for r in side_rows)
+            else "ITM"
+        )
         ranked.append({
             "side": row.get("side"), "strike": _num(row.get("strike")), "classification": classification,
             "security_id": row.get("security_id", ""), "trading_symbol": row.get("trading_symbol", ""),
@@ -95,7 +106,7 @@ def select_strikes(
     return {
         "eligible": bool(ranked), "direction": direction,
         "strategy": "GAMMA_BLAST" if gamma_blast else "DIRECTIONAL",
-        "allowed_classifications": ["ATM", "ITM", "OTM"] if gamma_blast else ["ATM", "ITM"],
+        "allowed_classifications": ["OTM"] if gamma_blast else ["ATM", "ITM"],
         "selected": ranked[0] if ranked else None, "candidates": ranked,
-        "reason": "best_risk_adjusted_strike" if ranked else "no_candidate",
+        "reason": "best_qualified_otm_risk_adjusted_strike" if gamma_blast and ranked else "best_risk_adjusted_strike" if ranked else "no_candidate",
     }

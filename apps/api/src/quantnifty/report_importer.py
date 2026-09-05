@@ -23,28 +23,60 @@ def _inverse_cp1252() -> dict[int, int]:
 _CP1252_INVERSE = _inverse_cp1252()
 
 
-def _restore_exported_binary(content: bytes) -> bytes:
-    """Restore Parquet bytes from the recorder's UTF-8/CP1252 text export.
+def _decode_cp1252_utf8(text: str) -> bytes | None:
+    try:
+        return bytes(_CP1252_INVERSE[ord(char)] for char in text)
+    except (KeyError, ValueError):
+        return None
 
-    The affected recorder export converts binary CR (0x0d) characters into
-    CRLF text line endings while also UTF-8 encoding CP1252 characters. For
-    Parquet payloads those CR bytes can be part of Snappy-compressed data, so
-    restoring CRLF to LF corrupts the compressed stream. Reverse the observed
-    transformation with CRLF -> CR. Byte-preserving uploads remain supported
-    when the payload is already valid Parquet.
+
+def _restore_exported_binary(content: bytes) -> bytes:
+    """Restore Parquet bytes from the recorder's text export.
+
+    The export may have passed binary Parquet through a Windows text/UTF-8
+    conversion. That can alter both bytes above 0x7f and newline bytes inside
+    Snappy-compressed pages. Try the observed newline reversals and, when
+    available, let PyArrow select the candidate that is actually readable.
     """
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
         return content
-    restored_text = text.replace("\r\n", "\r")
+
+    candidates: list[bytes] = []
+    # Most likely export variants. Keep the original order deterministic.
+    variants = (
+        text.replace("\r\n", "\n"),
+        text.replace("\r\n", "\r"),
+        text.replace("\r\r\n", "\n"),
+        text.replace("\r\r\n", "\r"),
+    )
+    for variant in variants:
+        candidate = _decode_cp1252_utf8(variant)
+        if candidate is not None and candidate not in candidates and _looks_like_parquet(candidate):
+            candidates.append(candidate)
+
+    if not candidates:
+        return content
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # PyArrow is already a runtime dependency of the recorder loader. Use it
+    # here to distinguish structurally valid Parquet candidates whose Snappy
+    # page bytes differ. If unavailable, retain the first structural candidate.
     try:
-        candidate = bytes(_CP1252_INVERSE[ord(char)] for char in restored_text)
-    except (KeyError, ValueError):
-        return content
-    if not _looks_like_parquet(candidate):
-        return content
-    return candidate
+        import pyarrow.parquet as parquet
+        import pyarrow as pa
+
+        for candidate in candidates:
+            try:
+                parquet.read_table(pa.BufferReader(candidate))
+                return candidate
+            except Exception:
+                continue
+    except ImportError:
+        pass
+    return candidates[0]
 
 
 def _looks_like_parquet(data: bytes) -> bool:
@@ -81,11 +113,11 @@ def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
         content_start = match.end()
         content_end = matches[index + 1].start() if index + 1 < len(matches) else len(data)
         framed = data[content_start:content_end]
-        separator = framed.rfind(b"\r\n======================================================================\r\nFILE :")
-        if separator >= 0:
-            framed = framed[:separator]
-        elif framed.endswith(b"\r\n======================================================================\r\n"):
-            framed = framed[:-len(b"\r\n======================================================================\r\n")]
+        # The recorder places the framing separator after the payload. It may
+        # be preceded by an extra CRLF because Parquet itself ends in PAR1.
+        separator = re.search(rb"(?:\r\n){1,2}={10,}\r\n$", framed)
+        if separator:
+            framed = framed[:separator.start()]
         content = framed.rstrip(b"\r\n") if name.endswith(".parquet") else framed.strip(b"\r\n")
         if name.endswith(".parquet"):
             content = _restore_exported_binary(content)

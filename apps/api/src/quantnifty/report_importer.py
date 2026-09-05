@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -50,23 +51,97 @@ def _parquet_footer_start(data: bytes) -> int | None:
     return start
 
 
-def _hybrid_data_candidate(lf_candidate: bytes, cr_candidate: bytes) -> bytes | None:
-    """Use LF reconstruction for footer metadata and CR for binary pages."""
-    if len(lf_candidate) != len(cr_candidate):
+def _looks_like_parquet(data: bytes) -> bool:
+    return _parquet_footer_start(data) is not None
+
+
+def _column_chunk_bounds(metadata) -> list[tuple[str, int, int]]:
+    bounds: list[tuple[str, int, int]] = []
+    for row_group_index in range(metadata.num_row_groups):
+        row_group = metadata.row_group(row_group_index)
+        for column_index in range(row_group.num_columns):
+            column = row_group.column(column_index)
+            name = getattr(column, "path_in_schema", None)
+            if isinstance(name, bytes):
+                name = name.decode("utf-8", "replace")
+            name = str(name or "").split(".")[-1]
+            start = getattr(column, "dictionary_page_offset", None)
+            if start is None:
+                start = column.data_page_offset
+            end = column.data_page_offset + column.total_compressed_size
+            if start is None or end is None or start < 0 or end <= start:
+                continue
+            bounds.append((name, int(start), int(end)))
+    return bounds
+
+
+def _readable(parquet, pa, candidate: bytes, column: str | None = None) -> bool:
+    try:
+        table = parquet.read_table(pa.BufferReader(candidate), columns=[column] if column else None)
+        return table.num_rows >= 0
+    except Exception:
+        return False
+
+
+def _repair_mixed_newlines(lf_candidate: bytes, cr_candidate: bytes) -> bytes | None:
+    """Repair ambiguous CR/LF bytes independently inside each column chunk.
+
+    The recorder export loses whether an original binary 0x0A or 0x0D produced
+    a CRLF sequence. A whole-file newline choice is therefore unsafe. The LF
+    candidate supplies the readable footer metadata; the CR candidate supplies
+    the generally valid Snappy page bytes. For each column that still fails,
+    search only its ambiguous bytes and accept the first semantically readable
+    reconstruction. Chunk-local search keeps the ambiguity bounded (the
+    supplied recordings have at most a small number of ambiguous bytes per
+    column chunk) and avoids modifying unrelated footer bytes.
+    """
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as parquet
+    except ImportError:
         return None
+
     footer_start = _parquet_footer_start(lf_candidate)
     if footer_start is None or _parquet_footer_start(cr_candidate) != footer_start:
         return None
-    return cr_candidate[:footer_start] + lf_candidate[footer_start:]
+    try:
+        metadata = parquet.ParquetFile(pa.BufferReader(lf_candidate)).metadata
+    except Exception:
+        return None
+
+    current = bytearray(cr_candidate[:footer_start] + lf_candidate[footer_start:])
+    for name, start, end in _column_chunk_bounds(metadata):
+        ambiguous = [offset for offset in range(start, end) if lf_candidate[offset] != cr_candidate[offset]]
+        if not ambiguous or _readable(parquet, pa, bytes(current), name):
+            continue
+
+        found = None
+        for count in range(1, len(ambiguous) + 1):
+            for indexes in itertools.combinations(range(len(ambiguous)), count):
+                trial = bytearray(current)
+                for index in indexes:
+                    offset = ambiguous[index]
+                    trial[offset] = lf_candidate[offset]
+                if _readable(parquet, pa, bytes(trial), name):
+                    found = trial
+                    break
+            if found is not None:
+                break
+        if found is None:
+            raise ValueError(
+                f"unable to reconstruct Parquet column chunk {name} "
+                f"({len(ambiguous)} ambiguous newline bytes)"
+            )
+        current = found
+
+    result = bytes(current)
+    if _readable(parquet, pa, result):
+        return result
+    return None
 
 
 def _restore_exported_binary(content: bytes) -> bytes:
-    """Restore Parquet bytes from the recorder's text export.
-
-    The export can make binary CR bytes appear as LF while the Parquet footer
-    can contain genuine LF bytes. Therefore test both reconstructions and then
-    combine CR-based data pages with the LF-based footer when needed.
-    """
+    """Restore Parquet bytes from a recorder text export."""
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
@@ -84,45 +159,24 @@ def _restore_exported_binary(content: bytes) -> bytes:
     try:
         import pyarrow as pa
         import pyarrow.parquet as parquet
-
-        # Prefer a directly readable reconstruction.
         for newline in ("lf", "cr", "crlf"):
             candidate = candidates.get(newline)
-            if candidate is None:
-                continue
-            try:
-                parquet.read_table(pa.BufferReader(candidate))
+            if candidate is not None and _readable(parquet, pa, candidate):
                 return candidate
-            except Exception:
-                pass
 
-        # Known recorder failure mode: LF footer + CR data pages.
         lf_candidate = candidates.get("lf")
         cr_candidate = candidates.get("cr")
         if lf_candidate is not None and cr_candidate is not None:
-            hybrid = _hybrid_data_candidate(lf_candidate, cr_candidate)
-            if hybrid is not None:
-                try:
-                    parquet.read_table(pa.BufferReader(hybrid))
-                    return hybrid
-                except Exception:
-                    pass
+            repaired = _repair_mixed_newlines(lf_candidate, cr_candidate)
+            if repaired is not None:
+                return repaired
     except ImportError:
         pass
 
-    return candidates.get("lf") or candidates.get("cr") or candidates["crlf"]
-
-
-def _looks_like_parquet(data: bytes) -> bool:
-    return _parquet_footer_start(data) is not None
+    return candidates.get("cr") or candidates.get("lf") or candidates["crlf"]
 
 
 def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
-    """Extract recorder snapshot files from the textual data_Review export.
-
-    The export is a concatenation of file headers and file bytes. Snapshot
-    runtime JSON and Parquet files are materialized; unrelated files are ignored.
-    """
     source = Path(report)
     target = Path(destination)
     data = source.read_bytes()
@@ -154,7 +208,6 @@ def extract_recorder_report(report: str | Path, destination: str | Path) -> int:
 
 
 def load_report_to_temporary_root(report: str | Path):
-    """Return a TemporaryDirectory containing an extracted recorder tree."""
     temp = TemporaryDirectory(prefix="quantnifty-recording-")
     try:
         written = extract_recorder_report(report, temp.name)

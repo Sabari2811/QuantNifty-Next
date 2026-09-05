@@ -38,41 +38,66 @@ jobs:
       - name: Authenticated live-market and historical replay evidence
         run: |
           python - <<'PY'
-          import json, time
+          import time
           from datetime import datetime, timezone, timedelta
           import requests
           base='https://quantnifty-api.onrender.com'
-          health=requests.get(base+'/health',timeout=30); health.raise_for_status()
-          h=health.json()
-          assert h['status']=='ok'
-          assert h['provider']=='INDstocks'
-          assert h['provider_configured'] is True
 
-          market=requests.get(base+'/api/v1/market',timeout=45); market.raise_for_status()
-          m=market.json()
-          assert m['data_integrity']=='LIVE_PROVIDER', m
-          assert float(m['spot'])>0
-          assert len(m['option_chain'])>=2
-          assert m['rows']==len(m['option_chain'])
+          def get_json(path, *, params=None, timeout=45, attempts=6):
+              last = None
+              for attempt in range(1, attempts + 1):
+                  try:
+                      response = requests.get(base + path, params=params, timeout=timeout)
+                      if response.ok:
+                          return response.json()
+                      last = f'{response.status_code}: {response.text[:300]}'
+                  except Exception as exc:
+                      last = repr(exc)
+                  print(f'retry {attempt}/{attempts} for {path}: {last}')
+                  time.sleep(min(10, attempt * 2))
+              raise SystemExit(f'{path} did not become available: {last}')
+
+          health=get_json('/health', timeout=30)
+          assert health['status']=='ok'
+          assert health['provider']=='INDstocks'
+          assert health['provider_configured'] is True
+
+          market=get_json('/api/v1/market', timeout=45, attempts=8)
+          assert market['data_integrity']=='LIVE_PROVIDER', market
+          assert float(market['spot'])>0
+          assert len(market['option_chain'])>=2
+          assert market['rows']==len(market['option_chain'])
           print('LIVE_MARKET_EVIDENCE=PASS')
-          print('spot=',m['spot'],'rows=',m['rows'],'expiry=',m.get('expiry'))
+          print('spot=',market['spot'],'rows=',market['rows'],'expiry=',market.get('expiry'))
 
           end=int(datetime.now(timezone.utc).timestamp()*1000)
           start=int((datetime.now(timezone.utc)-timedelta(days=3)).timestamp()*1000)
-          hist=requests.get(base+'/api/v1/historical',params={'interval':'5minute','start_time':start,'end_time':end,'scrip_codes':'NSE_40000001'},timeout=45)
-          hist.raise_for_status(); hp=hist.json()
-          provider=hp['data']
+          hist=get_json('/api/v1/historical',params={'interval':'5minute','start_time':start,'end_time':end,'scrip_codes':'NSE_40000001'},timeout=45,attempts=8)
+          provider=hist['data']
           raw=provider.get('data') or {}
           series=raw.get('NSE_40000001') or {}
           candles=series.get('candles') or []
           assert len(candles)>=2, 'provider returned fewer than 2 candles'
-          replay=requests.post(base+'/api/v1/replay',json={'data':raw},timeout=45)
-          replay.raise_for_status(); rp=replay.json()
-          assert rp['mode']=='READ_ONLY_REPLAY'
-          assert rp['summary']['count']==len(candles)
-          assert rp['summary']['count']>=2
+          replay=None
+          last=None
+          for attempt in range(1, 7):
+              try:
+                  response=requests.post(base+'/api/v1/replay',json={'data':raw},timeout=45)
+                  if response.ok:
+                      replay=response.json()
+                      break
+                  last=f'{response.status_code}: {response.text[:300]}'
+              except Exception as exc:
+                  last=repr(exc)
+              print(f'replay retry {attempt}/6: {last}')
+              time.sleep(min(10, attempt * 2))
+          if replay is None:
+              raise SystemExit(f'/api/v1/replay did not become available: {last}')
+          assert replay['mode']=='READ_ONLY_REPLAY'
+          assert replay['summary']['count']==len(candles)
+          assert replay['summary']['count']>=2
           print('PRODUCTION_REPLAY_EVIDENCE=PASS')
-          print('candles=',len(candles),'replay_points=',len(rp['points']))
+          print('candles=',len(candles),'replay_points=',len(replay['points']))
           PY
       - name: Browser E2E against production
         run: |

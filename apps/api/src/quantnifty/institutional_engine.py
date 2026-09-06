@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from quantnifty.research_brain import adaptive_exit_state, strategy_selector
+from quantnifty.session_policy import session_decision_policy
 
 
 def _f(v: Any) -> float:
@@ -116,6 +117,7 @@ def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str,
     spot = _f(data.get("spot")); em = _f((data.get("expected_move") or {}).get("move")); stop = max(em * .35, spot * .002) if em else spot * .002
     entry = "WAIT_FOR_TRIGGER" if approved else None; entry_mode = "STANDARD_CONFIRMATION"
     if selected_strategy == "early_accumulation": entry = "EARLY_ACCUMULATION_CONFIRMATION"; entry_mode = "ACCUMULATION_THEN_BREAKOUT_CONFIRMATION"
+    if selected_strategy == "cas_reentry": entry = "CAS_CONFIRMED_REENTRY"; entry_mode = "CAS_REENTRY_CONFIRMATION"
     exit_policy = {"mode": "ADAPTIVE_EXHAUSTION_TRAIL", "initial_stop_pct": .5 if selected_strategy == "early_accumulation" else 1.25, "target_rr": 2.0, "profit_action": "TRAIL_ON_EXHAUSTION", "exit_signals": ["volume_decay", "gamma_reversal", "pressure_failure"]}
     return {"status": "APPROVED_READ_ONLY" if approved else "BLOCKED", "execution_enabled": False, "direction": direction, "instrument": chosen, "entry": entry, "entry_mode": entry_mode, "stop_points": round(stop, 2) if approved else None, "target_points": round(stop * 2, 2) if approved else None, "risk_reward": 2.0 if approved else None, "exit_policy": exit_policy, "order_action": "DISABLED", "note": "Plan only. No broker order can be submitted by this engine."}
 
@@ -123,10 +125,23 @@ def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str,
 def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None, strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
     requested = str(strategy or "directional").strip().lower()
     if requested not in {"directional", "gamma_blast", "adaptive"}: raise ValueError("strategy must be directional, gamma_blast, or adaptive")
+    session = session_decision_policy(data)
     signal = institutional_signal(data, previous)
-    if requested == "adaptive": signal = _adaptive_signal(data, previous, signal)
-    risk = risk_engine(data, signal, requested, mode); plan = execution_plan(data, signal, risk)
-    return {"signal": signal, "risk": risk, "execution_plan": plan, "strategy": requested, "status": "TRADE_CANDIDATE" if risk["approved"] else "NO_TRADE", "authoritative": "FINAL_DECISION", "trading": "DISABLED", "mode": mode.upper()}
+    if requested == "adaptive":
+        if session["phase"] == "CAS_REENTRY":
+            cas = session["cas"]
+            signal = dict(signal)
+            signal["direction"] = cas["direction"] if cas["valid"] else "NEUTRAL"
+            signal["confidence"] = max(_f(signal.get("confidence")), cas["confidence"]) if cas["valid"] else _f(signal.get("confidence"))
+            signal["adaptive"] = {"regime": "CAS_REENTRY", "selected_strategy": "cas_reentry" if cas["valid"] else "standby", "preferred_direction": cas["direction"], "readiness_pct": cas["confidence"], "reason": session["reason"], "risk_profile": "CAS_CONTROLLED", "learning": {"cas_source": cas.get("source")}}
+        elif session["phase"] == "NORMAL_ADAPTIVE":
+            signal = _adaptive_signal(data, previous, signal)
+        else:
+            signal = dict(signal); signal["direction"] = "NEUTRAL"; signal["adaptive"] = {"regime": session["phase"], "selected_strategy": "standby", "preferred_direction": "NEUTRAL", "readiness_pct": 0.0, "reason": session["reason"], "risk_profile": "CLOSED"}
+    risk = risk_engine(data, signal, requested, mode)
+    risk["session"] = session
+    plan = execution_plan(data, signal, risk)
+    return {"signal": signal, "risk": risk, "execution_plan": plan, "strategy": requested, "status": "TRADE_CANDIDATE" if risk["approved"] else "NO_TRADE", "authoritative": "FINAL_DECISION", "trading": "DISABLED", "mode": mode.upper(), "session": session}
 
 
 def replay_signal_stack(snapshots: list[dict[str, Any]], mode: str = "REPLAY", strategy: str = "directional") -> dict[str, Any]:

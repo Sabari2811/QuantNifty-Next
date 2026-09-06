@@ -3,8 +3,8 @@ from pathlib import Path
 def test_decision_endpoint_exposes_read_only_risk_gate():
     h=Path('apps/api/src/quantnifty/main.py').read_text()
     assert '@app.get("/api/v1/decision")' in h
-    # FinalDecision is authoritative: the endpoint returns its nested risk and execution plan.
+    # The endpoint delegates to the canonical FinalDecision object, which owns risk and execution plan.
+    assert 'from quantnifty.institutional_engine import final_decision' in h
     assert '"decision":result' in h
-    assert 'execution_plan' in h
-    assert 'DISABLED' in h
-    assert 'gamma_blast' in h
+    assert '"mode":"READ_ONLY"' in h
+    assert '"strategy":"gamma_blast"' in h

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from quantnifty.decision_validation import validate_decision, validate_snapshot
 from quantnifty.research_brain import adaptive_exit_state, strategy_selector
 from quantnifty.session_policy import session_decision_policy
 
@@ -97,7 +98,7 @@ def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, sign
 
 
 def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
-    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; replay = mode.upper() in {"BACKTEST", "REPLAY"}; gates = {"direction": signal.get("direction") in {"BULLISH", "BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK", "COMPRESSION"}, "data_integrity": data.get("data_integrity") == "LIVE_PROVIDER" or (replay and data.get("data_integrity") == "RECORDED_HISTORICAL")}
+    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; replay = mode.upper() in {"BACKTEST", "REPLAY"}; input_validation = validate_snapshot(data, mode); gates = {"direction": signal.get("direction") in {"BULLISH", "BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK", "COMPRESSION"}, "data_integrity": input_validation["valid"]}
     selected = None
     if strategy == "gamma_blast": gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE"; gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
     elif strategy == "adaptive":
@@ -106,6 +107,7 @@ def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "d
         elif selected == "transition": gates["gamma_transition"] = ((signal.get("adaptive") or {}).get("regime") == "GAMMA_TRANSITION")
         elif selected == "early_accumulation": gates["accumulation_entry"] = signal.get("direction") in {"BULLISH", "BEARISH"} and _f(signal.get("confidence")) >= 60 and _f(data.get("liquidity_score")) >= 60
         elif selected in {"range", "breakout_watch", "standby"}: gates["strategy_entry"] = False
+        elif selected == "cas_reentry": gates["cas_reentry"] = True
     reasons = [k for k, ok in gates.items() if not ok]
     return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast", "early_accumulation"} else 1.0}
 
@@ -125,23 +127,28 @@ def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str,
 def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None, strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
     requested = str(strategy or "directional").strip().lower()
     if requested not in {"directional", "gamma_blast", "adaptive"}: raise ValueError("strategy must be directional, gamma_blast, or adaptive")
+    input_validation = validate_snapshot(data, mode)
     session = session_decision_policy(data)
     signal = institutional_signal(data, previous)
     if requested == "adaptive":
         if session["phase"] == "CAS_REENTRY":
-            cas = session["cas"]
-            signal = dict(signal)
-            signal["direction"] = cas["direction"] if cas["valid"] else "NEUTRAL"
-            signal["confidence"] = max(_f(signal.get("confidence")), cas["confidence"]) if cas["valid"] else _f(signal.get("confidence"))
-            signal["adaptive"] = {"regime": "CAS_REENTRY", "selected_strategy": "cas_reentry" if cas["valid"] else "standby", "preferred_direction": cas["direction"], "readiness_pct": cas["confidence"], "reason": session["reason"], "risk_profile": "CAS_CONTROLLED", "learning": {"cas_source": cas.get("source")}}
+            cas = session["cas"]; signal = dict(signal); signal["direction"] = cas["direction"] if cas["valid"] else "NEUTRAL"; signal["confidence"] = max(_f(signal.get("confidence")), cas["confidence"]) if cas["valid"] else _f(signal.get("confidence")); signal["adaptive"] = {"regime": "CAS_REENTRY", "selected_strategy": "cas_reentry" if cas["valid"] else "standby", "preferred_direction": cas["direction"], "readiness_pct": cas["confidence"], "reason": session["reason"], "risk_profile": "CAS_CONTROLLED", "learning": {"cas_source": cas.get("source")}}
         elif session["phase"] == "NORMAL_ADAPTIVE":
             signal = _adaptive_signal(data, previous, signal)
         else:
             signal = dict(signal); signal["direction"] = "NEUTRAL"; signal["adaptive"] = {"regime": session["phase"], "selected_strategy": "standby", "preferred_direction": "NEUTRAL", "readiness_pct": 0.0, "reason": session["reason"], "risk_profile": "CLOSED"}
-    risk = risk_engine(data, signal, requested, mode)
-    risk["session"] = session
+    risk = risk_engine(data, signal, requested, mode); risk["session"] = session
     plan = execution_plan(data, signal, risk)
-    return {"signal": signal, "risk": risk, "execution_plan": plan, "strategy": requested, "status": "TRADE_CANDIDATE" if risk["approved"] else "NO_TRADE", "authoritative": "FINAL_DECISION", "trading": "DISABLED", "mode": mode.upper(), "session": session}
+    result = {"signal": signal, "risk": risk, "execution_plan": plan, "strategy": requested, "status": "TRADE_CANDIDATE" if risk["approved"] else "NO_TRADE", "authoritative": "FINAL_DECISION", "trading": "DISABLED", "mode": mode.upper(), "session": session}
+    validation = validate_decision(data, result, mode)
+    if not input_validation["valid"] and risk["approved"]:
+        raise RuntimeError("decision validation failed closed: invalid input was approved")
+    result["validation"] = validation
+    if not validation["valid"]:
+        result["status"] = "NO_TRADE"
+        result["risk"] = dict(risk, approved=False, reasons=list(dict.fromkeys([*risk.get("reasons", []), "decision_validation"])))
+        result["execution_plan"] = execution_plan(data, result["signal"], result["risk"])
+    return result
 
 
 def replay_signal_stack(snapshots: list[dict[str, Any]], mode: str = "REPLAY", strategy: str = "directional") -> dict[str, Any]:
@@ -149,4 +156,5 @@ def replay_signal_stack(snapshots: list[dict[str, Any]], mode: str = "REPLAY", s
     for snap in snapshots:
         result = final_decision(snap, previous, strategy, mode); results.append({"timestamp": snap.get("timestamp"), "spot": snap.get("spot"), "decision": result}); previous = snap
     candidates = sum(r["decision"]["status"] == "TRADE_CANDIDATE" for r in results)
-    return {"count": len(results), "trade_candidates": candidates, "no_trade": len(results) - candidates, "results": results, "signal_neutral": False, "orders_placed": 0, "strategy": strategy}
+    valid = sum(bool(r["decision"].get("validation", {}).get("valid")) for r in results)
+    return {"count": len(results), "trade_candidates": candidates, "no_trade": len(results) - candidates, "valid_decisions": valid, "invalid_decisions": len(results) - valid, "results": results, "signal_neutral": False, "orders_placed": 0, "strategy": strategy}

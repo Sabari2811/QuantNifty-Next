@@ -28,10 +28,12 @@ jobs:
           visible_required = [
               'Backtest & Validation',
               'READ ONLY',
+              'Adaptive Brain',
           ]
           source_required = [
               'Risk Gate · all decisions',
               'Execution Gate · entry loop',
+              'Adaptive Brain',
               'execution_gate',
               'risk_gate',
           ]
@@ -49,8 +51,8 @@ jobs:
                       missing_source = [label for label in source_required if label not in last]
                       if not missing_visible and not missing_source:
                           print('BACKTEST_GATE_UI_EVIDENCE=PASS')
-                          print('visible_static_evidence=Backtest & Validation, READ ONLY')
-                          print('deployed_source_evidence=Risk Gate · all decisions, Execution Gate · entry loop, execution_gate, risk_gate')
+                          print('visible_static_evidence=Backtest & Validation, READ ONLY, Adaptive Brain')
+                          print('deployed_source_evidence=Risk Gate · all decisions, Execution Gate · entry loop, Adaptive Brain, execution_gate, risk_gate')
                           browser.close()
                           raise SystemExit(0)
                       print(f'attempt {attempt}/12: missing_visible={missing_visible}, missing_source={missing_source}')

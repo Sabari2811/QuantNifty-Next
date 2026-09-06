@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from typing import Any
 
 
@@ -43,7 +42,7 @@ def _oi_pressure(snapshot: dict[str, Any]) -> tuple[float, float]:
 
 
 def pre_move_state(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Detect compression -> pressure -> trigger transitions without future data."""
+    """Detect compression -> accumulation/pressure -> trigger using only t and t-1."""
     previous = previous or {}
     spot = _spot(snapshot); prev_spot = _spot(previous)
     em = _f((snapshot.get("expected_move") or {}).get("move")); prev_em = _f((previous.get("expected_move") or {}).get("move"))
@@ -65,9 +64,93 @@ def pre_move_state(snapshot: dict[str, Any], previous: dict[str, Any] | None = N
     return {"stage": stage, "readiness_pct": round(min(100.0, readiness), 1), "pressure_bias": pressure_bias, "compression": compression, "pressure": pressure, "trigger": trigger, "gamma_shift": gamma_shift, "volume_change_pct": round(volume_change, 2), "expected_move_change_pct": round(em_change, 2), "iv_change_pct": round(iv_change, 2), "spot_move_pct": round(move_pct, 4), "bull_pressure": round(bull_oi, 2), "bear_pressure": round(bear_oi, 2)}
 
 
+def _near_atm_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    spot = _spot(snapshot)
+    if spot <= 0:
+        return []
+    rows = []
+    for row in snapshot.get("option_chain") or []:
+        if not isinstance(row, dict):
+            continue
+        strike = _f(row.get("strike"))
+        if strike <= 0 or abs(strike - spot) / spot > 0.02:
+            continue
+        side = str(row.get("side") or row.get("option_type") or "").upper()
+        if side in {"CE", "PE"}:
+            rows.append(row)
+    return rows
+
+
+def accumulation_detector(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Find early option accumulation before a large spot move, without future prices.
+
+    The detector deliberately avoids calling an option 'cheap' from absolute premium.
+    Cheap means relatively inexpensive versus the current expected move while OI/volume
+    are building and IV is not already in an expansion spike.
+    """
+    previous = previous or {}
+    spot = _spot(snapshot); prev_spot = _spot(previous)
+    em = _f((snapshot.get("expected_move") or {}).get("move"))
+    iv = _f(snapshot.get("atm_iv")); piv = _f(previous.get("atm_iv"))
+    rows = _near_atm_rows(snapshot)
+    best: dict[str, Any] | None = None
+    candidates = []
+    for row in rows:
+        side = str(row.get("side") or row.get("option_type") or "").upper()
+        price = _f(row.get("last_price")); prev_price = _f(row.get("previous_close"))
+        oi = _f(row.get("oi")); prev_oi = _f(row.get("previous_oi")); volume = _f(row.get("volume"))
+        doi_pct = _pct(oi, prev_oi) if prev_oi else 0.0
+        dpct = _pct(price, prev_price) if prev_price else 0.0
+        premium_ratio = price / em if em > 0 else 999.0
+        # Accumulation proxy: OI expands while premium is stable/rising, volume is active,
+        # spot has not yet escaped, and IV is not already excessively expanded.
+        oi_build = doi_pct >= 2.0
+        price_held = dpct >= -1.5
+        active = volume > 0
+        cheap = 0.0 < premium_ratio <= 0.20 if price > 0 and em > 0 else False
+        spot_quiet = abs(_pct(spot, prev_spot)) <= 0.35 if prev_spot else True
+        iv_ok = True if not piv else _pct(iv, piv) <= 5.0
+        score = (25 if oi_build else 0) + (20 if price_held else 0) + (15 if active else 0) + (20 if cheap else 0) + (10 if spot_quiet else 0) + (10 if iv_ok else 0)
+        candidate = {"side": side, "strike": _f(row.get("strike")), "premium": price, "premium_to_expected_move": round(premium_ratio, 4), "oi_change_pct": round(doi_pct, 2), "premium_change_pct": round(dpct, 2), "volume": volume, "score": round(score, 1)}
+        candidates.append(candidate)
+        if best is None or score > best["score"]:
+            best = candidate
+    if best and best["score"] >= 70:
+        direction = "BULLISH" if best["side"] == "CE" else "BEARISH"
+        state = "EARLY_ACCUMULATION"
+    elif best and best["score"] >= 50:
+        direction = "BULLISH" if best["side"] == "CE" else "BEARISH"
+        state = "WATCH_ACCUMULATION"
+    else:
+        direction = "NEUTRAL"; state = "NO_CLEAR_ACCUMULATION"
+    return {"state": state, "direction": direction, "score": round(best["score"], 1) if best else 0.0, "candidate": best, "candidates": candidates, "spot_change_pct": round(_pct(spot, prev_spot), 4) if prev_spot else 0.0, "iv_change_pct": round(_pct(iv, piv), 2) if piv else 0.0, "method": "near_atm_OI+premium+volume+IV+expected_move"}
+
+
+def adaptive_exit_state(snapshot: dict[str, Any], previous: dict[str, Any] | None, direction: str, entry_spot: float) -> dict[str, Any]:
+    """Research-only exit intelligence: protect gains and detect exhaustion without hindsight."""
+    previous = previous or {}; spot = _spot(snapshot); entry = _f(entry_spot)
+    if spot <= 0 or entry <= 0 or direction not in {"BULLISH", "BEARISH"}:
+        return {"action": "HOLD", "reason": "insufficient_exit_context", "move_pct": 0.0, "trailing_stop_pct": 0.0}
+    move = (spot - entry) / entry * 100.0 if direction == "BULLISH" else (entry - spot) / entry * 100.0
+    pre = pre_move_state(snapshot, previous); vol = _volume(snapshot); pvol = _volume(previous); volume_change = _pct(vol, pvol) if pvol else 0.0
+    gamma = _f(snapshot.get("gex")); pgamma = _f(previous.get("gex")); gamma_reversal = pgamma != 0 and ((gamma > 0) != (pgamma > 0))
+    pressure = pre["pressure_bias"]
+    aligned = pressure == direction
+    exhaustion = move >= 0.8 and volume_change <= -20 and not aligned
+    hard_exit = move <= -0.5
+    take_profit = move >= 1.8 and (exhaustion or gamma_reversal)
+    trailing = max(0.35, min(1.0, move * 0.45)) if move > 0 else 0.35
+    if hard_exit: action, reason = "EXIT", "protect_capital"
+    elif take_profit: action, reason = "EXIT", "profit_exhaustion_or_gamma_reversal"
+    elif move >= 0.8 and (exhaustion or gamma_reversal): action, reason = "TRAIL", "lock_profit_before_exhaustion"
+    else: action, reason = "HOLD", "trend_or_accumulation_still_supported"
+    return {"action": action, "reason": reason, "move_pct": round(move, 3), "volume_change_pct": round(volume_change, 2), "gamma_reversal": gamma_reversal, "pressure_bias": pressure, "trailing_stop_pct": round(trailing, 3)}
+
+
 def market_regime(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    previous = previous or {}; bias = str(snapshot.get("bias") or "NEUTRAL").upper(); liquidity = _f(snapshot.get("liquidity_score")); gex = _f(snapshot.get("gex")); flip = snapshot.get("gamma_flip"); spot = _spot(snapshot); prev_spot = _spot(previous); em = _f((snapshot.get("expected_move") or {}).get("move")); pre = pre_move_state(snapshot, previous); signed_spot_move = _pct(spot, prev_spot) if prev_spot else 0.0
+    previous = previous or {}; bias = str(snapshot.get("bias") or "NEUTRAL").upper(); liquidity = _f(snapshot.get("liquidity_score")); gex = _f(snapshot.get("gex")); flip = snapshot.get("gamma_flip"); spot = _spot(snapshot); prev_spot = _spot(previous); em = _f((snapshot.get("expected_move") or {}).get("move")); pre = pre_move_state(snapshot, previous); accumulation = accumulation_detector(snapshot, previous); signed_spot_move = _pct(spot, prev_spot) if prev_spot else 0.0
     if liquidity < 35: regime = "LIQUIDITY_RISK"
+    elif accumulation["state"] == "EARLY_ACCUMULATION": regime = "EARLY_ACCUMULATION"
     elif pre["trigger"] and pre["pressure_bias"] == "BULLISH" and bias != "BEARISH" and signed_spot_move >= 0: regime = "BREAKOUT_UP"
     elif pre["trigger"] and (pre["pressure_bias"] == "BEARISH" or bias == "BEARISH") and signed_spot_move <= 0: regime = "BREAKDOWN_DOWN"
     elif flip is not None and abs(spot - _f(flip)) <= max(25.0, em * 0.10): regime = "GAMMA_TRANSITION"
@@ -77,85 +160,58 @@ def market_regime(snapshot: dict[str, Any], previous: dict[str, Any] | None = No
     elif bias == "BEARISH": regime = "TREND_DOWN"
     elif pre["compression"]: regime = "COMPRESSION"
     else: regime = "TRANSITION"
-    return {"regime": regime, "bias": bias, "pre_move": pre, "liquidity": round(liquidity, 1)}
+    return {"regime": regime, "bias": bias, "pre_move": pre, "accumulation": accumulation, "liquidity": round(liquidity, 1)}
 
 
 def _base_strategy_selection(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
     regime = market_regime(snapshot, previous); r = regime["regime"]
-    if r in {"BREAKOUT_UP", "TREND_UP"}: selected, direction = "directional", "BULLISH"
+    if r == "EARLY_ACCUMULATION": selected, direction = "early_accumulation", regime["accumulation"]["direction"]
+    elif r in {"BREAKOUT_UP", "TREND_UP"}: selected, direction = "directional", "BULLISH"
     elif r in {"BREAKDOWN_DOWN", "TREND_DOWN"}: selected, direction = "directional", "BEARISH"
     elif r == "NEGATIVE_GAMMA_EXPANSION": selected, direction = "gamma_blast", regime["pre_move"]["pressure_bias"]
     elif r == "GAMMA_TRANSITION": selected, direction = "transition", regime["pre_move"]["pressure_bias"]
     elif r == "POSITIVE_GAMMA_RANGE": selected, direction = "range", "NEUTRAL"
     elif r == "COMPRESSION": selected, direction = "breakout_watch", regime["pre_move"]["pressure_bias"]
     else: selected, direction = "standby", "NEUTRAL"
-    return {"regime": r, "selected_strategy": selected, "preferred_direction": direction, "confidence": regime["pre_move"]["readiness_pct"], "reason": f"regime={r}; stage={regime['pre_move']['stage']}"}
+    return {"regime": r, "selected_strategy": selected, "preferred_direction": direction, "confidence": regime["pre_move"]["readiness_pct"] if r != "EARLY_ACCUMULATION" else regime["accumulation"]["score"], "reason": f"regime={r}; stage={regime['pre_move']['stage']}"}
 
 
 def adaptive_day_policy(snapshot: dict[str, Any], previous: dict[str, Any] | None = None, memory: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Choose today's policy using only information available before today's trade.
-
-    Memory must contain outcomes from completed prior days. The policy uses a
-    conservative Bayesian/UCB-like score: unseen strategies do not outrank a
-    proven strategy until they have enough historical evidence. This makes the
-    brain adaptive without allowing future-day leakage.
-    """
-    base = _base_strategy_selection(snapshot, previous); memory = memory or {}
-    regime = base["regime"]; strategies = ["directional", "gamma_blast", "transition"]
-    by_regime = memory.get("by_regime") or {}; stats = by_regime.get(regime) or {}
-    global_stats = memory.get("global") or {}
+    """Choose today's policy from current evidence plus completed prior-day outcomes only."""
+    base = _base_strategy_selection(snapshot, previous); memory = memory or {}; regime = base["regime"]
+    strategies = ["directional", "gamma_blast", "transition", "early_accumulation"]
+    by_regime = memory.get("by_regime") or {}; stats = by_regime.get(regime) or {}; global_stats = memory.get("global") or {}
     candidates = []
     for strategy in strategies:
         s = stats.get(strategy) or {}; n = int(s.get("trades", 0)); wins = int(s.get("wins", 0)); pnl = _f(s.get("net_pnl")); g = global_stats.get(strategy) or {}; gn = int(g.get("trades", 0)); gp = _f(g.get("net_pnl"))
-        # Neutral prior: 50% win probability and zero P&L. Shrink heavily when sample is small.
-        win_rate = (wins + 1.0) / (n + 2.0)
-        avg_pnl = pnl / n if n else 0.0
-        global_avg = gp / gn if gn else 0.0
-        evidence = min(1.0, n / 5.0)
+        win_rate = (wins + 1.0) / (n + 2.0); avg_pnl = pnl / n if n else 0.0; global_avg = gp / gn if gn else 0.0; evidence = min(1.0, n / 5.0)
         score = 0.55 * win_rate + 0.45 * (0.5 + max(-0.5, min(0.5, (avg_pnl + global_avg) / 400.0)))
         score = score * (0.35 + 0.65 * evidence) + 0.5 * (0.65 - 0.65 * evidence)
         candidates.append((score, strategy, n, win_rate, avg_pnl))
-    # Regime-native strategy is the anchor. Historical learning may move it only
-    # when the alternative has enough evidence and a materially better score.
-    anchor = base["selected_strategy"] if base["selected_strategy"] in strategies else "directional"
-    ranked = sorted(candidates, reverse=True)
-    chosen = anchor; reason = "regime anchor; insufficient prior evidence to override"
-    anchor_row = next(c for c in candidates if c[1] == anchor)
+    anchor = base["selected_strategy"] if base["selected_strategy"] in strategies else "directional"; ranked = sorted(candidates, reverse=True); chosen = anchor; reason = "regime anchor; insufficient prior evidence to override"; anchor_row = next(c for c in candidates if c[1] == anchor)
     for row in ranked:
         if row[1] == anchor: continue
         if row[2] >= 3 and row[0] >= anchor_row[0] + 0.08:
-            chosen = row[1]; reason = f"learned override: {row[1]} outscored {anchor} for {regime}"
-            break
-    # If the regime is unsafe, the policy cannot force a trade.
-    if regime in {"LIQUIDITY_RISK", "COMPRESSION", "POSITIVE_GAMMA_RANGE"}: chosen = "standby" if regime != "COMPRESSION" else "breakout_watch"; reason = f"risk-preserving regime policy: {regime}"
+            chosen = row[1]; reason = f"learned override: {row[1]} outscored {anchor} for {regime}"; break
+    if regime in {"LIQUIDITY_RISK", "POSITIVE_GAMMA_RANGE"}: chosen = "standby"; reason = f"risk-preserving regime policy: {regime}"
+    if regime == "COMPRESSION": chosen = "breakout_watch"; reason = "compression: wait for release rather than chase"
     direction = base["preferred_direction"]
-    if chosen == "gamma_blast" and direction == "NEUTRAL": direction = str((memory.get("last_direction") or "NEUTRAL")).upper()
-    if chosen == "transition" and direction not in {"BULLISH", "BEARISH"}: direction = str((memory.get("last_direction") or "NEUTRAL")).upper()
-    # Prior-day drawdown/loss streak makes the next day defensive; never increases risk after losses.
-    recent = memory.get("recent_days") or []
-    loss_days = sum(_f(d.get("net_pnl")) < 0 for d in recent[-2:])
-    risk_profile = "DEFENSIVE" if loss_days >= 2 or _f((recent[-1] if recent else {}).get("net_pnl")) <= -1000 else "NORMAL"
-    readiness = _f(base.get("confidence")); readiness -= 10 if risk_profile == "DEFENSIVE" else 0
+    if chosen in {"gamma_blast", "transition"} and direction not in {"BULLISH", "BEARISH"}: direction = str((memory.get("last_direction") or "NEUTRAL")).upper()
+    recent = memory.get("recent_days") or []; loss_days = sum(_f(d.get("net_pnl")) < 0 for d in recent[-2:]); risk_profile = "DEFENSIVE" if loss_days >= 2 or _f((recent[-1] if recent else {}).get("net_pnl")) <= -1000 else "NORMAL"; readiness = _f(base.get("confidence")) - (10 if risk_profile == "DEFENSIVE" else 0)
     return {**base, "selected_strategy": chosen, "preferred_direction": direction, "confidence": round(max(0.0, readiness), 1), "risk_profile": risk_profile, "reason": reason, "learning": {"regime": regime, "candidate_scores": {s: round(sc, 4) for sc, s, *_ in candidates}, "regime_samples": {s: int((stats.get(s) or {}).get("trades", 0)) for s in strategies}, "global_samples": {s: int((global_stats.get(s) or {}).get("trades", 0)) for s in strategies}}}
 
 
 def update_adaptive_memory(memory: dict[str, Any], trade: dict[str, Any], day: str, regime: str, selected_strategy: str) -> dict[str, Any]:
-    """Update adaptive memory after a trade has closed; never before its outcome exists."""
+    """Update memory only after a trade has closed."""
     state = {"by_regime": dict(memory.get("by_regime") or {}), "global": dict(memory.get("global") or {}), "recent_days": list(memory.get("recent_days") or []), "last_direction": memory.get("last_direction")}
     pnl = _f(trade.get("net_pnl")); won = pnl > 0
     for bucket in (state["global"], state["by_regime"].setdefault(regime, {})):
-        s = bucket.setdefault(selected_strategy, {"trades": 0, "wins": 0, "losses": 0, "net_pnl": 0.0})
-        s["trades"] = int(s.get("trades", 0)) + 1; s["wins"] = int(s.get("wins", 0)) + int(won); s["losses"] = int(s.get("losses", 0)) + int(not won); s["net_pnl"] = round(_f(s.get("net_pnl")) + pnl, 4)
-    state["last_direction"] = str(trade.get("direction") or state.get("last_direction") or "NEUTRAL").upper()
-    days = {str(d.get("day")): dict(d) for d in state["recent_days"] if isinstance(d, dict) and d.get("day")}
-    entry = days.setdefault(day, {"day": day, "net_pnl": 0.0, "trades": 0})
-    entry["net_pnl"] = round(_f(entry.get("net_pnl")) + pnl, 4); entry["trades"] = int(entry.get("trades", 0)) + 1
-    state["recent_days"] = list(days.values())[-20:]
+        s = bucket.setdefault(selected_strategy, {"trades": 0, "wins": 0, "losses": 0, "net_pnl": 0.0}); s["trades"] = int(s.get("trades", 0)) + 1; s["wins"] = int(s.get("wins", 0)) + int(won); s["losses"] = int(s.get("losses", 0)) + int(not won); s["net_pnl"] = round(_f(s.get("net_pnl")) + pnl, 4)
+    state["last_direction"] = str(trade.get("direction") or state.get("last_direction") or "NEUTRAL").upper(); days = {str(d.get("day")): dict(d) for d in state["recent_days"] if isinstance(d, dict) and d.get("day")}; entry = days.setdefault(day, {"day": day, "net_pnl": 0.0, "trades": 0}); entry["net_pnl"] = round(_f(entry.get("net_pnl")) + pnl, 4); entry["trades"] = int(entry.get("trades", 0)) + 1; state["recent_days"] = list(days.values())[-20:]
     return state
 
 
 def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Select a research strategy; when adaptive memory is attached, apply the learned daily policy."""
     memory = snapshot.get("_adaptive_memory")
     return adaptive_day_policy(snapshot, previous, memory) if isinstance(memory, dict) else _base_strategy_selection(snapshot, previous)
 
@@ -173,12 +229,10 @@ def _spot_outcome(snapshots: list[dict[str, Any]], entry_index: int, direction: 
 
 
 def counterfactual_gate_analysis(snapshots: list[dict[str, Any]], observation_rows: list[dict[str, Any]], stop_pct: float = 0.0125, target_pct: float = 0.025, max_hold_bars: int = 12) -> dict[str, Any]:
-    """Evaluate blocked observations as research-only spot-direction counterfactuals."""
     blocked = [r for r in observation_rows if not r.get("risk", {}).get("approved")]; by_reason: dict[str, list[dict[str, Any]]] = {}; results: list[dict[str, Any]] = []
     for row in blocked:
-        i = int(row["index"]); direction = str(row.get("replay", {}).get("direction") or "NEUTRAL"); directions = [direction] if direction in {"BULLISH", "BEARISH"} else ["BULLISH", "BEARISH"]
-        outcomes = {d: _spot_outcome(snapshots, i + 1, d, stop_pct, target_pct, max_hold_bars) for d in directions if i + 1 < len(snapshots)}
-        item = {"index": i, "timestamp": row.get("timestamp"), "blocked_reasons": row.get("risk", {}).get("blocked_reasons", []), "replay_direction": direction, "outcomes": outcomes, "regime": market_regime(snapshots[i], snapshots[i - 1] if i else None), "pre_move": pre_move_state(snapshots[i], snapshots[i - 1] if i else None)}; results.append(item)
+        i = int(row["index"]); direction = str(row.get("replay", {}).get("direction") or "NEUTRAL"); directions = [direction] if direction in {"BULLISH", "BEARISH"} else ["BULLISH", "BEARISH"]; outcomes = {d: _spot_outcome(snapshots, i + 1, d, stop_pct, target_pct, max_hold_bars) for d in directions if i + 1 < len(snapshots)}
+        item = {"index": i, "timestamp": row.get("timestamp"), "blocked_reasons": row.get("risk", {}).get("blocked_reasons", []), "replay_direction": direction, "outcomes": outcomes, "regime": market_regime(snapshots[i], snapshots[i - 1] if i else None), "pre_move": pre_move_state(snapshots[i], snapshots[i - 1] if i else None), "accumulation": accumulation_detector(snapshots[i], snapshots[i - 1] if i else None)}; results.append(item)
         for reason in item["blocked_reasons"]: by_reason.setdefault(str(reason), []).append(item)
     def summarize(items: list[dict[str, Any]], direction: str | None = None) -> dict[str, Any]:
         outcomes = [o for item in items for d, o in item.get("outcomes", {}).items() if direction is None or d == direction]; wins = sum(o.get("status") == "WIN" for o in outcomes); losses = sum(o.get("status") == "LOSS" for o in outcomes); flat = sum(o.get("status") == "FLAT" for o in outcomes); total = wins + losses + flat

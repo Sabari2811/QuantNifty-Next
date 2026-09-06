@@ -18,6 +18,8 @@ from quantnifty.strike_selector import select_strikes
 from quantnifty.institutional_engine import final_decision, replay_signal_stack
 from quantnifty.backtest import BacktestConfig, run_backtest, validation_report
 from quantnifty.recording_api import router as recording_router
+from quantnifty.decision_validation import validate_snapshot
+from quantnifty.session_policy import session_decision_policy
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -26,7 +28,7 @@ NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
 POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
-app = FastAPI(title="QuantNifty Next", version="1.8.0")
+app = FastAPI(title="QuantNifty Next", version="1.8.1")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
 app.include_router(recording_router)
@@ -37,7 +39,8 @@ async def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, 
     last = "provider request failed"
     for attempt in range(4):
         try:
-            async with httpx.AsyncClient(timeout=15) as client: response = await client.get(BASE + path, params=params, headers=headers)
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.get(BASE + path, params=params, headers=headers)
             if response.status_code == 429 or response.status_code >= 500:
                 last = f"HTTP {response.status_code}"; await asyncio.sleep(0.5 * (2**attempt)); continue
             if response.status_code >= 400:
@@ -160,12 +163,10 @@ def intelligence_page():
 def health(): return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"timestamp":datetime.now(timezone.utc).isoformat()}
 @app.get("/backtest")
 def backtest_page():
-    path=os.path.join(os.path.dirname(__file__),"web","backtest.html")
-    return FileResponse(path)
+    path=os.path.join(os.path.dirname(__file__),"web","backtest.html"); return FileResponse(path)
 
 @app.get("/api/v1/health")
 def api_health(): return health()
-
 @app.get("/api/v1/status")
 def status():
     return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
@@ -174,10 +175,8 @@ def status():
 async def market():
     try: return await snapshot()
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
-
 @app.get("/api/v1/analytics")
 async def analytics_api(): return await market()
-
 @app.get("/api/v1/intelligence")
 async def intelligence_api():
     try:
@@ -186,30 +185,31 @@ async def intelligence_api():
 
 @app.get("/api/v1/decision")
 async def decision(strategy: str="directional"):
+    mode=strategy.strip().lower()
+    if mode not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
     try: data=await snapshot()
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
-    mode=strategy.strip().lower()
-    if mode not in {"directional","gamma_blast"}: raise HTTPException(400,"strategy must be directional or gamma_blast")
-    em=(data.get("expected_move") or {}).get("move"); bias=data["bias"]; directional_ok=bias in {"BULLISH","BEARISH"}; confidence_ok=data["confidence"]>=60.0; liquidity_ok=data["liquidity_score"]>=50.0; gf=data.get("gamma_flip"); gamma_position_ok=gf is not None and ((bias=="BULLISH" and data["spot"]>gf) or (bias=="BEARISH" and data["spot"]<gf)); dealer_ok=(bias=="BULLISH" and data["dealer_flow"]=="PUT_SUPPORT") or (bias=="BEARISH" and data["dealer_flow"]=="CALL_RESISTANCE")
-    previous=cache.get("previous_snapshot") or {}; pg,cg=previous.get("gex"),data.get("gex"); gamma_acceleration=pg is not None and cg is not None and abs(cg)>abs(pg)*1.10; old_em=(previous.get("expected_move") or {}).get("move") if isinstance(previous.get("expected_move"),dict) else None; move_expansion=em is not None and (old_em is None or em>old_em*1.05); volume_ok=data.get("rows",0)>=20 and sum(r.get("volume",0) for r in data.get("option_chain",[]))>0; gamma_blast_qualified=all([directional_ok,confidence_ok,liquidity_ok,gamma_position_ok,dealer_ok,gamma_acceleration,move_expansion,volume_ok]); selection=select_strikes(data["spot"],data["option_chain"],bias,gamma_blast=(mode=="gamma_blast"),expected_move=em,gamma_blast_qualified=gamma_blast_qualified); trade_allowed=directional_ok and confidence_ok and liquidity_ok and selection["eligible"]
-    return {"mode":"READ_ONLY","execution":"DISABLED","strategy":"GAMMA_BLAST" if mode=="gamma_blast" else "DIRECTIONAL","bias":bias,"confidence":data["confidence"],"risk_gate":{"directional_signal":directional_ok,"confidence":confidence_ok,"liquidity":liquidity_ok,"gamma_position":gamma_position_ok,"dealer_flow":dealer_ok,"gamma_acceleration":gamma_acceleration,"expected_move_expansion":move_expansion,"volume":volume_ok,"trade_allowed":trade_allowed},"strike_selection":selection,"intelligence":data.get("intelligence")}
+    result=final_decision(data,cache.get("previous_snapshot"),mode)
+    return {"mode":"READ_ONLY","strategy":mode,"timestamp":data["timestamp"],"spot":data["spot"],"decision":result,"validation":validate_snapshot(data,"LIVE")}
 
 @app.get("/api/v1/final-decision")
 async def final_decision_api(strategy: str="directional"):
     mode=strategy.strip().lower()
-    if mode not in {"directional","gamma_blast"}: raise HTTPException(400,"strategy must be directional or gamma_blast")
+    if mode not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
     try: data=await snapshot()
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
     result=final_decision(data,cache.get("previous_snapshot"),mode)
-    return {"mode":"READ_ONLY","strategy":mode,"timestamp":data["timestamp"],"spot":data["spot"],"decision":result}
+    return {"mode":"READ_ONLY","strategy":mode,"timestamp":data["timestamp"],"spot":data["spot"],"decision":result,"validation":validate_snapshot(data,"LIVE")}
 
 @app.post("/api/v1/replay/decisions")
 async def replay_decisions_api(payload: dict[str,Any]):
     snapshots=payload.get("snapshots")
     if not isinstance(snapshots,list) or not snapshots: raise HTTPException(400,"snapshots must be a non-empty list")
-    clean=[x for x in snapshots if isinstance(x,dict)]
-    if len(clean)!=len(snapshots): raise HTTPException(400,"every snapshot must be an object")
-    return {"mode":"READ_ONLY_REPLAY","decision_stack":replay_signal_stack(clean)}
+    if any(not isinstance(x,dict) for x in snapshots): raise HTTPException(400,"every snapshot must be an object")
+    strategy=str(payload.get("strategy") or "directional").strip().lower()
+    if strategy not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
+    stack=replay_signal_stack(snapshots,strategy) if strategy else replay_signal_stack(snapshots)
+    return {"mode":"READ_ONLY_REPLAY","strategy":strategy,"decision_stack":stack}
 
 @app.get("/api/v1/historical")
 async def historical(interval: str="5minute",start_time: int|None=None,end_time: int|None=None,scrip_codes: str|None=None):
@@ -227,59 +227,46 @@ async def replay_api(payload: dict[str,Any]):
     if isinstance(payload.get("snapshots"),list):
         snapshots=payload.get("snapshots")
         if not snapshots: raise HTTPException(400,"snapshots must be a non-empty list")
-        return {"mode":"READ_ONLY_REPLAY","decision_stack":replay_signal_stack([x for x in snapshots if isinstance(x,dict)])}
+        if any(not isinstance(x,dict) for x in snapshots): raise HTTPException(400,"every snapshot must be an object")
+        strategy=str(payload.get("strategy") or "directional").strip().lower()
+        if strategy not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
+        return {"mode":"READ_ONLY_REPLAY","strategy":strategy,"decision_stack":replay_signal_stack(snapshots,strategy)}
     points=replay(normalize_candles(payload,payload.get("scrip_code"))); return {"mode":"READ_ONLY_REPLAY","summary":summary(points),"points":to_dict(points)}
 
 @app.post("/api/v1/backtest")
 async def backtest_api(payload: dict[str, Any]):
-    snapshots = payload.get("snapshots")
-    if not isinstance(snapshots, list) or len(snapshots) < 2:
-        raise HTTPException(400, "snapshots must contain at least 2 snapshot objects")
-    if any(not isinstance(x, dict) for x in snapshots):
-        raise HTTPException(400, "every snapshot must be an object")
-    mode = str(payload.get("strategy") or "directional").strip().lower()
-    if mode not in {"directional", "gamma_blast"}:
-        raise HTTPException(400, "strategy must be directional or gamma_blast")
-    raw = payload.get("config") or {}
+    snapshots=payload.get("snapshots")
+    if not isinstance(snapshots,list) or len(snapshots)<2: raise HTTPException(400,"snapshots must contain at least 2 snapshot objects")
+    if any(not isinstance(x,dict) for x in snapshots): raise HTTPException(400,"every snapshot must be an object")
+    mode=str(payload.get("strategy") or "directional").strip().lower()
+    if mode not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
+    raw=payload.get("config") or {}
     try:
-        cfg = BacktestConfig(**{k: raw[k] for k in raw if k in BacktestConfig.__dataclass_fields__})
-        return run_backtest(snapshots, mode, cfg)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(400, f"invalid backtest configuration: {exc}") from exc
-
+        cfg=BacktestConfig(**{k:raw[k] for k in raw if k in BacktestConfig.__dataclass_fields__})
+        return run_backtest(snapshots,mode,cfg)
+    except (TypeError,ValueError) as exc: raise HTTPException(400,f"invalid backtest configuration: {exc}") from exc
 
 @app.post("/api/v1/validation")
-async def validation_api(payload: dict[str, Any]):
-    snapshots = payload.get("snapshots")
-    if not isinstance(snapshots, list) or len(snapshots) < 2:
-        raise HTTPException(400, "snapshots must contain at least 2 snapshot objects")
-    mode = str(payload.get("strategy") or "directional").strip().lower()
-    if mode not in {"directional", "gamma_blast"}:
-        raise HTTPException(400, "strategy must be directional or gamma_blast")
-    raw = payload.get("config") or {}
+async def validation_api(payload: dict[str,Any]):
+    snapshots=payload.get("snapshots")
+    if not isinstance(snapshots,list) or len(snapshots)<2: raise HTTPException(400,"snapshots must contain at least 2 snapshot objects")
+    if any(not isinstance(x,dict) for x in snapshots): raise HTTPException(400,"every snapshot must be an object")
+    mode=str(payload.get("strategy") or "directional").strip().lower()
+    if mode not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
+    raw=payload.get("config") or {}
     try:
-        cfg = BacktestConfig(**{k: raw[k] for k in raw if k in BacktestConfig.__dataclass_fields__})
-        return validation_report(snapshots, mode, cfg)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(400, f"invalid validation configuration: {exc}") from exc
+        cfg=BacktestConfig(**{k:raw[k] for k in raw if k in BacktestConfig.__dataclass_fields__})
+        result=validation_report(snapshots,mode,cfg)
+        result["decision_validation"]=[validate_snapshot(s,"BACKTEST") for s in snapshots]
+        return result
+    except (TypeError,ValueError) as exc: raise HTTPException(400,f"invalid validation configuration: {exc}") from exc
 
-
-@app.get("/api/v1/trading/status")
-def trading_status(): return {"enabled":False,"mode":"READ_ONLY","order_placement":False,"order_modification":False,"order_cancellation":False}
-@app.post("/api/v1/trading/orders",status_code=503)
-def trading_disabled(): raise HTTPException(503,"trading is disabled")
-
-@app.websocket("/ws")
-async def ws(websocket: WebSocket):
-    await websocket.accept()
+@app.websocket("/ws/market")
+async def websocket_market(ws: WebSocket):
+    await ws.accept()
     try:
         while True:
-            try: payload=cache.get("snapshot") or await snapshot()
-            except Exception as exc: payload={"data_integrity":"UNAVAILABLE","error":str(exc),"timestamp":datetime.now(timezone.utc).isoformat()}
-            try: await websocket.send_json(payload)
-            except (WebSocketDisconnect,RuntimeError): break
+            try: data=await snapshot(); await ws.send_json(data)
+            except Exception as exc: await ws.send_json({"error":str(exc),"mode":"READ_ONLY"})
             await asyncio.sleep(POLL_SECONDS)
-    except WebSocketDisconnect: pass
-    finally:
-        try: await websocket.close()
-        except Exception: pass
+    except WebSocketDisconnect: return

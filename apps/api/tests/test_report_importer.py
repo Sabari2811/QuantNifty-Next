@@ -41,12 +41,27 @@ def test_report_importer_preserves_parquet_and_json(tmp_path):
         "symbol": "NIFTY", "expiry": "08/04/2026 14:00",
         "regime": "RANGE", "runtime_status": "RUNNING",
     }).encode()
+    analytics = json.dumps({
+        "market_structure": {"bias": "NEUTRAL", "structure": "RANGING"},
+        "dealer": {"total_gex": 123.0, "market_mode": "TRANSITION"},
+        "dealer_flow": {"total_dex": -10.0},
+        "signal": {"signal": "BUY CALL", "confidence": 70},
+        "smart_strike": {"strike": 24400, "option_type": "CE", "reasons": ["Good Liquidity"]},
+    }).encode()
+    decision = json.dumps({
+        "signal": "Signal(name='WAIT', confidence=3)",
+        "trade": "Trade(contract=None, option_type='', strike=0, entry=0, stop_loss=0, target1=0, target2=0, risk_reward=0)",
+        "valid": False,
+        "validation": "ValidationResult(valid=False, grade='F', confidence=3, risk_multiplier=0.0, warnings=[])",
+    }).encode()
     report = tmp_path / "data_Review.txt"
     base = r"D:\Projects\NiftySignalEngine\data\snapshots\04-Aug-2026\000001_13-02-21"
     report.write_bytes(
         _section("runtime.json", base + r"\runtime.json", runtime)
         + _section("option_chain.parquet", base + r"\option_chain.parquet", option.read_bytes())
         + _section("greeks.parquet", base + r"\greeks.parquet", greeks.read_bytes())
+        + _section("analytics.json", base + r"\analytics.json", analytics)
+        + _section("decision.json", base + r"\decision.json", decision)
     )
 
     extracted = tmp_path / "extracted"
@@ -57,6 +72,9 @@ def test_report_importer_preserves_parquet_and_json(tmp_path):
     assert len(snapshots) == 1
     assert snapshots[0]["data_integrity"] == "RECORDED_HISTORICAL"
     assert {row["side"] for row in snapshots[0]["option_chain"]} == {"CE", "PE"}
+    assert snapshots[0]["recorded_analytics"]["signal"]["signal"] == "BUY CALL"
+    assert snapshots[0]["recorded_decision"]["signal"] == {"name": "WAIT", "confidence": 3}
+    assert snapshots[0]["recorded_decision"]["validation"]["valid"] is False
 
 
 def _transcode_binary_for_export(payload: bytes) -> bytes:

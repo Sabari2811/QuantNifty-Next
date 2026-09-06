@@ -38,6 +38,59 @@ def _strategy(payload: dict[str, Any]) -> str:
     return strategy
 
 
+def _recorded_evidence(snapshot: dict[str, Any]) -> dict[str, Any]:
+    recorded = snapshot.get("recorded_analytics") or {}
+    recorded_signal = recorded.get("signal") or {}
+    raw_signal = str(recorded_signal.get("signal") or "").upper()
+    recorded_decision = snapshot.get("recorded_decision") or {}
+    validation = recorded_decision.get("validation") or {}
+    return {
+        "signal": raw_signal or "UNKNOWN",
+        "signal_confidence": recorded_signal.get("confidence"),
+        "direction": "BULLISH" if "CALL" in raw_signal else "BEARISH" if "PUT" in raw_signal else "NEUTRAL",
+        "decision": str((recorded_decision.get("signal") or {}).get("name") or "UNKNOWN").upper(),
+        "validation": "VALID" if validation.get("valid") is True else "INVALID" if validation.get("valid") is False else "UNKNOWN",
+        "strike_selection": recorded.get("strike_selection") or [],
+        "institutional_score": recorded.get("recorded_institutional_score") or {},
+    }
+
+
+def _observation_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> list[dict[str, Any]]:
+    """Return per-observation evidence from the authoritative replay path."""
+    ordered = [snapshot for snapshot in snapshots if _is_market_session(snapshot)]
+    rows: list[dict[str, Any]] = []
+    previous = None
+    for index, snapshot in enumerate(ordered[:-1]):
+        decision = final_decision(snapshot, previous, strategy, "BACKTEST")
+        previous = snapshot
+        signal = decision.get("signal") or {}
+        risk = decision.get("risk") or {}
+        plan = decision.get("execution_plan") or {}
+        rows.append({
+            "index": index,
+            "timestamp": snapshot.get("timestamp"),
+            "spot": snapshot.get("spot"),
+            "replay": {
+                "direction": str(signal.get("direction") or "NEUTRAL"),
+                "confidence": signal.get("confidence"),
+                "scores": signal.get("scores") or {},
+                "evidence": signal.get("evidence") or [],
+            },
+            "risk": {
+                "approved": bool(risk.get("approved")),
+                "gates": risk.get("gates") or {},
+                "blocked_reasons": risk.get("reasons") or [],
+            },
+            "execution": {
+                "status": plan.get("status"),
+                "instrument": plan.get("instrument"),
+                "execution_enabled": False,
+            },
+            "recorded": _recorded_evidence(snapshot),
+        })
+    return rows
+
+
 def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[str, Any]:
     """Explain the authoritative replay gates without changing their behavior."""
     blocked_reasons: Counter[str] = Counter()
@@ -67,20 +120,10 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
         else:
             for reason in risk.get("reasons") or []:
                 blocked_reasons[str(reason)] += 1
-        recorded = snapshot.get("recorded_analytics") or {}
-        recorded_signal = recorded.get("signal") or {}
-        raw = str(recorded_signal.get("signal") or "").upper()
-        if "CALL" in raw:
-            recorded_directions["BULLISH"] += 1
-        elif "PUT" in raw:
-            recorded_directions["BEARISH"] += 1
-        else:
-            recorded_directions["NEUTRAL"] += 1
-        recorded_decision = snapshot.get("recorded_decision") or {}
-        name = str((recorded_decision.get("signal") or {}).get("name") or "UNKNOWN").upper()
-        recorded_decisions[name] += 1
-        valid = (recorded_decision.get("validation") or {}).get("valid")
-        recorded_valid["VALID" if valid is True else "INVALID" if valid is False else "UNKNOWN"] += 1
+        recorded = _recorded_evidence(snapshot)
+        recorded_directions[recorded["direction"]] += 1
+        recorded_decisions[recorded["decision"]] += 1
+        recorded_valid[recorded["validation"]] += 1
     return {
         "decision_observations": decisions,
         "approved": approved,
@@ -95,6 +138,7 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
             "max": round(max(confidences), 2) if confidences else 0.0,
             "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0,
         },
+        "observations": _observation_diagnostics(snapshots, strategy),
         "note": "Diagnostics describe the same market-session BACKTEST FinalDecision/Risk path used by validation; recorded decision evidence is comparison-only and never overrides the replay gates.",
     }
 
@@ -103,6 +147,8 @@ def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: Ba
     result = validation_report(snapshots, strategy, config)
     overall = result.get("overall") or {}
     risk_gate = result.get("risk_gate") or {}
+    trades = int(overall.get("trades") or 0)
+    historical_valid = result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL"
     result.update({
         "source": source,
         "recording_root": root,
@@ -110,12 +156,13 @@ def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: Ba
         "approved": risk_gate.get("approved", 0),
         "blocked": risk_gate.get("blocked", 0),
         "split": {"out_of_sample": result.get("oos") or {}},
-        "empirical": result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL",
+        "empirical": historical_valid and trades > 0,
+        "historical_evidence_status": "VALID_HISTORICAL" if historical_valid else str((result.get("historical_data") or {}).get("status") or "UNKNOWN"),
         "replay_diagnostics": _replay_diagnostics(snapshots, strategy),
     })
-    trades = int(overall.get("trades") or 0)
     result["tradeability"] = "TRADEABLE_SAMPLE" if trades > 0 else "NO_EXECUTABLE_TRADES"
     result["empirical_status"] = "EMPIRICAL_TRADES" if trades > 0 else "NO_EXECUTABLE_TRADES"
+    result["performance_status"] = "PERFORMANCE_VALIDATED" if historical_valid and trades > 0 else "NOT_VALIDATED"
     return result
 
 

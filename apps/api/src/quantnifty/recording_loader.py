@@ -93,13 +93,7 @@ def _parse_validation_repr(value: Any) -> dict[str, Any]:
         return {}
     confidence = _number(match.group(3))
     risk_multiplier = _number(match.group(4))
-    return {
-        "valid": match.group(1) == "True",
-        "grade": match.group(2),
-        "confidence": int(confidence) if confidence.is_integer() else confidence,
-        "risk_multiplier": risk_multiplier,
-        "warnings": [],
-    }
+    return {"valid": match.group(1) == "True", "grade": match.group(2), "confidence": int(confidence) if confidence.is_integer() else confidence, "risk_multiplier": risk_multiplier, "warnings": []}
 
 
 def _parse_trade_repr(value: Any) -> dict[str, Any]:
@@ -109,10 +103,7 @@ def _parse_trade_repr(value: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for field, token in re.findall(r"(contract|option_type|strike|entry|stop_loss|target1|target2|risk_reward)=((?:'[^']*')|(?:[^,\)]+))", raw):
         token = token.strip()
-        if token.startswith("'") and token.endswith("'"):
-            result[field] = token[1:-1]
-        else:
-            result[field] = _number(token)
+        result[field] = token[1:-1] if token.startswith("'") and token.endswith("'") else _number(token)
     return result
 
 
@@ -159,23 +150,7 @@ def _recorded_intelligence(analytics: dict[str, Any], rows: list[dict[str, Any]]
     liquidity_score = 100.0 if "Good Liquidity" in smart_reasons else 0.0
     avg_call_iv = _number(iv_skew.get("average_call_iv"))
     avg_put_iv = _number(iv_skew.get("average_put_iv"))
-    return {
-        "bias": str(market_structure.get("bias") or "NEUTRAL").upper(),
-        "structure": str(market_structure.get("structure") or "UNKNOWN"),
-        "gex": _number(dealer.get("total_gex")),
-        "dex": _number(dealer_flow.get("total_dex")),
-        "vanna_proxy": _number(dealer_flow.get("total_vanna")),
-        "gamma_flip": gamma_flip.get("gamma_flip"),
-        "atm_iv": (avg_call_iv + avg_put_iv) / 2.0 if avg_call_iv or avg_put_iv else 0.0,
-        "iv_skew": iv_skew.get("iv_skew"),
-        "expected_move": {"move": _number(expected.get("expected_move")), "lower": expected.get("lower"), "upper": expected.get("upper")},
-        "recorded_oi_flow_bias": str(oi_summary.get("market_bias") or "NEUTRAL").upper(),
-        "liquidity_score": liquidity_score,
-        "intelligence": {"market_state": {"state": str(dealer.get("market_mode") or "UNKNOWN")}},
-        "strike_selection": [selection] if selection else [],
-        "recorded_analytics": analytics,
-        "recorded_liquidity": liquidity,
-    }
+    return {"bias": str(market_structure.get("bias") or "NEUTRAL").upper(), "structure": str(market_structure.get("structure") or "UNKNOWN"), "gex": _number(dealer.get("total_gex")), "dex": _number(dealer_flow.get("total_dex")), "vanna_proxy": _number(dealer_flow.get("total_vanna")), "gamma_flip": gamma_flip.get("gamma_flip"), "atm_iv": (avg_call_iv + avg_put_iv) / 2.0 if avg_call_iv or avg_put_iv else 0.0, "iv_skew": iv_skew.get("iv_skew"), "expected_move": {"move": _number(expected.get("expected_move")), "lower": expected.get("lower"), "upper": expected.get("upper")}, "recorded_oi_flow_bias": str(oi_summary.get("market_bias") or "NEUTRAL").upper(), "liquidity_score": liquidity_score, "intelligence": {"market_state": {"state": str(dealer.get("market_mode") or "UNKNOWN")}}, "strike_selection": [selection] if selection else [], "recorded_analytics": analytics, "recorded_liquidity": liquidity}
 
 
 def load_snapshot_bundle(directory: str | Path) -> dict[str, Any]:
@@ -231,6 +206,6 @@ def load_recording(root: str | Path) -> list[dict[str, Any]]:
         if base.suffix.lower() != ".txt":
             raise ValueError(f"recording path must be a snapshot directory or .txt recorder export: {base}")
         with load_report_to_temporary_root(base) as temp:
-            _extract_auxiliary_json(base, Path(temp.name))
+            _extract_auxiliary_json(base, Path(temp))
             return _load_directory(Path(temp))
     return _load_directory(base)

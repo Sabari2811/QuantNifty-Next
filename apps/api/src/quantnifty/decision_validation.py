@@ -24,9 +24,10 @@ def validate_snapshot(data: dict[str, Any], mode: str = "LIVE") -> dict[str, Any
     if not _num(data.get("spot")) or float(data.get("spot") or 0) <= 0:
         errors.append("invalid_spot")
     integrity = str(data.get("data_integrity") or "").upper()
-    expected = "LIVE_PROVIDER" if str(mode).upper() not in {"BACKTEST", "REPLAY"} else "RECORDED_HISTORICAL"
-    if integrity != expected:
-        errors.append(f"data_integrity_expected_{expected}")
+    replay = str(mode).upper() in {"BACKTEST", "REPLAY"}
+    acceptable = integrity == "LIVE_PROVIDER" or (replay and integrity == "RECORDED_HISTORICAL")
+    if not acceptable:
+        errors.append("invalid_data_integrity_for_mode")
     if not isinstance(data.get("option_chain"), list):
         errors.append("option_chain_not_list")
     return {"valid": not errors, "stage": "input", "errors": errors, "warnings": warnings, "mode": str(mode).upper(), "data_integrity": integrity}

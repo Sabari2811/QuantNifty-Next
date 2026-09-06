@@ -8,7 +8,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from quantnifty.backtest import BacktestConfig, _is_market_session, validation_report
 from quantnifty.institutional_engine import final_decision
@@ -34,9 +34,26 @@ def _cfg(raw: dict[str, Any]) -> BacktestConfig:
 
 def _strategy(payload: dict[str, Any]) -> str:
     strategy = str(payload.get("strategy") or "directional").strip().lower()
-    if strategy not in {"directional", "gamma_blast"}:
-        raise HTTPException(400, "strategy must be directional or gamma_blast")
+    if strategy not in {"directional", "gamma_blast", "adaptive"}:
+        raise HTTPException(400, "strategy must be directional, gamma_blast, or adaptive")
     return strategy
+
+
+@router.get("/backtest", include_in_schema=False)
+def backtest_page():
+    """Serve the Backtest UI with the currently supported strategy modes.
+
+    The HTML remains the canonical static artifact, but the response is
+    normalized here so a stale browser/edge copy cannot hide a newly supported
+    strategy option. No validation is performed by this route.
+    """
+    path = Path(__file__).resolve().parent / "web" / "backtest.html"
+    html = path.read_text(encoding="utf-8")
+    marker = '<option value="gamma_blast">Gamma Blast</option>'
+    adaptive = '<option value="adaptive">Adaptive Brain</option>'
+    if adaptive not in html:
+        html = html.replace(marker, marker + adaptive, 1)
+    return HTMLResponse(content=html, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
 
 
 def _recorded_evidence(snapshot: dict[str, Any]) -> dict[str, Any]:

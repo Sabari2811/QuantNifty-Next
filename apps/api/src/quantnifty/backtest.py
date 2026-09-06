@@ -8,8 +8,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from quantnifty.institutional_engine import final_decision
-from quantnifty.research_brain import update_adaptive_memory
 from quantnifty.historical import historical_data_status, canonicalize_snapshots
+from quantnifty.research_brain import adaptive_exit_state
 
 IST = ZoneInfo("Asia/Kolkata")
 MARKET_OPEN = time(9, 15)
@@ -34,10 +34,6 @@ class Trade:
     timestamp: str | None
     direction: str
     strategy: str
-    selected_strategy: str
-    regime: str
-    risk_profile: str
-    adaptation_reason: str
     strike: float | None
     security_id: str | None
     entry_spot: float
@@ -67,11 +63,6 @@ def _timestamp(s: dict[str, Any]) -> datetime | None:
         return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
     except ValueError:
         return None
-
-
-def _day_key(s: dict[str, Any]) -> str | None:
-    dt = _timestamp(s)
-    return dt.astimezone(IST).date().isoformat() if dt else None
 
 
 def _expiry_datetime(value: Any) -> datetime | None:
@@ -171,20 +162,8 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
     if len(ordered) < 2:
         return {"status":"INSUFFICIENT_DATA","strategy":mode,"historical_data":data_status,"session_filter":{"market_hours_only":True,"observations":len(ordered)},"metrics":_metrics([],cfg.initial_capital,len(ordered)),"trades":[],"regimes":{},"split":{}}
     trades: list[Trade] = []; blocked = approved = 0; i = 0; previous = None
-    adaptive_memory: dict[str, Any] = {"by_regime": {}, "global": {}, "recent_days": [], "last_direction": None}
-    current_day: str | None = None
-    day_memory: dict[str, Any] = adaptive_memory
     while i < len(ordered) - 1:
-        day = _day_key(ordered[i])
-        if mode == "adaptive" and day != current_day:
-            current_day = day
-            # Freeze learning inputs for the whole day. Only outcomes from
-            # completed prior trades/days can influence today's policy.
-            day_memory = {"by_regime": {k: dict(v) for k, v in adaptive_memory.get("by_regime", {}).items()}, "global": dict(adaptive_memory.get("global", {})), "recent_days": list(adaptive_memory.get("recent_days", [])), "last_direction": adaptive_memory.get("last_direction")}
-        decision_snapshot = dict(ordered[i])
-        if mode == "adaptive":
-            decision_snapshot["_adaptive_memory"] = day_memory
-        decision = final_decision(decision_snapshot, previous, mode, "BACKTEST"); previous = ordered[i]; risk = decision.get("risk") or {}
+        decision = final_decision(ordered[i], previous, mode, "BACKTEST"); previous = ordered[i]; risk = decision.get("risk") or {}
         if not risk.get("approved"): blocked += 1; i += 1; continue
         approved += 1; instrument = (decision.get("execution_plan") or {}).get("instrument"); entry_snap = ordered[i + 1]; leg = _find_leg(entry_snap, instrument)
         if not leg: i += 1; continue
@@ -193,24 +172,28 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
         entry = _mid_or_last(leg, "BUY"); entry_spot = _f(entry_snap.get("spot"))
         if entry <= 0 or entry_spot <= 0: i += 1; continue
         expiry = _expiry_datetime(entry_snap.get("expiry")); max_j = min(len(ordered) - 1, i + max(1, cfg.max_hold_bars)); exit_j, reason = max_j, "TIME"
+        selected = str((signal.get("adaptive") or {}).get("selected_strategy") or risk.get("selected_strategy") or "").lower()
+        peak_favorable = 0.0
         for j in range(i + 1, max_j + 1):
             ts = _timestamp(ordered[j])
             if expiry and ts and ts.astimezone(IST) > expiry: exit_j, reason = j - 1, "EXPIRY"; break
-            spot = _f(ordered[j].get("spot")); favorable = (spot-entry_spot)/entry_spot if direction == "BULLISH" else (entry_spot-spot)/entry_spot
-            if favorable <= -abs(cfg.stop_pct): exit_j, reason = j, "STOP"; break
-            if favorable >= abs(cfg.target_pct): exit_j, reason = j, "TARGET"; break
+            spot = _f(ordered[j].get("spot")); favorable = (spot-entry_spot)/entry_spot if direction == "BULLISH" else (entry_spot-spot)/entry_spot; peak_favorable = max(peak_favorable, favorable)
+            if selected == "early_accumulation":
+                exit_state = adaptive_exit_state(ordered[j], ordered[j-1] if j else None, direction, entry_spot)
+                trailing = _f(exit_state.get("trailing_stop_pct")) / 100.0
+                if favorable <= -0.005: exit_j, reason = j, "ADAPTIVE_STOP"; break
+                if exit_state.get("action") == "EXIT": exit_j, reason = j, "ADAPTIVE_EXHAUSTION"; break
+                if peak_favorable >= 0.008 and favorable <= peak_favorable - trailing: exit_j, reason = j, "ADAPTIVE_TRAIL"; break
+            else:
+                if favorable <= -abs(cfg.stop_pct): exit_j, reason = j, "STOP"; break
+                if favorable >= abs(cfg.target_pct): exit_j, reason = j, "TARGET"; break
         if exit_j <= i: i += 1; continue
         exit_leg = _find_leg(ordered[exit_j], instrument)
         if not exit_leg: i = exit_j; continue
         exit_price = _mid_or_last(exit_leg, "SELL")
         if exit_price <= 0: i = exit_j; continue
         qty = max(1, int(cfg.lot_size)); gross = (exit_price-entry)*qty; costs = _cost(entry,qty,cfg.slippage_bps,cfg.fixed_cost) + _cost(exit_price,qty,cfg.slippage_bps,cfg.fixed_cost)
-        adaptive = signal.get("adaptive") or {}; selected = str(adaptive.get("selected_strategy") or mode); regime = str(adaptive.get("regime") or _regime(ordered[i])); risk_profile = str(adaptive.get("risk_profile") or "NORMAL"); adaptation_reason = str(adaptive.get("reason") or "")
-        trade = Trade(i+1,exit_j,ordered[exit_j].get("timestamp"),direction,mode,selected,regime,risk_profile,adaptation_reason,_f(instrument.get("strike")) if isinstance(instrument,dict) else None,str(instrument.get("security_id")) if isinstance(instrument,dict) else None,entry_spot,_f(ordered[exit_j].get("spot")),entry,exit_price,qty,gross,costs,gross-costs,reason,_f(signal.get("confidence")))
-        trades.append(trade)
-        if mode == "adaptive":
-            adaptive_memory = update_adaptive_memory(adaptive_memory, asdict(trade), day or "UNKNOWN", regime, selected)
-        i = max(i + 1, exit_j)
+        trades.append(Trade(i+1,exit_j,ordered[exit_j].get("timestamp"),direction,mode,_f(instrument.get("strike")) if isinstance(instrument,dict) else None,str(instrument.get("security_id")) if isinstance(instrument,dict) else None,entry_spot,_f(ordered[exit_j].get("spot")),entry,exit_price,qty,gross,costs,gross-costs,reason,_f(signal.get("confidence")))); i = max(i + 1, exit_j)
     n=len(ordered); train_end=max(1,int(n*.60)); val_end=max(train_end+1,int(n*.80)) if n>2 else n; splits={"in_sample":[0,train_end],"validation":[train_end,min(val_end,n)],"out_of_sample":[min(val_end,n),n]}; split_metrics={name:_metrics(_trade_slice(trades,a,b),cfg.initial_capital,b-a) for name,(a,b) in splits.items()}
     regimes:dict[str,list[Trade]]={}
     for t in trades:
@@ -220,10 +203,9 @@ def run_backtest(snapshots: list[dict[str, Any]], strategy: str = "directional",
             if local.hour==9 and local.minute<30: regimes.setdefault("EXPIRY_OPEN",[]).append(t)
             if local.hour*60+local.minute>=15*60+15: regimes.setdefault("EXPIRY_FINAL_15M",[]).append(t)
     regime_metrics={name:_metrics(ts,cfg.initial_capital,len(ts)) for name,ts in regimes.items()}; risk_gate={"approved":approved,"blocked":blocked,"block_rate_pct":round(blocked/(approved+blocked)*100,2) if approved+blocked else 0.0}; overall=_metrics(trades,cfg.initial_capital,n)
-    adaptive_summary = {"days_adapted": len({(_day_key(ordered[min(t.entry_index,n-1)]) or "UNKNOWN") for t in trades}) if mode == "adaptive" else 0, "learned_strategies": {k: {sk: dict(sv) for sk, sv in v.items()} for k, v in adaptive_memory.get("by_regime", {}).items()} if mode == "adaptive" else {}, "global_learning": adaptive_memory.get("global", {}) if mode == "adaptive" else {}, "principle": "daily policy is frozen at each session start and can only use outcomes from completed prior trades"}
-    return {"status":"OK","mode":"READ_ONLY_BACKTEST","strategy":mode,"lookahead_free":True,"entry_rule":"decision at t, fill at t+1 available quote","exit_rule":"spot stop/target, max-hold, or contract expiry boundary","cost_model":asdict(cfg),"historical_data":data_status,"session_filter":{"market_hours_only":True,"observations":n},"approved_signals":approved,"blocked_signals":blocked,"risk_gate_effectiveness":risk_gate,"signal_quality":{"traded_signals":len(trades),"trade_win_rate_pct":overall["win_rate_pct"],"avg_confidence":overall["avg_signal_confidence"]},"metrics":overall,"split":split_metrics,"regimes":regime_metrics,"adaptive_brain":adaptive_summary,"trades":[asdict(t) for t in trades],"orders_placed":0,"trading_enabled":False}
+    return {"status":"OK","mode":"READ_ONLY_BACKTEST","strategy":mode,"lookahead_free":True,"entry_rule":"decision at t, fill at t+1 available quote","exit_rule":"adaptive accumulation uses current-bar exhaustion/gamma/volume trail; other strategies use spot stop/target, max-hold, or expiry boundary","cost_model":asdict(cfg),"historical_data":data_status,"session_filter":{"market_hours_only":True,"observations":n},"approved_signals":approved,"blocked_signals":blocked,"risk_gate_effectiveness":risk_gate,"signal_quality":{"traded_signals":len(trades),"trade_win_rate_pct":overall["win_rate_pct"],"avg_confidence":overall["avg_signal_confidence"]},"metrics":overall,"split":split_metrics,"regimes":regime_metrics,"trades":[asdict(t) for t in trades],"orders_placed":0,"trading_enabled":False}
 
 
 def validation_report(snapshots: list[dict[str, Any]], strategy: str = "directional", config: BacktestConfig | None = None) -> dict[str, Any]:
     result=run_backtest(snapshots,strategy,config)
-    return {"status":result.get("status"),"strategy":result.get("strategy"),"lookahead_free":result.get("lookahead_free"),"historical_data":result.get("historical_data"),"oos":result.get("split",{}).get("out_of_sample",{}),"overall":result.get("metrics"),"risk_gate":result.get("risk_gate_effectiveness",{}),"signal_quality":result.get("signal_quality",{}),"regimes":result.get("regimes",{}),"adaptive_brain":result.get("adaptive_brain",{}),"session_filter":result.get("session_filter",{}),"research_only":True,"orders_placed":0}
+    return {"status":result.get("status"),"strategy":result.get("strategy"),"lookahead_free":result.get("lookahead_free"),"historical_data":result.get("historical_data"),"oos":result.get("split",{}).get("out_of_sample",{}),"overall":result.get("metrics"),"risk_gate":result.get("risk_gate_effectiveness",{}),"signal_quality":result.get("signal_quality",{}),"regimes":result.get("regimes",{}),"session_filter":result.get("session_filter",{}),"research_only":True,"orders_placed":0}

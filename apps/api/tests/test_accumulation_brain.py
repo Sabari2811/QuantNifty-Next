@@ -33,7 +33,7 @@ def test_selector_switches_to_early_accumulation_regime():
 
 def test_adaptive_exit_trails_after_exhaustion():
     previous = snap(spot=24700, oi=1020, prev_oi=1010, price=25, prev_price=24, volume=1000)
-    current = snap(spot=24720, oi=1010, prev_oi=1020, price=26, prev_price=25, volume=700)
+    current = snap(spot=24720, oi=1010, prev_oi=1020, price=24.5, prev_price=25, volume=700)
     result = adaptive_exit_state(current, previous, "BULLISH", 24500)
     assert result["action"] in {"TRAIL", "EXIT"}
     assert result["trailing_stop_pct"] > 0

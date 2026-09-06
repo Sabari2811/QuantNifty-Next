@@ -1,0 +1,56 @@
+name: QuantNifty Backtest Gate Evidence
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  backtest-gate-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install browser evidence dependency
+        run: pip install playwright
+      - name: Install Chromium
+        run: playwright install --with-deps chromium
+      - name: Verify deployed backtest gate UI
+        run: |
+          python - <<'PY'
+          import time
+          from playwright.sync_api import sync_playwright
+
+          url = 'https://quantnifty-api.onrender.com/backtest'
+          required = [
+              'Backtest & Validation',
+              'Risk Gate · all decisions',
+              'Execution Gate · entry loop',
+              'READ ONLY',
+          ]
+
+          with sync_playwright() as p:
+              browser = p.chromium.launch(headless=True)
+              page = browser.new_page()
+              last = ''
+              for attempt in range(1, 13):
+                  try:
+                      page.goto(url, wait_until='networkidle', timeout=60000)
+                      last = page.locator('body').inner_text()
+                      missing = [label for label in required if label not in last]
+                      if not missing:
+                          print('BACKTEST_GATE_UI_EVIDENCE=PASS')
+                          print('risk_gate_label=Risk Gate · all decisions')
+                          print('execution_gate_label=Execution Gate · entry loop')
+                          browser.close()
+                          raise SystemExit(0)
+                      print(f'attempt {attempt}/12: missing={missing}')
+                  except Exception as exc:
+                      print(f'attempt {attempt}/12: {exc}')
+                  time.sleep(10)
+              browser.close()
+              raise SystemExit('deployed backtest UI did not expose the reconciled gate labels; last body excerpt: ' + last[:1000])
+          PY

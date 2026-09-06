@@ -116,9 +116,10 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
         recorded_directions[recorded["direction"]] += 1
         recorded_decisions[recorded["decision"]] += 1
         recorded_valid[recorded["validation"]] += 1
-    # Preserve recorded evidence counts even when the replay gate was approved.
     if observations:
-        recorded_directions.clear(); recorded_decisions.clear(); recorded_valid.clear()
+        recorded_directions.clear()
+        recorded_decisions.clear()
+        recorded_valid.clear()
         for row in observations:
             recorded = row["recorded"]
             recorded_directions[recorded["direction"]] += 1
@@ -147,19 +148,31 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
 def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: BacktestConfig, source: str, root: str) -> dict[str, Any]:
     result = validation_report(snapshots, strategy, config)
     overall = result.get("overall") or {}
-    risk_gate = result.get("risk_gate") or {}
+    execution_gate = dict(result.get("risk_gate") or {})
     trades = int(overall.get("trades") or 0)
     historical_valid = result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL"
+    replay_diagnostics = _replay_diagnostics(snapshots, strategy)
+    decision_gate = {
+        "approved": int(replay_diagnostics.get("approved") or 0),
+        "blocked": int(replay_diagnostics.get("blocked") or 0),
+    }
+    total_decisions = decision_gate["approved"] + decision_gate["blocked"]
+    decision_gate["block_rate_pct"] = round(decision_gate["blocked"] / total_decisions * 100, 2) if total_decisions else 0.0
     result.update({
         "source": source,
         "recording_root": root,
         "observations": overall.get("observations", 0),
-        "approved": risk_gate.get("approved", 0),
-        "blocked": risk_gate.get("blocked", 0),
+        # The public risk_gate now represents every evaluated decision observation.
+        # The backtest execution loop may skip new entries while a prior trade is open;
+        # that execution-only count is retained separately for auditability.
+        "approved": decision_gate["approved"],
+        "blocked": decision_gate["blocked"],
+        "risk_gate": decision_gate,
+        "execution_gate": execution_gate,
         "split": {"out_of_sample": result.get("oos") or {}},
         "empirical": historical_valid and trades > 0,
         "historical_evidence_status": "VALID_HISTORICAL" if historical_valid else str((result.get("historical_data") or {}).get("status") or "UNKNOWN"),
-        "replay_diagnostics": _replay_diagnostics(snapshots, strategy),
+        "replay_diagnostics": replay_diagnostics,
     })
     result["tradeability"] = "TRADEABLE_SAMPLE" if trades > 0 else "NO_EXECUTABLE_TRADES"
     result["empirical_status"] = "EMPIRICAL_TRADES" if trades > 0 else "NO_EXECUTABLE_TRADES"

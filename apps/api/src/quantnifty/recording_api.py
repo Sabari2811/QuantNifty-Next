@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from quantnifty.backtest import BacktestConfig, _is_market_session, validation_report
@@ -89,13 +89,16 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
     approved = sum(1 for row in observations if row["risk"]["approved"])
     counterfactual = counterfactual_gate_analysis(snapshots, observations)
     strategy_counts = Counter(row["market_brain"]["strategy_selection"]["selected_strategy"] for row in observations); regime_counts = Counter(row["market_brain"]["regime"]["regime"] for row in observations); pre_move_counts = Counter(row["market_brain"]["pre_move"]["stage"] for row in observations)
-    return {"decision_observations": len(observations), "approved": approved, "blocked": len(observations) - approved, "blocked_by_reason": dict(sorted(blocked_reasons.items(), key=lambda item: (-item[1], item[0]))), "replay_signal_distribution": dict(sorted(replay_directions.items())), "recorded_signal_distribution": dict(sorted(recorded_directions.items())), "recorded_decision_distribution": dict(sorted(recorded_decisions.items())), "recorded_validation_distribution": dict(sorted(recorded_valid.items())), "replay_confidence": {"min": round(min(confidences), 2) if confidences else 0.0, "max": round(max(confidences), 2) if confidences else 0.0, "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0}, "market_brain": {"regime_distribution": dict(sorted(regime_counts.items())), "pre_move_stage_distribution": dict(sorted(pre_move_counts.items())), "strategy_selection_distribution": dict(sorted(strategy_counts.items())), "adaptive_strategy": "RESEARCH_ONLY_NOT_EXECUTION_SWITCHED"}, "counterfactual": counterfactual, "observations": observations, "note": "Diagnostics use the same market-session BACKTEST FinalDecision/Risk path as validation. Counterfactuals use future spot movement only and are research evidence; recorded decisions never override replay gates."}
+    return {"decision_observations": len(observations), "approved": approved, "blocked": len(observations) - approved, "blocked_by_reason": dict(sorted(blocked_reasons.items(), key=lambda item: (-item[1], item[0]))), "replay_signal_distribution": dict(sorted(replay_directions.items())), "recorded_signal_distribution": dict(sorted(recorded_directions.items())), "recorded_decision_distribution": dict(sorted(recorded_decisions.items())), "recorded_validation_distribution": dict(sorted(recorded_valid.items())), "replay_confidence": {"min": round(min(confidences), 2) if confidences else 0.0, "max": round(max(confidences), 2) if confidences else 0.0, "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0}, "market_brain": {"regime_distribution": dict(sorted(regime_counts.items())), "pre_move_stage_distribution": dict(sorted(pre_move_counts.items())), "strategy_selection_distribution": dict(sorted(strategy_counts.items())), "adaptive_strategy": "EXECUTION_SWITCHED" if strategy == "adaptive" else "NOT_SELECTED"}, "counterfactual": counterfactual, "observations": observations, "note": "Diagnostics use the same market-session BACKTEST FinalDecision/Risk path as validation. Counterfactuals use future spot movement only and are research evidence; recorded decisions never override replay gates."}
 
 
 def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: BacktestConfig, source: str, root: str) -> dict[str, Any]:
-    result = validation_report(snapshots, strategy, config); overall = result.get("overall") or {}; execution_gate = dict(result.get("risk_gate") or {}); trades = int(overall.get("trades") or 0); historical_valid = result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL"; replay_diagnostics = _replay_diagnostics(snapshots, strategy)
+    result = validation_report(snapshots, strategy, config)
+    if str(result.get("strategy") or "").lower() != strategy:
+        raise RuntimeError(f"backtest strategy mismatch: requested={strategy}, engine={result.get('strategy')}")
+    overall = result.get("overall") or {}; execution_gate = dict(result.get("risk_gate") or {}); trades = int(overall.get("trades") or 0); historical_valid = result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL"; replay_diagnostics = _replay_diagnostics(snapshots, strategy)
     decision_gate = {"approved": int(replay_diagnostics.get("approved") or 0), "blocked": int(replay_diagnostics.get("blocked") or 0)}; total_decisions = decision_gate["approved"] + decision_gate["blocked"]; decision_gate["block_rate_pct"] = round(decision_gate["blocked"] / total_decisions * 100, 2) if total_decisions else 0.0
-    result.update({"source": source, "recording_root": root, "observations": overall.get("observations", 0), "approved": decision_gate["approved"], "blocked": decision_gate["blocked"], "risk_gate": decision_gate, "execution_gate": execution_gate, "split": {"out_of_sample": result.get("oos") or {}}, "empirical": historical_valid and trades > 0, "historical_evidence_status": "VALID_HISTORICAL" if historical_valid else str((result.get("historical_data") or {}).get("status") or "UNKNOWN"), "replay_diagnostics": replay_diagnostics})
+    result.update({"source": source, "recording_root": root, "observations": overall.get("observations", 0), "approved": decision_gate["approved"], "blocked": decision_gate["blocked"], "risk_gate": decision_gate, "execution_gate": execution_gate, "split": {"out_of_sample": result.get("oos") or {}}, "empirical": historical_valid and trades > 0, "historical_evidence_status": "VALID_HISTORICAL" if historical_valid else str((result.get("historical_data") or {}).get("status") or "UNKNOWN"), "replay_diagnostics": replay_diagnostics, "requested_strategy": strategy, "engine_strategy": result.get("strategy")})
     result["tradeability"] = "TRADEABLE_SAMPLE" if trades > 0 else "NO_EXECUTABLE_TRADES"; result["empirical_status"] = "EMPIRICAL_TRADES" if trades > 0 else "NO_EXECUTABLE_TRADES"; result["performance_status"] = "PERFORMANCE_VALIDATED" if historical_valid and trades > 0 else "NOT_VALIDATED"
     return result
 
@@ -127,7 +130,7 @@ def recording_validation(payload: dict[str, Any]):
     return result
 
 @router.post("/api/v1/recording/upload-validation")
-async def recording_upload_validation(file: UploadFile = File(...), strategy: str = "directional", config: str = "{}"):
+async def recording_upload_validation(file: UploadFile = File(...), strategy: str = Form("directional"), config: str = Form("{}")):
     if Path(file.filename or "").name.lower() != "data_review.txt": raise HTTPException(400, "only data_Review.txt recorder exports are accepted")
     try:
         import json

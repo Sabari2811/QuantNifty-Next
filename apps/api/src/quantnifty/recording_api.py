@@ -99,35 +99,36 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
     recorded_decisions: Counter[str] = Counter()
     recorded_valid: Counter[str] = Counter()
     confidences: list[float] = []
-    ordered = [snapshot for snapshot in snapshots if _is_market_session(snapshot)]
-    previous = None
-    decisions = 0
-    approved = 0
-    for snapshot in ordered[:-1]:
-        decision = final_decision(snapshot, previous, strategy, "BACKTEST")
-        previous = snapshot
-        decisions += 1
-        signal = decision.get("signal") or {}
-        direction = str(signal.get("direction") or "NEUTRAL")
+    observations = _observation_diagnostics(snapshots, strategy)
+    for row in observations:
+        direction = row["replay"]["direction"]
         replay_directions[direction] += 1
         try:
-            confidences.append(float(signal.get("confidence") or 0.0))
+            confidences.append(float(row["replay"].get("confidence") or 0.0))
         except (TypeError, ValueError):
             pass
-        risk = decision.get("risk") or {}
-        if risk.get("approved"):
-            approved += 1
-        else:
-            for reason in risk.get("reasons") or []:
-                blocked_reasons[str(reason)] += 1
-        recorded = _recorded_evidence(snapshot)
+        risk = row["risk"]
+        if risk["approved"]:
+            continue
+        for reason in risk["blocked_reasons"]:
+            blocked_reasons[str(reason)] += 1
+        recorded = row["recorded"]
         recorded_directions[recorded["direction"]] += 1
         recorded_decisions[recorded["decision"]] += 1
         recorded_valid[recorded["validation"]] += 1
+    # Preserve recorded evidence counts even when the replay gate was approved.
+    if observations:
+        recorded_directions.clear(); recorded_decisions.clear(); recorded_valid.clear()
+        for row in observations:
+            recorded = row["recorded"]
+            recorded_directions[recorded["direction"]] += 1
+            recorded_decisions[recorded["decision"]] += 1
+            recorded_valid[recorded["validation"]] += 1
+    approved = sum(1 for row in observations if row["risk"]["approved"])
     return {
-        "decision_observations": decisions,
+        "decision_observations": len(observations),
         "approved": approved,
-        "blocked": decisions - approved,
+        "blocked": len(observations) - approved,
         "blocked_by_reason": dict(sorted(blocked_reasons.items(), key=lambda item: (-item[1], item[0]))),
         "replay_signal_distribution": dict(sorted(replay_directions.items())),
         "recorded_signal_distribution": dict(sorted(recorded_directions.items())),
@@ -138,7 +139,7 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
             "max": round(max(confidences), 2) if confidences else 0.0,
             "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0,
         },
-        "observations": _observation_diagnostics(snapshots, strategy),
+        "observations": observations,
         "note": "Diagnostics describe the same market-session BACKTEST FinalDecision/Risk path used by validation; recorded decision evidence is comparison-only and never overrides the replay gates.",
     }
 

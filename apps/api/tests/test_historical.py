@@ -31,3 +31,16 @@ def test_rejects_incomplete_option_leg():
 def test_live_provider_data_is_not_classified_as_historical():
     result = historical_data_status([snap("2026-09-01T09:15:00+00:00", "LIVE_PROVIDER")])
     assert result["status"] == "NON_HISTORICAL"
+    assert result["learning_ready"] is False
+
+
+def test_short_historical_sample_is_not_learning_ready():
+    result = historical_data_status([
+        snap("2025-09-01T09:15:00+00:00"),
+        snap("2026-09-01T09:15:00+00:00"),
+    ])
+    assert result["trading_days"] == 2
+    assert result["calendar_span_days"] >= 365
+    assert result["learning_ready"] is False
+    assert result["learning_status"] == "INSUFFICIENT_1Y_DATA"
+    assert result["days_missing"] == 250

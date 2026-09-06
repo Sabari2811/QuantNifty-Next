@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from quantnifty.historical import canonicalize_snapshot, canonicalize_snapshots
 from quantnifty.report_importer import load_report_to_temporary_root
 
 IST = ZoneInfo("Asia/Kolkata")
+_AUX_HEADER = re.compile(rb"FILE : (?P<name>analytics\.json|decision\.json)\r\nPATH : (?P<path>[^\r\n]+)\r\n(?P<sep>=+)(?:\r\n|\n)")
 
 
 def _number(value: Any) -> float:
@@ -45,6 +47,90 @@ def _read_parquet(path: Path) -> list[dict[str, Any]]:
         return parquet.read_table(path).to_pylist()
     except Exception as exc:
         raise ValueError(f"unable to decode {path.name}: {exc}") from exc
+
+
+def _extract_auxiliary_json(report: Path, destination: Path) -> int:
+    """Extract analytics/decision JSON omitted by the binary snapshot importer."""
+    data = report.read_bytes()
+    matches = list(_AUX_HEADER.finditer(data))
+    written = 0
+    for index, match in enumerate(matches):
+        original = match.group("path").decode("utf-8", "replace")
+        if "\\data\\snapshots\\" not in original.lower():
+            continue
+        relative = Path(*original.replace("\\", "/").split("/data/snapshots/", 1)[1].split("/"))
+        content_start = match.end()
+        content_end = matches[index + 1].start() if index + 1 < len(matches) else len(data)
+        framed = data[content_start:content_end]
+        separator = re.search(rb"(?:\r\n){1,3}={10,}\r\n(?:FILE :|$)", framed)
+        if separator:
+            framed = framed[:separator.start()]
+        content = framed.strip(b"\r\n=")
+        try:
+            json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        output = destination / relative
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(content + b"\n")
+        written += 1
+    return written
+
+
+def _parse_signal_repr(value: Any) -> dict[str, Any]:
+    raw = str(value or "")
+    match = re.search(r"Signal\(name='([^']*)',\s*confidence=([-+]?\d+(?:\.\d+)?)\)", raw)
+    if not match:
+        return {}
+    confidence = _number(match.group(2))
+    return {"name": match.group(1), "confidence": int(confidence) if confidence.is_integer() else confidence}
+
+
+def _parse_validation_repr(value: Any) -> dict[str, Any]:
+    raw = str(value or "")
+    match = re.search(r"ValidationResult\(valid=(True|False),\s*grade='([^']*)',\s*confidence=([-+]?\d+(?:\.\d+)?),\s*risk_multiplier=([-+]?\d+(?:\.\d+)?),\s*warnings=(\[[^]]*\])\)", raw)
+    if not match:
+        return {}
+    confidence = _number(match.group(3))
+    risk_multiplier = _number(match.group(4))
+    return {
+        "valid": match.group(1) == "True",
+        "grade": match.group(2),
+        "confidence": int(confidence) if confidence.is_integer() else confidence,
+        "risk_multiplier": risk_multiplier,
+        "warnings": [],
+    }
+
+
+def _parse_trade_repr(value: Any) -> dict[str, Any]:
+    raw = str(value or "")
+    if not raw.startswith("Trade("):
+        return {}
+    result: dict[str, Any] = {}
+    for field, token in re.findall(r"(contract|option_type|strike|entry|stop_loss|target1|target2|risk_reward)=((?:'[^']*')|(?:[^,\)]+))", raw):
+        token = token.strip()
+        if token.startswith("'") and token.endswith("'"):
+            result[field] = token[1:-1]
+        else:
+            result[field] = _number(token)
+    return result
+
+
+def _normalize_recorded_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    """Normalize recorder repr strings into stable comparison-only evidence."""
+    if not decision:
+        return {}
+    out = dict(decision)
+    signal = _parse_signal_repr(out.get("signal"))
+    if signal:
+        out["signal"] = signal
+    validation = _parse_validation_repr(out.get("validation"))
+    if validation:
+        out["validation"] = validation
+    trade = _parse_trade_repr(out.get("trade"))
+    if trade:
+        out["trade"] = trade
+    return out
 
 
 def _recorded_intelligence(analytics: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -126,7 +212,7 @@ def load_snapshot_bundle(directory: str | Path) -> dict[str, Any]:
             rows.append(leg)
     snapshot = {"timestamp": _timestamp(str(runtime.get("timestamp", ""))), "spot": _number(runtime.get("spot")), "expiry": str(runtime.get("expiry") or ""), "symbol": str(runtime.get("symbol") or "NIFTY"), "regime": str(runtime.get("regime") or ""), "runtime_status": str(runtime.get("runtime_status") or ""), "recording_path": str(root), "option_chain": rows, "data_integrity": "RECORDED_HISTORICAL"}
     snapshot.update(_recorded_intelligence(analytics, rows))
-    snapshot["recorded_decision"] = decision
+    snapshot["recorded_decision"] = _normalize_recorded_decision(decision)
     return canonicalize_snapshot(snapshot, "RECORDED_HISTORICAL")
 
 
@@ -145,5 +231,6 @@ def load_recording(root: str | Path) -> list[dict[str, Any]]:
         if base.suffix.lower() != ".txt":
             raise ValueError(f"recording path must be a snapshot directory or .txt recorder export: {base}")
         with load_report_to_temporary_root(base) as temp:
+            _extract_auxiliary_json(base, Path(temp.name))
             return _load_directory(Path(temp))
     return _load_directory(base)

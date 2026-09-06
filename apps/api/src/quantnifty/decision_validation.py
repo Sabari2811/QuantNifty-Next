@@ -4,7 +4,6 @@ from typing import Any
 
 
 VALID_DIRECTIONS = {"BULLISH", "BEARISH", "NEUTRAL"}
-VALID_PHASES = {"PRE_OPEN", "NORMAL_ADAPTIVE", "CAS_REENTRY", "CLOSED", "UNKNOWN"}
 
 
 def _num(value: Any) -> bool:
@@ -17,10 +16,11 @@ def _num(value: Any) -> bool:
 
 def validate_snapshot(data: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:
     errors: list[str] = []
+    warnings: list[str] = []
     if not isinstance(data, dict):
-        return {"valid": False, "stage": "input", "errors": ["snapshot_not_mapping"]}
+        return {"valid": False, "stage": "input", "errors": ["snapshot_not_mapping"], "warnings": []}
     if not str(data.get("timestamp") or "").strip():
-        errors.append("missing_timestamp")
+        warnings.append("missing_timestamp_session_policy_will_block")
     if not _num(data.get("spot")) or float(data.get("spot") or 0) <= 0:
         errors.append("invalid_spot")
     integrity = str(data.get("data_integrity") or "").upper()
@@ -29,7 +29,7 @@ def validate_snapshot(data: dict[str, Any], mode: str = "LIVE") -> dict[str, Any
         errors.append(f"data_integrity_expected_{expected}")
     if not isinstance(data.get("option_chain"), list):
         errors.append("option_chain_not_list")
-    return {"valid": not errors, "stage": "input", "errors": errors, "mode": str(mode).upper(), "data_integrity": integrity}
+    return {"valid": not errors, "stage": "input", "errors": errors, "warnings": warnings, "mode": str(mode).upper(), "data_integrity": integrity}
 
 
 def validate_signal(signal: dict[str, Any]) -> dict[str, Any]:
@@ -104,4 +104,5 @@ def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = 
         "execution_plan": validate_execution_plan(plan if isinstance(plan, dict) else {}, signal if isinstance(signal, dict) else {}, risk if isinstance(risk, dict) else {}),
     }
     errors = [f"{name}:{err}" for name, stage in stages.items() for err in stage["errors"]]
-    return {"valid": not errors, "stages": stages, "errors": errors}
+    warnings = [f"{name}:{warning}" for name, stage in stages.items() for warning in stage.get("warnings", [])]
+    return {"valid": not errors, "stages": stages, "errors": errors, "warnings": warnings}

@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import RedirectResponse
 
-from quantnifty.backtest import BacktestConfig, validation_report
+from quantnifty.backtest import BacktestConfig, _is_market_session, validation_report
 from quantnifty.institutional_engine import final_decision
 from quantnifty.recording_loader import load_recording
 
@@ -44,10 +44,11 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
     replay_directions: Counter[str] = Counter()
     recorded_directions: Counter[str] = Counter()
     confidences: list[float] = []
+    ordered = [snapshot for snapshot in snapshots if _is_market_session(snapshot)]
     previous = None
     decisions = 0
     approved = 0
-    for snapshot in snapshots[:-1]:
+    for snapshot in ordered[:-1]:
         decision = final_decision(snapshot, previous, strategy, "BACKTEST")
         previous = snapshot
         decisions += 1
@@ -85,7 +86,7 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
             "max": round(max(confidences), 2) if confidences else 0.0,
             "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0,
         },
-        "note": "Diagnostics describe the same BACKTEST FinalDecision/Risk path used by validation; they do not alter gates or create trades.",
+        "note": "Diagnostics describe the same market-session BACKTEST FinalDecision/Risk path used by validation; they do not alter gates or create trades.",
     }
 
 

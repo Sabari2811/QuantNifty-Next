@@ -43,6 +43,8 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
     blocked_reasons: Counter[str] = Counter()
     replay_directions: Counter[str] = Counter()
     recorded_directions: Counter[str] = Counter()
+    recorded_decisions: Counter[str] = Counter()
+    recorded_valid: Counter[str] = Counter()
     confidences: list[float] = []
     ordered = [snapshot for snapshot in snapshots if _is_market_session(snapshot)]
     previous = None
@@ -74,6 +76,11 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
             recorded_directions["BEARISH"] += 1
         else:
             recorded_directions["NEUTRAL"] += 1
+        recorded_decision = snapshot.get("recorded_decision") or {}
+        name = str((recorded_decision.get("signal") or {}).get("name") or "UNKNOWN").upper()
+        recorded_decisions[name] += 1
+        valid = (recorded_decision.get("validation") or {}).get("valid")
+        recorded_valid["VALID" if valid is True else "INVALID" if valid is False else "UNKNOWN"] += 1
     return {
         "decision_observations": decisions,
         "approved": approved,
@@ -81,12 +88,14 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
         "blocked_by_reason": dict(sorted(blocked_reasons.items(), key=lambda item: (-item[1], item[0]))),
         "replay_signal_distribution": dict(sorted(replay_directions.items())),
         "recorded_signal_distribution": dict(sorted(recorded_directions.items())),
+        "recorded_decision_distribution": dict(sorted(recorded_decisions.items())),
+        "recorded_validation_distribution": dict(sorted(recorded_valid.items())),
         "replay_confidence": {
             "min": round(min(confidences), 2) if confidences else 0.0,
             "max": round(max(confidences), 2) if confidences else 0.0,
             "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0,
         },
-        "note": "Diagnostics describe the same market-session BACKTEST FinalDecision/Risk path used by validation; they do not alter gates or create trades.",
+        "note": "Diagnostics describe the same market-session BACKTEST FinalDecision/Risk path used by validation; recorded decision evidence is comparison-only and never overrides the replay gates.",
     }
 
 
@@ -94,28 +103,19 @@ def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: Ba
     result = validation_report(snapshots, strategy, config)
     overall = result.get("overall") or {}
     risk_gate = result.get("risk_gate") or {}
-    diagnostics = _replay_diagnostics(snapshots, strategy)
-    approved = risk_gate.get("approved", 0)
-    trades = overall.get("trades", 0)
-    if approved == 0:
-        validation_quality = "NO_APPROVED_SIGNALS"
-    elif trades == 0:
-        validation_quality = "NO_EXECUTABLE_TRADES"
-    else:
-        validation_quality = "TRADEABLE_SAMPLE"
-    # Keep the compact validation response compatible with the existing UI,
-    # while retaining the canonical validation_report fields.
     result.update({
         "source": source,
         "recording_root": root,
         "observations": overall.get("observations", 0),
-        "approved": approved,
+        "approved": risk_gate.get("approved", 0),
         "blocked": risk_gate.get("blocked", 0),
         "split": {"out_of_sample": result.get("oos") or {}},
         "empirical": result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL",
-        "validation_quality": validation_quality,
-        "replay_diagnostics": diagnostics,
+        "replay_diagnostics": _replay_diagnostics(snapshots, strategy),
     })
+    trades = int(overall.get("trades") or 0)
+    result["tradeability"] = "TRADEABLE_SAMPLE" if trades > 0 else "NO_EXECUTABLE_TRADES"
+    result["empirical_status"] = "EMPIRICAL_TRADES" if trades > 0 else "NO_EXECUTABLE_TRADES"
     return result
 
 

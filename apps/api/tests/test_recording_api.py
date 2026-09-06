@@ -71,6 +71,35 @@ def test_observation_diagnostics_explain_each_authoritative_gate(monkeypatch):
     assert rows[1]["recorded"]["strike_selection"][0]["strike"] == 24500
 
 
+def test_validated_result_reconciles_public_gate_counts_with_replay_diagnostics(monkeypatch):
+    monkeypatch.setattr(
+        "quantnifty.recording_api.validation_report",
+        lambda snapshots, strategy, config: {
+            "status": "OK",
+            "strategy": strategy,
+            "lookahead_free": True,
+            "historical_data": {"status": "VALID_HISTORICAL"},
+            "oos": {"observations": 5, "trades": 0, "net_pnl": 0.0, "win_rate_pct": 0.0},
+            "overall": {"observations": 23, "trades": 1, "net_pnl": -127.23},
+            "risk_gate": {"approved": 1, "blocked": 18, "block_rate_pct": 94.74},
+            "signal_quality": {},
+            "regimes": {},
+            "session_filter": {"observations": 23},
+            "research_only": True,
+            "orders_placed": 0,
+        },
+    )
+    monkeypatch.setattr(
+        "quantnifty.recording_api._replay_diagnostics",
+        lambda snapshots, strategy: {"decision_observations": 22, "approved": 3, "blocked": 19},
+    )
+    result = _validated_result([], "directional", object(), "UPLOADED_RECORDED_HISTORICAL", "ephemeral-upload")
+    assert result["risk_gate"] == {"approved": 3, "blocked": 19, "block_rate_pct": 86.36}
+    assert result["approved"] == 3
+    assert result["blocked"] == 19
+    assert result["execution_gate"] == {"approved": 1, "blocked": 18, "block_rate_pct": 94.74}
+
+
 def test_validated_result_does_not_call_zero_trade_run_performance_validated(monkeypatch):
     monkeypatch.setattr(
         "quantnifty.recording_api.validation_report",

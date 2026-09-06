@@ -154,3 +154,18 @@ def test_validated_result_exposes_ui_compatibility_fields(monkeypatch):
     assert result["tradeability"] == "TRADEABLE_SAMPLE"
     assert result["empirical_status"] == "EMPIRICAL_TRADES"
     assert result["performance_status"] == "PERFORMANCE_VALIDATED"
+
+
+def test_upload_validation_reads_strategy_from_multipart_form(monkeypatch):
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    monkeypatch.setattr("quantnifty.recording_api.load_recording", lambda path: [])
+    monkeypatch.setattr("quantnifty.recording_api._validated_result", lambda snapshots, strategy, config, source, root: {"status": "OK", "strategy": strategy})
+    response = client.post(
+        "/api/v1/recording/upload-validation",
+        files={"file": ("data_Review.txt", b"test", "text/plain")},
+        data={"strategy": "adaptive", "config": "{}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["strategy"] == "adaptive"

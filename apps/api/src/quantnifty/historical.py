@@ -6,6 +6,8 @@ from typing import Any, Iterable
 CANONICAL_PROVENANCE = {"RECORDED_HISTORICAL", "LIVE_PROVIDER"}
 REQUIRED_SNAPSHOT_KEYS = ("timestamp", "spot", "option_chain")
 REQUIRED_LEG_KEYS = ("strike", "side", "security_id", "last_price", "oi", "volume")
+MIN_LEARNING_TRADING_DAYS = 252
+MIN_LEARNING_CALENDAR_DAYS = 365
 
 
 def _float(value: Any) -> float:
@@ -86,7 +88,7 @@ def canonicalize_snapshots(snapshots: Iterable[dict[str, Any]], provenance: str 
 def historical_data_status(snapshots: Iterable[dict[str, Any]]) -> dict[str, Any]:
     values = list(snapshots)
     if not values:
-        return {"status": "NOT_PROVIDED", "observations": 0, "provenance": None}
+        return {"status": "NOT_PROVIDED", "observations": 0, "provenance": None, "learning_ready": False, "minimum_learning_trading_days": MIN_LEARNING_TRADING_DAYS, "minimum_learning_calendar_days": MIN_LEARNING_CALENDAR_DAYS}
     provenance = {str(value.get("data_integrity") or "UNKNOWN") for value in values if isinstance(value, dict)}
     if provenance == {"RECORDED_HISTORICAL"}:
         status = "VALID_HISTORICAL"
@@ -94,4 +96,27 @@ def historical_data_status(snapshots: Iterable[dict[str, Any]]) -> dict[str, Any
         status = "MIXED_PROVENANCE"
     else:
         status = "NON_HISTORICAL"
-    return {"status": status, "observations": len(values), "provenance": sorted(provenance)}
+    dates: set[str] = set()
+    parsed: list[datetime] = []
+    for value in values:
+        try:
+            dt = datetime.fromisoformat(str(value.get("timestamp") or "").replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        dates.add(dt.date().isoformat())
+        parsed.append(dt)
+    calendar_span_days = (max(parsed) - min(parsed)).days + 1 if parsed else 0
+    trading_days = len(dates)
+    learning_ready = status == "VALID_HISTORICAL" and trading_days >= MIN_LEARNING_TRADING_DAYS and calendar_span_days >= MIN_LEARNING_CALENDAR_DAYS
+    return {
+        "status": status,
+        "observations": len(values),
+        "provenance": sorted(provenance),
+        "trading_days": trading_days,
+        "calendar_span_days": calendar_span_days,
+        "minimum_learning_trading_days": MIN_LEARNING_TRADING_DAYS,
+        "minimum_learning_calendar_days": MIN_LEARNING_CALENDAR_DAYS,
+        "learning_ready": learning_ready,
+        "learning_status": "READY_FOR_1Y_LEARNING" if learning_ready else "INSUFFICIENT_1Y_DATA",
+        "days_missing": max(0, MIN_LEARNING_TRADING_DAYS - trading_days),
+    }

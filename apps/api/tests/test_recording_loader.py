@@ -9,6 +9,7 @@ from quantnifty.recording_loader import load_recording, load_snapshot_bundle
 def write_bundle(root, timestamp="04-Aug-2026 13:02:21"):
     root.mkdir(parents=True)
     (root / "runtime.json").write_text(json.dumps({"timestamp": timestamp, "spot": 24383.6, "symbol": "NIFTY", "expiry": "08/04/2026 14:00", "regime": "RANGE", "runtime_status": "RUNNING"}), encoding="utf-8")
+    (root / "decision.json").write_text(json.dumps({"signal": {"name": "WAIT", "confidence": 70}, "valid": False, "validation": {"valid": False, "grade": "F"}}), encoding="utf-8")
     option = pa.Table.from_pylist([{"Strike": 24400, "CE_ID": 1, "CE_LTP": 100.0, "CE_OI": 1000, "CE_VOLUME": 5000, "PE_ID": 2, "PE_LTP": 120.0, "PE_OI": 1100, "PE_VOLUME": 5100}])
     greeks = pa.Table.from_pylist([{"Strike": 24400, "CE_IV": 0.10, "CE_DELTA": 0.48, "CE_GAMMA": 0.02, "CE_THETA": -0.01, "CE_VEGA": 0.03, "PE_IV": 0.11, "PE_DELTA": -0.52, "PE_GAMMA": 0.02, "PE_THETA": -0.01, "PE_VEGA": 0.03}])
     pq.write_table(option, root / "option_chain.parquet")
@@ -24,6 +25,8 @@ def test_load_snapshot_bundle_builds_canonical_rows(tmp_path):
     assert snapshot["timestamp"].endswith("+05:30")
     assert {row["side"] for row in snapshot["option_chain"]} == {"CE", "PE"}
     assert snapshot["option_chain"][0]["gamma"] == 0.02
+    assert snapshot["recorded_decision"]["signal"]["name"] == "WAIT"
+    assert snapshot["recorded_decision"]["validation"]["valid"] is False
 
 
 def test_load_recording_sorts_bundles(tmp_path):

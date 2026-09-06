@@ -36,7 +36,7 @@ def test_final_decision_exposes_validated_stages():
 
 
 def test_invalid_live_data_cannot_be_approved():
-    bad = snapshot(); bad["timestamp"] = ""
+    bad = snapshot(); bad["spot"] = 0
     result = final_decision(bad, None, "directional", "LIVE")
     assert result["status"] == "NO_TRADE"
     assert not result["risk"]["approved"]

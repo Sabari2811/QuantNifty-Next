@@ -12,8 +12,6 @@ from fastapi.responses import RedirectResponse
 from quantnifty.backtest import BacktestConfig, validation_report
 from quantnifty.recording_loader import load_recording
 
-# Mounted once by main.py. Keep the browser compatibility route here so the
-# public UI works with both /backtest and the commonly used /backtest.html URL.
 router = APIRouter(tags=["historical-validation"])
 MAX_REPORT_BYTES = 25 * 1024 * 1024
 
@@ -40,9 +38,17 @@ def _strategy(payload: dict[str, Any]) -> str:
 
 def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: BacktestConfig, source: str, root: str) -> dict[str, Any]:
     result = validation_report(snapshots, strategy, config)
+    overall = result.get("overall") or {}
+    risk_gate = result.get("risk_gate") or {}
+    # Keep the compact validation response compatible with the existing UI,
+    # while retaining the canonical validation_report fields.
     result.update({
         "source": source,
         "recording_root": root,
+        "observations": overall.get("observations", 0),
+        "approved": risk_gate.get("approved", 0),
+        "blocked": risk_gate.get("blocked", 0),
+        "split": {"out_of_sample": result.get("oos") or {}},
         "empirical": result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL",
     })
     return result
@@ -89,16 +95,8 @@ def recording_validation(payload: dict[str, Any]):
 
 
 @router.post("/api/v1/recording/upload-validation")
-async def recording_upload_validation(
-    file: UploadFile = File(...),
-    strategy: str = "directional",
-    config: str = "{}",
-):
-    """Run read-only historical validation from an uploaded data_Review export.
-
-    The upload is streamed to an ephemeral temporary file and removed after
-    validation. It is never persisted as application data.
-    """
+async def recording_upload_validation(file: UploadFile = File(...), strategy: str = "directional", config: str = "{}"):
+    """Run read-only historical validation from an uploaded data_Review export."""
     if Path(file.filename or "").name.lower() != "data_review.txt":
         raise HTTPException(400, "only data_Review.txt recorder exports are accepted")
     try:

@@ -97,13 +97,15 @@ def market_regime(snapshot: dict[str, Any], previous: dict[str, Any] | None = No
     gex = _f(snapshot.get("gex"))
     flip = snapshot.get("gamma_flip")
     spot = _spot(snapshot)
+    prev_spot = _spot(previous)
     em = _f((snapshot.get("expected_move") or {}).get("move"))
     pre = pre_move_state(snapshot, previous)
+    signed_spot_move = _pct(spot, prev_spot) if prev_spot else 0.0
     if liquidity < 35:
         regime = "LIQUIDITY_RISK"
-    elif pre["trigger"] and pre["pressure_bias"] == "BULLISH":
+    elif pre["trigger"] and pre["pressure_bias"] == "BULLISH" and bias != "BEARISH" and signed_spot_move >= 0:
         regime = "BREAKOUT_UP"
-    elif pre["trigger"] and pre["pressure_bias"] == "BEARISH":
+    elif pre["trigger"] and (pre["pressure_bias"] == "BEARISH" or bias == "BEARISH") and signed_spot_move <= 0:
         regime = "BREAKDOWN_DOWN"
     elif flip is not None and abs(spot - _f(flip)) <= max(25.0, em * 0.10):
         regime = "GAMMA_TRANSITION"
@@ -177,7 +179,7 @@ def counterfactual_gate_analysis(snapshots: list[dict[str, Any]], observation_ro
     def summarize(items: list[dict[str, Any]], direction: str | None = None) -> dict[str, Any]:
         outcomes = []
         for item in items:
-            for d, outcome in item["outcomes"].items():
+            for d, outcome in item.get("outcomes", {}).items():
                 if direction is None or d == direction:
                     outcomes.append(outcome)
         wins = sum(o.get("status") == "WIN" for o in outcomes)
@@ -185,4 +187,4 @@ def counterfactual_gate_analysis(snapshots: list[dict[str, Any]], observation_ro
         flat = sum(o.get("status") == "FLAT" for o in outcomes)
         total = wins + losses + flat
         return {"evaluated": total, "wins": wins, "losses": losses, "flat": flat, "win_rate_pct": round(wins / total * 100, 2) if total else 0.0}
-    return {"method": "SPOT_DIRECTIONAL_COUNTERFACTUAL", "research_only": True, "blocked_observations": len(blocked), "all_blocked_summary": summarize(blocked), "bullish_summary": summarize(blocked, "BULLISH"), "bearish_summary": summarize(blocked, "BEARISH"), "by_block_reason": {k: summarize(v) for k, v in sorted(by_reason.items())}, "observations": results, "warning": "Counterfactual outcomes are not executed trades and use future spot movement only; they must not be mixed into empirical option P&L."}
+    return {"method": "SPOT_DIRECTIONAL_COUNTERFACTUAL", "research_only": True, "blocked_observations": len(blocked), "all_blocked_summary": summarize(results), "bullish_summary": summarize(results, "BULLISH"), "bearish_summary": summarize(results, "BEARISH"), "by_block_reason": {k: summarize(v) for k, v in sorted(by_reason.items())}, "observations": results, "warning": "Counterfactual outcomes are not executed trades and use future spot movement only; they must not be mixed into empirical option P&L."}

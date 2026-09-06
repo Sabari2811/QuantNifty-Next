@@ -41,12 +41,6 @@ def _strategy(payload: dict[str, Any]) -> str:
 
 @router.get("/backtest", include_in_schema=False)
 def backtest_page():
-    """Serve the Backtest UI with the currently supported strategy modes.
-
-    The HTML remains the canonical static artifact, but the response is
-    normalized here so a stale browser/edge copy cannot hide a newly supported
-    strategy option. No validation is performed by this route.
-    """
     path = Path(__file__).resolve().parent / "web" / "backtest.html"
     html = path.read_text(encoding="utf-8")
     marker = '<option value="gamma_blast">Gamma Blast</option>'
@@ -72,7 +66,7 @@ def _observation_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> 
     for index, snapshot in enumerate(ordered[:-1]):
         decision = final_decision(snapshot, previous, strategy, "BACKTEST"); previous = snapshot
         signal = decision.get("signal") or {}; risk = decision.get("risk") or {}; plan = decision.get("execution_plan") or {}; prev = ordered[index - 1] if index else None
-        rows.append({"index": index, "timestamp": snapshot.get("timestamp"), "spot": snapshot.get("spot"), "replay": {"direction": str(signal.get("direction") or "NEUTRAL"), "confidence": signal.get("confidence"), "scores": signal.get("scores") or {}, "evidence": signal.get("evidence") or []}, "risk": {"approved": bool(risk.get("approved")), "gates": risk.get("gates") or {}, "blocked_reasons": risk.get("reasons") or []}, "execution": {"status": plan.get("status"), "instrument": plan.get("instrument"), "execution_enabled": False}, "recorded": _recorded_evidence(snapshot), "market_brain": {"regime": market_regime(snapshot, prev), "pre_move": pre_move_state(snapshot, prev), "strategy_selection": strategy_selector(snapshot, prev)}})
+        rows.append({"index": index, "timestamp": snapshot.get("timestamp"), "spot": snapshot.get("spot"), "replay": {"direction": str(signal.get("direction") or "NEUTRAL"), "confidence": signal.get("confidence"), "scores": signal.get("scores") or {}, "evidence": signal.get("evidence") or []}, "risk": {"approved": bool(risk.get("approved")), "gates": risk.get("gates") or {}, "blocked_reasons": risk.get("reasons") or []}, "execution": {"status": plan.get("status"), "instrument": plan.get("instrument"), "execution_enabled": False}, "recorded": _recorded_evidence(snapshot), "market_brain": {"regime": market_regime(snapshot, prev), "pre_move": pre_move_state(snapshot, prev), "strategy_selection": strategy_selector(snapshot, prev)}, "validation": decision.get("validation") or {}})
     return rows
 
 
@@ -89,7 +83,8 @@ def _replay_diagnostics(snapshots: list[dict[str, Any]], strategy: str) -> dict[
     approved = sum(1 for row in observations if row["risk"]["approved"])
     counterfactual = counterfactual_gate_analysis(snapshots, observations)
     strategy_counts = Counter(row["market_brain"]["strategy_selection"]["selected_strategy"] for row in observations); regime_counts = Counter(row["market_brain"]["regime"]["regime"] for row in observations); pre_move_counts = Counter(row["market_brain"]["pre_move"]["stage"] for row in observations)
-    return {"decision_observations": len(observations), "approved": approved, "blocked": len(observations) - approved, "blocked_by_reason": dict(sorted(blocked_reasons.items(), key=lambda item: (-item[1], item[0]))), "replay_signal_distribution": dict(sorted(replay_directions.items())), "recorded_signal_distribution": dict(sorted(recorded_directions.items())), "recorded_decision_distribution": dict(sorted(recorded_decisions.items())), "recorded_validation_distribution": dict(sorted(recorded_valid.items())), "replay_confidence": {"min": round(min(confidences), 2) if confidences else 0.0, "max": round(max(confidences), 2) if confidences else 0.0, "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0}, "market_brain": {"regime_distribution": dict(sorted(regime_counts.items())), "pre_move_stage_distribution": dict(sorted(pre_move_counts.items())), "strategy_selection_distribution": dict(sorted(strategy_counts.items())), "adaptive_strategy": "EXECUTION_SWITCHED" if strategy == "adaptive" else "NOT_SELECTED"}, "counterfactual": counterfactual, "observations": observations, "note": "Diagnostics use the same market-session BACKTEST FinalDecision/Risk path as validation. Counterfactuals use future spot movement only and are research evidence; recorded decisions never override replay gates."}
+    valid_decisions = sum(1 for row in observations if (row.get("validation") or {}).get("valid") is True)
+    return {"decision_observations": len(observations), "approved": approved, "blocked": len(observations) - approved, "blocked_by_reason": dict(sorted(blocked_reasons.items(), key=lambda item: (-item[1], item[0]))), "replay_signal_distribution": dict(sorted(replay_directions.items())), "recorded_signal_distribution": dict(sorted(recorded_directions.items())), "recorded_decision_distribution": dict(sorted(recorded_decisions.items())), "recorded_validation_distribution": dict(sorted(recorded_valid.items())), "replay_confidence": {"min": round(min(confidences), 2) if confidences else 0.0, "max": round(max(confidences), 2) if confidences else 0.0, "avg": round(sum(confidences) / len(confidences), 2) if confidences else 0.0}, "validation": {"valid": valid_decisions, "invalid": len(observations) - valid_decisions}, "market_brain": {"regime_distribution": dict(sorted(regime_counts.items())), "pre_move_stage_distribution": dict(sorted(pre_move_counts.items())), "strategy_selection_distribution": dict(sorted(strategy_counts.items())), "adaptive_strategy": "EXECUTION_SWITCHED" if strategy == "adaptive" else "NOT_SELECTED"}, "counterfactual": counterfactual, "observations": observations, "note": "Diagnostics use the same market-session BACKTEST FinalDecision/Risk path as validation. Counterfactuals use future spot movement only and are research evidence; recorded decisions never override replay gates."}
 
 
 def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: BacktestConfig, source: str, root: str) -> dict[str, Any]:
@@ -151,3 +146,26 @@ async def recording_upload_validation(file: UploadFile = File(...), strategy: st
     except HTTPException: raise
     except (OSError, RuntimeError, ValueError) as exc: raise HTTPException(422, f"historical report could not be validated: {exc}") from exc
     finally: await file.close()
+
+
+@router.get("/api/v1/final-decision")
+async def unified_final_decision(strategy: str = "adaptive"):
+    """Canonical live decision route; all strategies use FinalDecision and stay read-only."""
+    mode = str(strategy or "adaptive").strip().lower()
+    if mode not in {"directional", "gamma_blast", "adaptive"}:
+        raise HTTPException(400, "strategy must be directional, gamma_blast, or adaptive")
+    try:
+        from quantnifty.main import cache, snapshot
+        data = await snapshot()
+        result = final_decision(data, cache.get("previous_snapshot"), mode, "LIVE")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"mode": "READ_ONLY", "strategy": mode, "timestamp": data.get("timestamp"), "spot": data.get("spot"), "decision": result}
+
+
+@router.get("/api/v1/decision")
+async def unified_decision(strategy: str = "adaptive"):
+    """Compatibility route for dashboard clients; adaptive is now a first-class strategy."""
+    return await unified_final_decision(strategy)

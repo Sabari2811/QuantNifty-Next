@@ -11,7 +11,7 @@ from quantnifty.historical import canonicalize_snapshot, canonicalize_snapshots
 from quantnifty.report_importer import load_report_to_temporary_root
 
 IST = ZoneInfo("Asia/Kolkata")
-_AUX_HEADER = re.compile(rb"FILE : (analytics\.json|decision\.json)\r\nPATH : ([^\r\n]+)\r\n=+(?:\r\n|\n)")
+_AUX_HEADER = re.compile(rb"FILE : (analytics\\.json|decision\\.json)\\r\\nPATH : ([^\\r\\n]+)\\r\\n=+(?:\\r\\n|\\n)")
 
 
 def _number(value: Any) -> float:
@@ -44,7 +44,7 @@ def _extract_auxiliary_json(report: Path, destination: Path) -> int:
     data = report.read_bytes(); matches = list(_AUX_HEADER.finditer(data)); written = 0
     for index, match in enumerate(matches):
         original = match.group(2).decode("utf-8", "replace")
-        if "\\data\\snapshots\\" not in original.lower(): continue
+        if "\\\\data\\\\snapshots\\\\" not in original.lower(): continue
         relative = Path(*original.replace("\\", "/").split("/data/snapshots/", 1)[1].split("/"))
         start = match.end(); end = matches[index + 1].start() if index + 1 < len(matches) else len(data); framed = data[start:end]
         separator = re.search(rb"(?:\r\n){1,3}={10,}\r\n(?:FILE :|$)", framed)
@@ -85,23 +85,37 @@ def _normalize_recorded_decision(decision: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _copy_dict(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
 def _recorded_intelligence(analytics: dict[str, Any], rows: list[dict[str, Any]]) -> dict[str, Any]:
-    dealer = analytics.get("dealer") or {}; dealer_flow = analytics.get("dealer_flow") or {}; liquidity = analytics.get("liquidity") or {}; gamma = analytics.get("gamma_flip") or {}; oi = analytics.get("oi_flow") or {}; oi_summary = oi.get("summary") or {}; iv = analytics.get("iv_skew") or {}; expected = analytics.get("expected_move") or {}; market = analytics.get("market_structure") or {}; smart = analytics.get("smart_strike") or {}; probability = analytics.get("probability") or {}; pcr = analytics.get("pcr") or {}; technical = analytics.get("technical") or {}; volatility = analytics.get("volatility") or {}; inst = analytics.get("institutional_score") or {}
+    dealer = _copy_dict(analytics.get("dealer")); dealer_flow = _copy_dict(analytics.get("dealer_flow")); liquidity = _copy_dict(analytics.get("liquidity")); gamma = _copy_dict(analytics.get("gamma_flip")); oi = _copy_dict(analytics.get("oi_flow")); oi_summary = _copy_dict(oi.get("summary")); iv = _copy_dict(analytics.get("iv_skew")); expected = _copy_dict(analytics.get("expected_move")); market = _copy_dict(analytics.get("market_structure")); smart = _copy_dict(analytics.get("smart_strike")); probability = _copy_dict(analytics.get("probability")); pcr = _copy_dict(analytics.get("pcr")); technical = _copy_dict(analytics.get("technical")); volatility = _copy_dict(analytics.get("volatility")); inst = _copy_dict(analytics.get("institutional_score")); institutional = _copy_dict(inst.get("institutional")); iv_details = _copy_dict(analytics.get("iv_skew_details"));
+    # Preserve the recorder's own intelligence namespace verbatim while also projecting
+    # the canonical fields consumed by the live institutional decision path.
     option_type = str(smart.get("option_type") or "").upper(); strike = _number(smart.get("strike")); selected = next((r for r in rows if strike and abs(_number(r.get("strike"))-strike)<.001 and str(r.get("side"))==option_type), None)
     selection = dict(smart) if smart else {}
     if selected: selection.update({"security_id": selected.get("security_id"), "side": option_type})
     elif option_type: selection["side"] = option_type
     smart_reasons = smart.get("reasons") or []
+    probability = {k: v for k, v in probability.items()}
+    pcr = {k: v for k, v in pcr.items()}
+    technical = {k: v for k, v in technical.items()}
+    volatility_snapshot = {k: v for k, v in volatility.items()}
+    # The replay path uses iv_skew_details as canonical evidence; recorded exports
+    # historically also stored the same fields at the top level, so retain both.
+    if not iv_details and iv: iv_details = dict(iv)
+    expected_move = {"move": _number(expected.get("expected_move", expected.get("move"))), "lower": expected.get("lower"), "upper": expected.get("upper")}
     return {
-        "bias": str(market.get("bias") or "NEUTRAL").upper(), "structure": str(market.get("structure") or "UNKNOWN"), "market_structure_confidence": _number(market.get("confidence")),
-        "gex": _number(dealer.get("total_gex")), "dex": _number(dealer_flow.get("total_dex")), "vanna_proxy": _number(dealer_flow.get("total_vanna")), "charm": _number(dealer_flow.get("total_charm")),
-        "dealer_gamma": str(dealer.get("dealer_gamma") or "").upper(), "dealer_pressure": str(dealer_flow.get("dealer_pressure") or "").upper(), "dealer_hedging": str(dealer_flow.get("dealer_hedging") or "").upper(),
-        "gamma_flip": gamma.get("gamma_flip"), "gamma_flip_direction": str(gamma.get("direction") or "").upper(), "atm_iv": (_number(iv.get("average_call_iv"))+_number(iv.get("average_put_iv")))/2.0,
-        "iv_skew": iv.get("iv_skew"), "iv_bias": str(iv.get("iv_bias") or "").upper(), "iv_market_sentiment": str(iv.get("market_sentiment") or "").upper(), "expected_move": {"move": _number(expected.get("expected_move")), "lower": expected.get("lower"), "upper": expected.get("upper")},
-        "recorded_oi_flow_bias": str(oi_summary.get("market_bias") or "NEUTRAL").upper(), "recorded_oi_trend": str(oi_summary.get("trend") or "").upper(),
-        "liquidity_score": 100.0 if "Good Liquidity" in smart_reasons else _number(liquidity.get("score")), "intelligence": {"market_state": {"state": str(dealer.get("market_mode") or "UNKNOWN")}},
-        "strike_selection": [selection] if selection else [], "probability": probability, "pcr": pcr, "technical": technical, "volatility_snapshot": volatility,
-        "recorded_institutional_score": inst.get("institutional") if isinstance(inst, dict) else {}, "recorded_analytics": analytics, "recorded_liquidity": liquidity,
+        "bias": str(market.get("bias") or analytics.get("bias") or "NEUTRAL").upper(), "structure": str(market.get("structure") or analytics.get("structure") or "UNKNOWN"), "market_structure_confidence": _number(market.get("confidence")),
+        "gex": _number(dealer.get("total_gex", analytics.get("gex"))), "dex": _number(dealer_flow.get("total_dex", analytics.get("dex"))), "vanna_proxy": _number(dealer_flow.get("total_vanna", analytics.get("vanna_proxy"))), "charm": _number(dealer_flow.get("total_charm", analytics.get("charm"))),
+        "dealer_gamma": str(dealer.get("dealer_gamma") or analytics.get("dealer_gamma") or "").upper(), "dealer_pressure": str(dealer_flow.get("dealer_pressure") or "").upper(), "dealer_hedging": str(dealer_flow.get("dealer_hedging") or "").upper(),
+        "gamma_flip": gamma.get("gamma_flip", analytics.get("gamma_flip")), "gamma_flip_direction": str(gamma.get("direction") or analytics.get("gamma_flip_direction") or "").upper(), "atm_iv": (_number(iv.get("average_call_iv"))+_number(iv.get("average_put_iv")))/2.0 if iv else _number(analytics.get("atm_iv")),
+        "iv_skew": iv.get("iv_skew", analytics.get("iv_skew")), "iv_bias": str(iv.get("iv_bias") or analytics.get("iv_bias") or "").upper(), "iv_market_sentiment": str(iv.get("market_sentiment") or "").upper(), "iv_skew_details": iv_details, "expected_move": expected_move,
+        "recorded_oi_flow_bias": str(oi_summary.get("market_bias") or analytics.get("recorded_oi_flow_bias") or "NEUTRAL").upper(), "recorded_oi_trend": str(oi_summary.get("trend") or "").upper(),
+        "liquidity_score": 100.0 if "Good Liquidity" in smart_reasons else _number(liquidity.get("score", analytics.get("liquidity_score"))), "intelligence": {"market_state": {"state": str(dealer.get("market_mode") or analytics.get("market_state") or "UNKNOWN")}},
+        "strike_selection": [selection] if selection else [], "probability": probability, "pcr": pcr, "technical": technical, "volatility_snapshot": volatility_snapshot,
+        "recorded_institutional_score": institutional, "recorded_analytics": analytics, "recorded_liquidity": liquidity,
     }
 
 

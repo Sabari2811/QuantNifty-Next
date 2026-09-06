@@ -93,17 +93,27 @@ def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: Ba
     result = validation_report(snapshots, strategy, config)
     overall = result.get("overall") or {}
     risk_gate = result.get("risk_gate") or {}
+    diagnostics = _replay_diagnostics(snapshots, strategy)
+    approved = risk_gate.get("approved", 0)
+    trades = overall.get("trades", 0)
+    if approved == 0:
+        validation_quality = "NO_APPROVED_SIGNALS"
+    elif trades == 0:
+        validation_quality = "NO_EXECUTABLE_TRADES"
+    else:
+        validation_quality = "TRADEABLE_SAMPLE"
     # Keep the compact validation response compatible with the existing UI,
     # while retaining the canonical validation_report fields.
     result.update({
         "source": source,
         "recording_root": root,
         "observations": overall.get("observations", 0),
-        "approved": risk_gate.get("approved", 0),
+        "approved": approved,
         "blocked": risk_gate.get("blocked", 0),
         "split": {"out_of_sample": result.get("oos") or {}},
         "empirical": result.get("status") == "OK" and result.get("historical_data", {}).get("status") == "VALID_HISTORICAL",
-        "replay_diagnostics": _replay_diagnostics(snapshots, strategy),
+        "validation_quality": validation_quality,
+        "replay_diagnostics": diagnostics,
     })
     return result
 

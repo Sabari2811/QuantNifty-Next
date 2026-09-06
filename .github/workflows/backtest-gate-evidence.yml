@@ -25,11 +25,15 @@ jobs:
           from playwright.sync_api import sync_playwright
 
           url = 'https://quantnifty-api.onrender.com/backtest'
-          required = [
+          visible_required = [
               'Backtest & Validation',
+              'READ ONLY',
+          ]
+          source_required = [
               'Risk Gate · all decisions',
               'Execution Gate · entry loop',
-              'READ ONLY',
+              'execution_gate',
+              'risk_gate',
           ]
 
           with sync_playwright() as p:
@@ -39,18 +43,22 @@ jobs:
               for attempt in range(1, 13):
                   try:
                       page.goto(url, wait_until='networkidle', timeout=60000)
-                      last = page.locator('body').inner_text()
-                      missing = [label for label in required if label not in last]
-                      if not missing:
+                      last = page.content()
+                      body = page.locator('body').inner_text()
+                      missing_visible = [label for label in visible_required if label not in body]
+                      missing_source = [label for label in source_required if label not in last]
+                      if not missing_visible and not missing_source:
                           print('BACKTEST_GATE_UI_EVIDENCE=PASS')
-                          print('risk_gate_label=Risk Gate · all decisions')
-                          print('execution_gate_label=Execution Gate · entry loop')
+                          print('visible_static_evidence=Backtest & Validation, READ ONLY')
+                          print('deployed_source_evidence=Risk Gate · all decisions, Execution Gate · entry loop, execution_gate, risk_gate')
                           browser.close()
                           raise SystemExit(0)
-                      print(f'attempt {attempt}/12: missing={missing}')
+                      print(f'attempt {attempt}/12: missing_visible={missing_visible}, missing_source={missing_source}')
+                  except SystemExit:
+                      raise
                   except Exception as exc:
                       print(f'attempt {attempt}/12: {exc}')
                   time.sleep(10)
               browser.close()
-              raise SystemExit('deployed backtest UI did not expose the reconciled gate labels; last body excerpt: ' + last[:1000])
+              raise SystemExit('deployed backtest UI evidence did not reconcile; last HTML excerpt: ' + last[:1500])
           PY

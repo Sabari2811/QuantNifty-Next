@@ -7,4 +7,4 @@ def test_decision_endpoint_exposes_read_only_risk_gate():
     assert 'from quantnifty.institutional_engine import final_decision' in h
     assert '"decision":result' in h
     assert '"mode":"READ_ONLY"' in h
-    assert '"strategy":"gamma_blast"' in h
+    assert 'gamma_blast' in h

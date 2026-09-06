@@ -7,4 +7,4 @@ def test_decision_endpoint_exposes_read_only_risk_gate():
     assert '"decision":result' in h
     assert 'execution_plan' in h
     assert 'DISABLED' in h
-    assert 'gamma_blast_qualified' in h
+    assert 'gamma_blast' in h

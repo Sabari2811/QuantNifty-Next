@@ -103,6 +103,8 @@ def load_snapshot_bundle(directory: str | Path) -> dict[str, Any]:
     greeks = _read_parquet(greeks_path)
     analytics_path = root / "analytics.json"
     analytics = _read_json(analytics_path) if analytics_path.is_file() else {}
+    decision_path = root / "decision.json"
+    decision = _read_json(decision_path) if decision_path.is_file() else {}
     required = {"Strike", "CE_ID", "CE_LTP", "CE_OI", "CE_VOLUME", "PE_ID", "PE_LTP", "PE_OI", "PE_VOLUME"}
     missing = required - set(options[0]) if options else required
     if missing:
@@ -124,6 +126,7 @@ def load_snapshot_bundle(directory: str | Path) -> dict[str, Any]:
             rows.append(leg)
     snapshot = {"timestamp": _timestamp(str(runtime.get("timestamp", ""))), "spot": _number(runtime.get("spot")), "expiry": str(runtime.get("expiry") or ""), "symbol": str(runtime.get("symbol") or "NIFTY"), "regime": str(runtime.get("regime") or ""), "runtime_status": str(runtime.get("runtime_status") or ""), "recording_path": str(root), "option_chain": rows, "data_integrity": "RECORDED_HISTORICAL"}
     snapshot.update(_recorded_intelligence(analytics, rows))
+    snapshot["recorded_decision"] = decision
     return canonicalize_snapshot(snapshot, "RECORDED_HISTORICAL")
 
 
@@ -139,9 +142,6 @@ def load_recording(root: str | Path) -> list[dict[str, Any]]:
     if not base.exists():
         raise ValueError(f"recording root does not exist: {base}")
     if base.is_file():
-        # Uploads are staged under generated temporary names (for example
-        # quantnifty-report-abc123.txt). The API validates the original client
-        # filename; the importer validates the actual report contents.
         if base.suffix.lower() != ".txt":
             raise ValueError(f"recording path must be a snapshot directory or .txt recorder export: {base}")
         with load_report_to_temporary_root(base) as temp:

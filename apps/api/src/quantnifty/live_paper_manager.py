@@ -26,13 +26,15 @@ def _leg(snapshot: dict[str, Any], instrument: dict[str, Any] | None) -> dict[st
         if sid and str(row.get("security_id") or "") == sid:
             return row
         if symbol and str(row.get("trading_symbol") or "") == symbol:
-        return row
+            return row
         if not sid and not symbol and strike and abs(_f(row.get("strike")) - strike) < .001 and (not side or str(row.get("side") or "").upper() == side):
             return row
     return None
 
 
-def _price(row: dict[str, Any], action: str) -> float:
+def _price(row: dict[str, Any] | None, action: str) -> float:
+    if not row:
+        return 0.0
     bid, ask, last = _f(row.get("bid")), _f(row.get("ask")), _f(row.get("last_price"))
     if action == "BUY":
         return ask if ask > 0 else last if last > 0 else bid
@@ -47,6 +49,7 @@ class LivePaperManager:
         self.active: PaperTrade | None = None
         self.entry_price = 0.0
         self.entry_quantity = 1
+        self.instrument: dict[str, Any] | None = None
         self._recover()
 
     def _recover(self) -> None:
@@ -63,6 +66,7 @@ class LivePaperManager:
             self.active = PaperTrade(**{k: latest[k] for k in PaperTrade.__dataclass_fields__ if k in latest})
             self.entry_price = _f(latest.get("entry_price"))
             self.entry_quantity = max(1, int(latest.get("quantity", 1)))
+            self.instrument = latest.get("instrument") if isinstance(latest.get("instrument"), dict) else None
         except (TypeError, ValueError):
             self.active = None
 
@@ -71,7 +75,7 @@ class LivePaperManager:
         leg = _leg(snapshot, instrument)
         timestamp = str(snapshot.get("timestamp") or "")
         spot = _f(snapshot.get("spot")); direction = str(signal.get("direction") or "NEUTRAL")
-        price = _price(leg, "BUY") if leg else 0.0
+        price = _price(leg, "BUY")
         if not timestamp or spot <= 0 or direction not in {"BULLISH", "BEARISH"} or price <= 0:
             return
         self.sequence += 1
@@ -79,21 +83,22 @@ class LivePaperManager:
         self.active = PaperTrade(make_trade_id(timestamp, self.sequence), strategy, direction, timestamp, spot)
         self.entry_price = price
         self.entry_quantity = 1
-        record_outcome({**asdict(self.active), "lifecycle": "OPEN", "entry_price": price, "quantity": 1, "read_only": True, "execution": "NONE"})
+        self.instrument = instrument if isinstance(instrument, dict) else None
+        record_outcome({**asdict(self.active), "lifecycle": "OPEN", "entry_price": price, "quantity": 1, "instrument": self.instrument, "read_only": True, "execution": "NONE"})
 
     def _close(self, snapshot: dict[str, Any], reason: str) -> dict[str, Any] | None:
         if self.active is None:
             return None
         timestamp = str(snapshot.get("timestamp") or "")
-        spot = _f(snapshot.get("spot")); leg = _leg(snapshot, getattr(self, "instrument", None))
-        exit_price = _price(leg, "SELL") if leg else 0.0
+        spot = _f(snapshot.get("spot")); leg = _leg(snapshot, self.instrument)
+        exit_price = _price(leg, "SELL")
         if not timestamp or spot <= 0:
             return None
         outcome = self.active.close(timestamp, spot, reason)
         gross = (exit_price - self.entry_price) * self.entry_quantity if exit_price > 0 and self.entry_price > 0 else outcome["spot_move_proxy"] * self.entry_quantity
-        outcome.update({"entry_price": round(self.entry_price, 6), "exit_price": round(exit_price, 6), "quantity": self.entry_quantity, "gross_pnl_proxy": round(gross, 4), "pnl_basis": "OPTION_PREMIUM_WHEN_AVAILABLE_ELSE_SPOT_PROXY", "lifecycle": "CLOSED"})
+        outcome.update({"entry_price": round(self.entry_price, 6), "exit_price": round(exit_price, 6), "quantity": self.entry_quantity, "instrument": self.instrument, "gross_pnl_proxy": round(gross, 4), "pnl_basis": "OPTION_PREMIUM_WHEN_AVAILABLE_ELSE_SPOT_PROXY", "lifecycle": "CLOSED"})
         record_outcome(outcome)
-        self.active = None; self.entry_price = 0.0; self.entry_quantity = 1
+        self.active = None; self.entry_price = 0.0; self.entry_quantity = 1; self.instrument = None
         return outcome
 
     def process(self, snapshot: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
@@ -108,7 +113,6 @@ class LivePaperManager:
                 return {"status": "CLOSED", "outcome": outcome}
             return {"status": "OPEN", "trade": {**asdict(self.active), "entry_price": self.entry_price, "quantity": self.entry_quantity}}
         if bool((decision.get("risk") or {}).get("approved")) and plan.get("instrument"):
-            self.instrument = plan.get("instrument")
             self._open(snapshot, decision)
             if self.active is not None:
                 return {"status": "OPEN", "trade": {**asdict(self.active), "entry_price": self.entry_price, "quantity": self.entry_quantity}}

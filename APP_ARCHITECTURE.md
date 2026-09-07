@@ -23,11 +23,21 @@ The initial learning program is planned for approximately three months. Real-mon
                      +--------------+--------------+
                      |                             |
                      v                             v
-              LIVE MARKET DATA              HISTORICAL DATA
-                     |                     / RESEARCH DATA
-                     +--------------+--------------+
-                                    |
-                                    v
+              LIVE MARKET DATA          PRE-EXISTING HISTORICAL DATA
+                     |                    (REFERENCE / REPLAY ONLY)
+                     |                             |
+                     v                             |
+              +----------------+                   |
+              | LIVE RECORDER  |                   |
+              +-------+--------+                   |
+                      |                            |
+                      v                            |
+              +----------------+                   |
+              | STORED DAY     |<------------------+
+              | LIVE EVIDENCE   |       historical data never trains live memory
+              +-------+--------+
+                      |
+                      v
                          +----------------------+
                          | CANONICAL SNAPSHOT   |
                          | + DATA VALIDATION    |
@@ -37,51 +47,51 @@ The initial learning program is planned for approximately three months. Real-mon
                   |                                    |
                   v                                    v
        +------------------------+           +------------------------+
-       | LIVE ADAPTIVE BRAIN    |           | MARKET RECORDER        |
-       | 09:20 - 15:15          |           | Immutable evidence     |
+       | LIVE ADAPTIVE BRAIN    |           | AFTER-MARKET LAB        |
+       | 09:20 - 15:15          |           | Stored same-day replay  |
        +-----------+------------+           +-----------+------------+
-                   |                                    |
-                   v                                    v
-       +------------------------+           +------------------------+
-       | ANALYTICS / REGIME     |           | STORED MARKET DAY      |
-       | GEX DEX OI IV Volume   |           +-----------+------------+
-       +-----------+------------+                       |
-                   |                                    v
-                   v                           +------------------------+
-       +------------------------+              | AFTER-MARKET LAB        |
-       | STRATEGY SELECTOR      |              | Full-day deterministic  |
-       | Adaptive policy        |              | replay                  |
-       +-----------+------------+              +-----------+------------+
                    |                                    |
                    v                           +---------+----------+
        +------------------------+              |                    |
-       | RISK ENGINE            |              v                    v
-       | permission to trade    |       ALL STRATEGIES       SCENARIO ENGINE
-       +-----------+------------+       / counterfactuals        |
-                   |                           |                 |
-                   v                           +--------+--------+
-       +------------------------+                       |
-       | FINAL DECISION         |                       v
-       | authoritative output   |              +------------------+
-       +-----------+------------+              | LEARNING MEMORY  |
-                   |                           +--------+---------+
-                   v                                    |
-       +------------------------+                       v
-       | EXECUTION PLAN         |              +------------------+
-       | READ-ONLY / no orders  |              | POLICY VALIDATOR |
+       | ANALYTICS / REGIME     |              v                    v
+       | GEX DEX OI IV Volume   |       ALL STRATEGIES       SCENARIO ENGINE
+       +-----------+------------+              |                    |
+                   |                           +---------+----------+
+                   v                                     |
+       +------------------------+                         v
+       | STRATEGY SELECTOR      |              +------------------+
+       | Adaptive policy        |              | RESEARCH MEMORY  |
        +-----------+------------+              +--------+---------+
                    |                                    |
                    v                                    v
        +------------------------+              +------------------+
-       | LIVE PAPER OUTCOME     |              | FUTURE LIVE BRAIN|
-       | MFE / MAE / P&L        |              +------------------+
+       | RISK ENGINE            |              | POLICY VALIDATOR |
+       | permission to trade    |              +--------+---------+
+       +-----------+------------+                       |
+                   |                                    v
+                   v                           +------------------+
+       +------------------------+              | FUTURE LIVE BRAIN|
+       | FINAL DECISION         |              +------------------+
+       | authoritative output   |
+       +-----------+------------+
+                   |
+                   v
+       +------------------------+
+       | EXECUTION PLAN         |
+       | READ-ONLY / no orders  |
+       +-----------+------------+
+                   |
+                   v
+       +------------------------+
+       | LIVE PAPER OUTCOME     |
+       | MFE / MAE / P&L        |
        +-----------+------------+
                    |
                    v
             DURABLE STORE
 ```
 
-Historical/research inputs such as `data_Review.txt` may be used for replay/bootstrap research but are never committed to GitHub and never injected into live decisions as future information.
+**Finalized learning-source rule:** pre-existing historical/research inputs such as `data_Review.txt` are reference/replay evidence only. They are never a live-learning bootstrap and never seed, train, promote, or influence the live Adaptive Brain or its policy memory. Only `LIVE_PROVIDER` observations and completed same-day `STORED_DAY` observations are learning sources.
 
 ## 3. Live Decision Architecture
 
@@ -190,7 +200,7 @@ Strategy selection is based on:
 5. Minimum sample requirements.
 6. Safe fallback policy.
 
-The Brain must not blindly select whichever strategy has the highest historical P&L.
+The Brain must not blindly select whichever strategy has the highest historical P&L. In this finalized plan, historical means pre-existing recordings only and is excluded from learning; strategy evidence is derived from live outcomes and same-day post-market research.
 
 Live API strategy exposure remains `directional`, `gamma_blast`, `adaptive`. After-market research covers `directional`, `gamma_blast`, `adaptive`, `early_accumulation`, `transition`, `range`, and `breakout_watch` through the canonical Adaptive Brain/FinalDecision/Risk pipeline.
 
@@ -247,8 +257,14 @@ timestamp
 provider
 provenance
 spot
-option_chain
+complete option_chain payload
 analytics
+Greeks available from provider
+Delta / Gamma / Theta / Vega where supplied
+Vanna when supplied or validly derived by the analytics layer
+OI / previous OI / volume
+bid / ask / quantities
+IV
 regime
 CAS state
 signal
@@ -258,7 +274,7 @@ execution plan
 learning-policy version
 ```
 
-Records must be immutable for the completed decision timestamp.
+Records must be immutable for the completed decision timestamp. Fields are not invented when the provider does not supply them.
 
 The storage must be durable across service restarts and Render deployments. Raw recordings should not be committed to GitHub.
 
@@ -278,6 +294,8 @@ Reusable descriptions of market patterns, including both successful and failed o
 A live decision must never be retroactively modified because a later replay produced a better strategy.
 
 PostgreSQL is supported through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with JSONL filesystem fallback. Production must wire the Render service to the database without committing credentials.
+
+Daily live evidence is appended incrementally. Snapshots, decisions, closed paper outcomes and after-market research are retained as separate durable event types so P&L and strategy learning cannot be confused with counterfactual results.
 
 ## 10. After-Market Strategy Lab
 
@@ -301,10 +319,12 @@ Freeze day
    -> generate scenarios
    -> update research memory
    -> validate policy candidate
-   -> persist results
+   -> persist complete daily training record
 ```
 
 All strategies must see the same stored information at each replay timestamp. Explicit research strategies are routed through the canonical Adaptive Brain/FinalDecision/Risk stack and marked research-only.
+
+The daily research event is persisted only after scenarios and the policy result are attached. The scheduler marks a day complete only after a `COMPLETED` result is durably saved; `NO_DATA` and failures remain retryable, and persisted completion is recognized after restart.
 
 ## 11. Counterfactual Testing
 
@@ -366,15 +386,18 @@ Scenario records preserve both positive and negative examples so that the Brain 
 The Brain should learn from closed outcomes only.
 
 ```text
-Market evidence
+Live Market evidence
     -> Decision frozen
     -> Outcome resolved
+    -> Same-day research replay
     -> Validate evidence
     -> Update statistics
     -> Evaluate policy change
     -> Walk-forward/OOS checks where applicable
-    -> Promote validated policy
+    -> Promote validated policy for a future session
 ```
+
+**No historical bootstrap:** there is no 252-trading-day gate, 365-calendar-day gate, or historical performance prerequisite. Strategy promotion still requires its own minimum evidence and validation rules; these are not historical-data startup gates.
 
 Learned behavior must be conservative at low sample sizes.
 
@@ -414,6 +437,7 @@ Every trading day:
 - test all strategies
 - generate scenarios
 - validate/persist policy
+- persist the complete daily training/research record
 
 ### Stage 3 — Growing Evidence
 
@@ -458,11 +482,12 @@ No live execution activation should happen merely because the three-month period
 
 Non-negotiable:
 
-- No future information in a historical decision.
+- No future information in a historical/replay decision.
 - No after-market results injected into the original live decision.
 - No synthetic CAS created to manufacture trades.
 - Live decisions require live provider provenance.
-- Replay decisions may use recorded historical provenance.
+- Same-day post-market replay uses only that day's stored live evidence.
+- Pre-existing historical recordings are replay/reference only and are excluded from learning/policy memory.
 - Raw secrets never enter recordings or Git.
 - Completed records are immutable.
 - Actual live trades and simulated/counterfactual trades remain separate.
@@ -492,7 +517,7 @@ backtest.py
   -> simulation/backtest execution loop
 
 historical.py
-  -> historical snapshot contract + readiness
+  -> snapshot contract + provenance diagnostics only; no learning gate
 
 recording_loader.py
   -> recording ingestion
@@ -510,16 +535,19 @@ research_strategy_runner.py
   -> full after-market strategy coverage through canonical Adaptive pipeline
 
 after_market_lab.py
-  -> daily research, scenario persistence and policy generation
+  -> daily research, scenario persistence and complete training record
 
 after_market_scheduler.py
-  -> weekday after-market orchestration
+  -> weekday after-market orchestration with durable completion/retry semantics
 
 scenario_engine.py
   -> deterministic counterfactual scenario extraction
 
 adaptive_policy.py
   -> versioned policy validation/promotion gate
+
+adaptive_learning.py
+  -> live-only policy helper; rejects pre-existing historical learning sources
 
 policy_runtime.py
   -> policy persistence, versioning and prior-day loading
@@ -615,3 +643,31 @@ The tracker update must include, where applicable:
 - next implementation item
 
 Never mark an item complete solely because code was written. Mark it complete only after the relevant verification succeeds.
+
+## 20. Finalized Learning Plan Addendum — 2026-09-07
+
+This section is authoritative for the finalized learning behavior and supersedes any older wording above that refers to historical bootstrap learning.
+
+### Learning sources
+- `LIVE_PROVIDER`: current live observations are the only input to live decisions and live learning.
+- `STORED_DAY`: immutable same-day live recordings are the only input to that day's after-market training/research.
+- `RECORDED_HISTORICAL` / `data_Review.txt`: reference/replay evidence only; never a training, seeding, promotion, or policy-memory source.
+
+### Daily persistence
+- During the session, persist snapshots, decisions and closed read-only paper outcomes incrementally.
+- Preserve all provider fields that are actually available, including OI, previous OI, volume, IV, bid/ask and supplied Greeks; Vanna is retained when supplied or validly derived, never fabricated.
+- After 15:35 IST, automatically run the full research universe against that stored day.
+- Persist scenarios and policy results.
+- Persist the complete daily after-market training record after enrichment.
+- A scheduler run is complete only after the result is durably saved. Missing data/errors are retryable and restart recovery checks durable completion.
+
+### Historical gate removal
+- No 252-trading-day requirement.
+- No 365-calendar-day requirement.
+- No historical performance requirement to start learning.
+- Strategy-level minimum sample and validation rules remain safety controls and are not historical bootstrap gates.
+
+### Operational safety
+- READ-ONLY remains mandatory.
+- Live decisions are never retroactively changed by post-market research.
+- Counterfactual results remain labeled and separated from actual paper outcomes.

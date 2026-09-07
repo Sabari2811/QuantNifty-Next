@@ -87,8 +87,9 @@ def canonicalize_snapshots(snapshots: Iterable[dict[str, Any]], provenance: str 
 
 def historical_data_status(snapshots: Iterable[dict[str, Any]]) -> dict[str, Any]:
     values = list(snapshots)
+    base = {"minimum_learning_trading_days": MIN_LEARNING_TRADING_DAYS, "minimum_learning_calendar_days": MIN_LEARNING_CALENDAR_DAYS}
     if not values:
-        return {"status": "NOT_PROVIDED", "observations": 0, "provenance": None, "learning_ready": False, "minimum_learning_trading_days": MIN_LEARNING_TRADING_DAYS, "minimum_learning_calendar_days": MIN_LEARNING_CALENDAR_DAYS}
+        return {"status": "NOT_PROVIDED", "observations": 0, "provenance": None, "learning_ready": False, **base}
     provenance = {str(value.get("data_integrity") or "UNKNOWN") for value in values if isinstance(value, dict)}
     if provenance == {"RECORDED_HISTORICAL"}:
         status = "VALID_HISTORICAL"
@@ -106,16 +107,17 @@ def historical_data_status(snapshots: Iterable[dict[str, Any]]) -> dict[str, Any
         dates.add(dt.date().isoformat())
         parsed.append(dt)
     calendar_span_days = (max(parsed) - min(parsed)).days + 1 if parsed else 0
-    trading_days = len(dates)
+    trading_dates = {dt.date().isoformat() for dt in parsed if dt.weekday() < 5}
+    trading_days = len(trading_dates)
     learning_ready = status == "VALID_HISTORICAL" and trading_days >= MIN_LEARNING_TRADING_DAYS and calendar_span_days >= MIN_LEARNING_CALENDAR_DAYS
     return {
         "status": status,
         "observations": len(values),
         "provenance": sorted(provenance),
+        "calendar_days_with_snapshots": len(dates),
         "trading_days": trading_days,
         "calendar_span_days": calendar_span_days,
-        "minimum_learning_trading_days": MIN_LEARNING_TRADING_DAYS,
-        "minimum_learning_calendar_days": MIN_LEARNING_CALENDAR_DAYS,
+        **base,
         "learning_ready": learning_ready,
         "learning_status": "READY_FOR_1Y_LEARNING" if learning_ready else "INSUFFICIENT_1Y_DATA",
         "days_missing": max(0, MIN_LEARNING_TRADING_DAYS - trading_days),

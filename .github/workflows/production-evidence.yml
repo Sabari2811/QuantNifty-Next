@@ -62,6 +62,14 @@ jobs:
           assert health['provider']=='INDstocks'
           assert health['provider_configured'] is True
 
+          status=get_json('/api/v1/status', timeout=45, attempts=8)
+          learning=status.get('learning') or {}
+          assert learning.get('configured') is True, learning
+          assert learning.get('durability')=='POSTGRESQL', learning
+          assert learning.get('database_available') is True, learning
+          print('POSTGRES_LEARNING_EVIDENCE=PASS')
+          print('learning=',learning)
+
           market=get_json('/api/v1/market', timeout=45, attempts=8)
           assert market['data_integrity']=='LIVE_PROVIDER', market
           assert float(market['spot'])>0

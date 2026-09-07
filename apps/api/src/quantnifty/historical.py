@@ -6,8 +6,6 @@ from typing import Any, Iterable
 CANONICAL_PROVENANCE = {"RECORDED_HISTORICAL", "LIVE_PROVIDER"}
 REQUIRED_SNAPSHOT_KEYS = ("timestamp", "spot", "option_chain")
 REQUIRED_LEG_KEYS = ("strike", "side", "security_id", "last_price", "oi", "volume")
-MIN_LEARNING_TRADING_DAYS = 252
-MIN_LEARNING_CALENDAR_DAYS = 365
 
 
 def _float(value: Any) -> float:
@@ -86,17 +84,32 @@ def canonicalize_snapshots(snapshots: Iterable[dict[str, Any]], provenance: str 
 
 
 def historical_data_status(snapshots: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Return provenance/coverage diagnostics only.
+
+    Historical recordings are retained for replay and research inspection, but
+    there is deliberately no minimum-history learning gate. Adaptive learning
+    starts from live observations and post-market stored-day research only.
+    """
     values = list(snapshots)
-    base = {"minimum_learning_trading_days": MIN_LEARNING_TRADING_DAYS, "minimum_learning_calendar_days": MIN_LEARNING_CALENDAR_DAYS}
     if not values:
-        return {"status": "NOT_PROVIDED", "observations": 0, "provenance": None, "learning_ready": False, **base}
+        return {
+            "status": "NOT_PROVIDED",
+            "observations": 0,
+            "provenance": None,
+            "live_learning_source": "LIVE_PROVIDER",
+            "post_market_learning_source": "STORED_DAY",
+        }
+
     provenance = {str(value.get("data_integrity") or "UNKNOWN") for value in values if isinstance(value, dict)}
     if provenance == {"RECORDED_HISTORICAL"}:
         status = "VALID_HISTORICAL"
     elif "RECORDED_HISTORICAL" in provenance:
         status = "MIXED_PROVENANCE"
+    elif provenance == {"LIVE_PROVIDER"}:
+        status = "LIVE_DATA"
     else:
         status = "NON_HISTORICAL"
+
     dates: set[str] = set()
     parsed: list[datetime] = []
     for value in values:
@@ -108,17 +121,17 @@ def historical_data_status(snapshots: Iterable[dict[str, Any]]) -> dict[str, Any
         parsed.append(dt)
     calendar_span_days = (max(parsed) - min(parsed)).days + 1 if parsed else 0
     trading_dates = {dt.date().isoformat() for dt in parsed if dt.weekday() < 5}
-    trading_days = len(trading_dates)
-    learning_ready = status == "VALID_HISTORICAL" and trading_days >= MIN_LEARNING_TRADING_DAYS and calendar_span_days >= MIN_LEARNING_CALENDAR_DAYS
+
     return {
         "status": status,
         "observations": len(values),
         "provenance": sorted(provenance),
         "calendar_days_with_snapshots": len(dates),
-        "trading_days": trading_days,
+        "trading_days": len(trading_dates),
         "calendar_span_days": calendar_span_days,
-        **base,
-        "learning_ready": learning_ready,
-        "learning_status": "READY_FOR_1Y_LEARNING" if learning_ready else "INSUFFICIENT_1Y_DATA",
-        "days_missing": max(0, MIN_LEARNING_TRADING_DAYS - trading_days),
+        "learning_ready": True,
+        "learning_status": "LIVE_LEARNING_ONLY",
+        "live_learning_source": "LIVE_PROVIDER",
+        "post_market_learning_source": "STORED_DAY",
+        "historical_replay_only": True,
     }

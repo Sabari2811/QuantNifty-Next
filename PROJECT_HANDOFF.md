@@ -14,15 +14,15 @@ QuantNifty is a **Live Adaptive Brain + After-Market Research Lab**.
 - Adaptive Brain: 09:20–15:15 IST.
 - 15:15–15:30 IST: normal Brain stops; only already-produced live CAS may authorize `cas_reentry`.
 - 15:30 IST: decisions stop and open paper trades must be closed as `SESSION_CLOSE`.
-- Learn for a planned 3-month READ-ONLY period.
+- Learn for a planned 3-month READ-ONLY period starting from live data on the next market session.
 - Store live snapshots, decisions and paper outcomes separately from counterfactual research.
-- After close, replay the stored day and test the full research strategy universe.
+- After close, replay **that stored live day only** and test the full research strategy universe.
 - Only closed, validated, future-safe outcomes may influence future policy.
 
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Learning Store`
 
-Core ownership: `main.py` provider/analytics/API/live refresh; `institutional_engine.py` signal/risk/FinalDecision/ExecutionPlan; `research_brain.py` adaptive regimes/selection/accumulation/exits and explicit research overrides; `session_policy.py` session/CAS; `decision_validation.py` validation; `backtest.py`/`replay.py` deterministic research; `historical.py` readiness; `recording_loader.py`/`recording_api.py` recorder/replay; `adaptive_learning.py` policy helpers; `learning_store.py` durable learning events; `after_market_lab.py` full-day research; `after_market_scheduler.py` orchestration; `paper_trade_tracker.py` read-only outcome lifecycle; `live_paper_manager.py` live outcome integration/restart recovery; `scenario_engine.py` scenario extraction; `research_strategy_runner.py` canonical research strategy routing; `adaptive_policy.py` policy validation; `policy_runtime.py` persistence/next-session loading; `web/backtest.html` UI.
+Core ownership: `main.py` provider/analytics/API/live refresh; `institutional_engine.py` signal/risk/FinalDecision/ExecutionPlan; `research_brain.py` adaptive regimes/selection/accumulation/exits and explicit research overrides; `session_policy.py` session/CAS; `decision_validation.py` validation; `replay.py`/`backtest.py` deterministic research; `historical.py` snapshot normalization/provenance diagnostics only; `recording_loader.py`/`recording_api.py` recorder/replay; `adaptive_learning.py` policy helpers; `learning_store.py` durable learning events; `after_market_lab.py` full-day research; `after_market_scheduler.py` orchestration; `paper_trade_tracker.py` read-only outcome lifecycle; `live_paper_manager.py` live outcome integration/restart recovery; `scenario_engine.py` scenario extraction; `research_strategy_runner.py` canonical research strategy routing; `adaptive_policy.py` policy validation; `policy_runtime.py` persistence/next-session loading; `web/backtest.html` UI.
 
 Governance: FinalDecision is authoritative; Risk owns permission; ExecutionPlan never submits orders; actual and counterfactual experience remain separate; replay reuses the canonical pipeline; time must remain deterministic/injectable.
 
@@ -32,19 +32,26 @@ Governance: FinalDecision is authoritative; Risk owns permission; ExecutionPlan 
 Live API remains intentionally restricted to `directional`, `gamma_blast`, and `adaptive`. The after-market research runner covers the seven research strategies plus adaptive and routes explicit research modes through the canonical Adaptive Brain/FinalDecision/Risk pipeline. This does not weaken live safeguards.
 
 ## Adaptive Brain
-Early accumulation uses near-ATM OI expansion, premium behavior, active volume, quiet spot, controlled IV and expected-move-relative premium. States are `EARLY_ACCUMULATION`, `WATCH_ACCUMULATION`, `NO_CLEAR_ACCUMULATION`. Entry confirmation uses `EARLY_ACCUMULATION_CONFIRMATION` / `ACCUMULATION_THEN_BREAKOUT_CONFIRMATION`. Adaptive exit considers capital protection, favorable move, exhaustion/gamma reversal, profit lock and trailing. Current adaptive exit is primarily spot-based; richer option-premium/IV/Greeks/liquidity confirmation remains research work. No exact top/bottom prediction is claimed.
+Early accumulation uses near-ATM OI expansion, premium behavior, active volume, quiet spot, controlled IV and expected-move-relative premium. States are `EARLY_ACCUMULATION`, `WATCH_ACCUMULATION`, `NO_CLEAR_ACCUMULATION`. Entry confirmation uses `EARLY_ACCUMULATION_CONFIRMATION` / `ACCUMULATION_THEN_BREAKOUT_CONFIRMATION`. Adaptive exit considers capital protection, favorable move, exhaustion/gamma reversal, profit lock and trailing. Current adaptive exit is primarily spot-based; richer option-premium/IV/Greeks/liquidity confirmation remains optional research work. No exact top/bottom prediction is claimed.
 
 ## Learning / storage
-Live refresh now creates/updates a read-only paper trade lifecycle through `live_paper_manager.py`: one active hypothetical trade at a time, restart recovery from persisted open outcome, MFE/MAE tracking, option-premium P&L when the selected leg is available, spot proxy fallback, and session-close closure. No broker order is submitted.
+Live refresh creates/updates a read-only paper trade lifecycle through `live_paper_manager.py`: one active hypothetical trade at a time, restart recovery from persisted open outcome, MFE/MAE tracking, option-premium P&L when the selected leg is available, spot proxy fallback, and session-close closure. No broker order is submitted.
 
-`learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has Postgres instance `quantnifty-learning` in Singapore. Render wiring is now implemented declaratively in `render.yaml`: the API service receives `DATABASE_URL` from the database's internal `connectionString`, and the database is declared in the Blueprint as the existing `quantnifty-learning` resource. No credential or connection string is committed. Render's documented `fromDatabase.connectionString` mechanism is the intended secure path for same-region service-to-Postgres connectivity.
+`learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has Postgres instance `quantnifty-learning` in Singapore. Render wiring is implemented declaratively in `render.yaml`: the API service receives `DATABASE_URL` from the database's internal `connectionString`, and the database is declared in the Blueprint as the existing `quantnifty-learning` resource. No credential or connection string is committed.
 
-The Render API environment was also updated with the database resource ID as a non-secret deployment marker, and a deployment was triggered. The Blueprint commit now provides the actual `DATABASE_URL` binding once the Render Blueprint is synced/applied. Persistence still requires runtime verification after that binding is active.
+After-market loads the same day's stored live snapshots, runs the full research strategy universe, persists the after-market research result and deterministic scenarios, then validates and persists a versioned future-safe Adaptive Policy candidate. `policy_runtime.py` loads only a prior-day policy with valid schema and future-safe/counterfactual metadata at service startup; current-day policy cannot be loaded.
 
-After-market loads the same day's stored snapshots, runs the full research strategy universe, persists the after-market research result and deterministic scenarios, then validates and persists a versioned future-safe Adaptive Policy candidate. `policy_runtime.py` loads only a prior-day policy with valid schema and future-safe/counterfactual metadata at service startup; current-day policy cannot be loaded.
+## Learning source policy — finalized
+**Historical learning is removed completely.** There is no 252-trading-day gate, 365-calendar-day gate, historical bootstrap requirement, or historical performance requirement for Adaptive learning.
 
-## Historical readiness
-Broader learning gate remains 252 trading days + 365 calendar days + valid recorded historical provenance. `data_Review.txt` is usable as historical/research evidence but remains uncommitted and is not a substitute for the one-year learning gate.
+The only learning sources are:
+
+1. **LIVE_PROVIDER:** live market data captured during the current/future market session. Live decisions may use only information available at that timestamp.
+2. **STORED_DAY:** the immutable live data recorded during that same completed trading day, used after market close for replay, counterfactual research, scenario extraction and future-safe policy generation.
+
+`data_Review.txt` and any other pre-existing historical recordings are **replay/reference evidence only**. They must not train, seed, initialize, promote, or influence the live Adaptive Brain or its policy memory.
+
+The 3-month READ-ONLY learning period begins from the next live market session. Evidence accumulates naturally from live sessions and their post-market stored-day research. A large historical dataset is not a prerequisite to start learning.
 
 ## Completed
 - Canonical decision/risk/execution architecture.
@@ -56,8 +63,7 @@ Broader learning gate remains 252 trading days + 365 calendar days + valid recor
 - Data/decision validation.
 - Replay/backtest consistency.
 - Adaptive API/UI and multipart handling.
-- One-year readiness gate/weekday counting.
-- `APP_ARCHITECTURE.md` full architecture reference and persistent handoff.
+- **Removed the one-year historical learning gate.**
 - Live learning store and live Adaptive decision recording.
 - After-market lab and scheduler.
 - PostgreSQL-capable learning backend.
@@ -72,28 +78,28 @@ Broader learning gate remains 252 trading days + 365 calendar days + valid recor
 - Render Blueprint wiring for secure Postgres connection injection.
 
 ## Verification state
-- Commit `ac30e43b888686ecd521b76b527fe8bce7188d36` initially exposed a compatibility failure (`STRATEGIES` alias); fixed in `b598e9b200cf3bd98d544b822263c5c575582d4f`.
-- Latest verified CI for the implementation commit `b598e9b200cf3bd98d544b822263c5c575582d4f`: **success**, all tests passed.
-- Backtest Gate Evidence for the implementation pass: **success**.
-- Production Evidence for the implementation pass: **success**, including authenticated live-market/historical replay evidence and browser E2E.
-- `render.yaml` Postgres wiring committed as `9f174360f7761f4504f341348e916ac276968718`.
-- Render deployment `dep-dafealgn74is739l6al0` was triggered and is currently building commit `1179112cbad34b98aa627cc8cc1be611e15097fb`; the Postgres Blueprint wiring is a subsequent `main` commit and therefore still requires deployment/sync verification.
+- Historical gate removal implemented in `apps/api/src/quantnifty/historical.py`.
+- Historical contract tests updated in `apps/api/tests/test_historical.py` to verify that short/no historical coverage no longer blocks learning.
+- Implementation commits: `44321bc3efaeff06ff154c00de7a9eb401938e25` and `20693e49894b821a510ddd699ccb3f6406d8420d0`.
+- CI for these latest commits still needs to be run/verified before marking the change fully validated.
+- Render PostgreSQL wiring remains subject to runtime deployment verification.
 
 ## Remaining verification / operational work
-1. Ensure Render Blueprint sync applies `DATABASE_URL` from `quantnifty-learning` to `quantnifty-api`.
-2. Verify latest Render deployment serves the current `main` commit.
-3. Query the learning database after service startup to confirm `quantnifty_learning_events` is created and receives live events.
-4. Verify persistence across service restart/deploy.
-5. Run/confirm production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
-6. Start/continue the 3-month READ-ONLY learning period from the next market session.
-7. Accumulate sufficient historical/live observations for the 252-day learning gate; do not claim one-year performance early.
-8. Research richer option-premium/IV/Greeks/liquidity exit confirmation after sufficient observations.
+1. Run/verify CI after the historical-learning-gate removal.
+2. Ensure Render Blueprint sync applies `DATABASE_URL` from `quantnifty-learning` to `quantnifty-api`.
+3. Verify latest Render deployment serves the current `main` commit.
+4. Query the learning database after service startup to confirm `quantnifty_learning_events` is created and receives live events.
+5. Verify persistence across service restart/deploy.
+6. Run/confirm production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
+7. Start the 3-month READ-ONLY learning period from the next market session using **live data + same-day post-market stored data only**.
+8. Accumulate live evidence naturally; no 252-day target is a learning gate.
 9. Cleanup remaining deprecation/unused-import warnings.
 
 ## Non-negotiable rules
-- Never commit `data_Review.txt`.
+- Never commit `data_Review.txt` or use it as a learning source.
 - Never commit API tokens/secrets.
-- Never use future outcomes in live decisions.
+- Never use future information in live decisions.
+- Never use after-market results to modify the already-issued live decision.
 - Never represent counterfactual research as actual trading.
 - Never enable real order execution during learning/validation.
 - Every implementation change updates this handoff.

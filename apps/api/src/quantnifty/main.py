@@ -6,6 +6,7 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -21,6 +22,8 @@ from quantnifty.recording_api import router as recording_router
 from quantnifty.decision_validation import validate_snapshot
 from quantnifty.learning_store import learning_status, record_decision, record_snapshot
 from quantnifty.after_market_scheduler import after_market_loop
+from quantnifty.live_paper_manager import LivePaperManager
+from quantnifty.policy_runtime import load_future_policy
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -28,11 +31,14 @@ NIFTY_ID = os.getenv("NIFTY_SECURITY_ID", "40000001")
 NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
 POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
+IST = ZoneInfo("Asia/Kolkata")
 
-app = FastAPI(title="QuantNifty Next", version="1.8.3")
+app = FastAPI(title="QuantNifty Next", version="1.9.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
 app.include_router(recording_router)
+live_paper = LivePaperManager()
+active_policy: dict[str, Any] | None = None
 
 async def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     if not TOKEN: raise RuntimeError("INDSTOCKS_API_TOKEN is not configured")
@@ -136,14 +142,20 @@ async def snapshot() -> dict[str, Any]:
     cache["snapshot"],cache["updated_at"]=result,time.time(); result["intelligence"]=decision_intelligence(result,cache.get("previous_snapshot")); return result
 
 async def continuous_market_refresh():
+    global active_policy
     while True:
         try:
             data = await snapshot()
             if str(data.get("data_integrity")) == "LIVE_PROVIDER":
                 try:
-                    decision = final_decision(data, cache.get("previous_snapshot"), "adaptive", "LIVE")
+                    decision_input = dict(data)
+                    if active_policy is not None:
+                        decision_input["_adaptive_policy"] = active_policy
+                        decision_input["policy_target_day"] = datetime.now(IST).date().isoformat()
+                    decision = final_decision(decision_input, cache.get("previous_snapshot"), "adaptive", "LIVE")
                     record_snapshot(data)
                     record_decision(data, decision)
+                    live_paper.process(data, decision)
                 except Exception:
                     record_snapshot(data)
         except Exception:
@@ -152,6 +164,8 @@ async def continuous_market_refresh():
 
 @app.on_event("startup")
 async def start_background_refresh():
+    global active_policy
+    active_policy = load_future_policy()
     app.state.market_refresh_task=asyncio.create_task(continuous_market_refresh())
     app.state.after_market_task=asyncio.create_task(after_market_loop())
 
@@ -172,17 +186,17 @@ def root():
 def intelligence_page():
     path=os.path.join(os.path.dirname(__file__),"web","intelligence.html"); return FileResponse(path)
 
-@app.get("/health")
-def health(): return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"timestamp":datetime.now(timezone.utc).isoformat()}
 @app.get("/backtest")
 def backtest_page():
     path=os.path.join(os.path.dirname(__file__),"web","backtest.html"); return FileResponse(path)
 
+@app.get("/health")
+def health(): return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"timestamp":datetime.now(timezone.utc).isoformat()}
 @app.get("/api/v1/health")
 def api_health(): return health()
 @app.get("/api/v1/status")
 def status():
-    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","learning":learning_status(),"analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION","LIVE_LEARNING_RECORDER","AFTER_MARKET_LAB"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","learning":learning_status(),"active_future_policy":(active_policy or {}).get("policy"),"live_paper_status":("OPEN" if live_paper.active is not None else "IDLE"),"analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION","LIVE_LEARNING_RECORDER","PAPER_OUTCOME_TRACKER","AFTER_MARKET_LAB","ADAPTIVE_POLICY"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
 
 @app.get("/api/v1/learning/status")
 def learning_status_api(): return learning_status()

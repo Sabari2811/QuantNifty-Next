@@ -1,9 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
-from zoneinfo import ZoneInfo
-
 from quantnifty.adaptive_policy import ANCHOR_STRATEGY
 from quantnifty.backtest import BacktestConfig
 from quantnifty.learning_store import load_snapshots, record_research
@@ -11,15 +7,16 @@ from quantnifty.policy_runtime import validate_and_persist
 from quantnifty.research_strategy_runner import RESEARCH_STRATEGIES, run_research_strategy
 from quantnifty.scenario_engine import extract_scenarios
 
-IST = ZoneInfo("Asia/Kolkata")
+# Backward-compatible name retained for existing tests/UI integrations.
+STRATEGIES = ("directional", "gamma_blast", "adaptive")
 
 
-def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict[str, Any]:
+def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict[str, object]:
     snapshots = load_snapshots(day)
     if not snapshots:
         return {"status": "NO_DATA", "day": day, "strategies": {}, "orders_placed": 0}
     cfg = config or BacktestConfig()
-    results: dict[str, Any] = {}
+    results: dict[str, object] = {}
     for strategy in RESEARCH_STRATEGIES:
         try:
             result = run_research_strategy(snapshots, strategy, cfg)
@@ -29,8 +26,7 @@ def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict
     tested_metrics = {name: value.get("metrics") or {} for name, value in results.items() if value.get("status") == "TESTED"}
     ranked = sorted(((float((metric.get("net_pnl") or 0.0)), name) for name, metric in tested_metrics.items()), reverse=True)
     research = {"type": "after_market", "status": "COMPLETED", "day": day, "observations": len(snapshots), "strategies": results, "strategy_coverage": {"tested": list(RESEARCH_STRATEGIES), "pending": []}, "ranking_by_net_pnl": [{"strategy": name, "net_pnl": round(pnl, 2)} for pnl, name in ranked], "orders_placed": 0, "mode": "READ_ONLY_AFTER_MARKET", "counterfactual": True}
-    scenarios = extract_scenarios(research)
-    research["scenarios"] = scenarios
+    research["scenarios"] = extract_scenarios(research)
     record_research(research)
     anchor_metrics = results.get(ANCHOR_STRATEGY, {}).get("metrics") or {}
     candidate_metrics = {name: value.get("metrics") or {} for name, value in results.items() if name != ANCHOR_STRATEGY and value.get("status") == "TESTED"}
@@ -39,6 +35,6 @@ def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict
     return research
 
 
-def latest_research(day: str | None = None) -> list[dict[str, Any]]:
+def latest_research(day: str | None = None) -> list[dict[str, object]]:
     from quantnifty.learning_store import load_events
     return load_events("research", day)

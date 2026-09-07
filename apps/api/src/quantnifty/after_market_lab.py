@@ -25,13 +25,15 @@ def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict
             results[strategy] = {"status": "ERROR", "error": str(exc), "research_only": True}
     tested_metrics = {name: value.get("metrics") or {} for name, value in results.items() if value.get("status") == "TESTED"}
     ranked = sorted(((float((metric.get("net_pnl") or 0.0)), name) for name, metric in tested_metrics.items()), reverse=True)
-    research = {"type": "after_market", "status": "COMPLETED", "day": day, "observations": len(snapshots), "strategies": results, "strategy_coverage": {"tested": list(RESEARCH_STRATEGIES), "pending": []}, "ranking_by_net_pnl": [{"strategy": name, "net_pnl": round(pnl, 2)} for pnl, name in ranked], "orders_placed": 0, "mode": "READ_ONLY_AFTER_MARKET", "counterfactual": True}
+    research = {"type": "after_market", "training_type": "DAILY_AFTER_MARKET", "training_source": "STORED_DAY", "status": "COMPLETED", "day": day, "observations": len(snapshots), "strategies": results, "strategy_coverage": {"tested": list(RESEARCH_STRATEGIES), "pending": []}, "ranking_by_net_pnl": [{"strategy": name, "net_pnl": round(pnl, 2)} for pnl, name in ranked], "orders_placed": 0, "mode": "READ_ONLY_AFTER_MARKET", "counterfactual": True}
     research["scenarios"] = extract_scenarios(research)
-    record_research(research)
     anchor_metrics = results.get(ANCHOR_STRATEGY, {}).get("metrics") or {}
     candidate_metrics = {name: value.get("metrics") or {} for name, value in results.items() if name != ANCHOR_STRATEGY and value.get("status") == "TESTED"}
     policy_event = validate_and_persist(day, "DAY_AGGREGATE", anchor_metrics, candidate_metrics)
     research["policy"] = policy_event.get("research") if isinstance(policy_event, dict) else policy_event
+    # Persist only after policy/scenario enrichment so the durable daily
+    # training event is a complete record of the post-market run.
+    record_research(research)
     return research
 
 

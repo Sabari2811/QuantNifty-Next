@@ -39,18 +39,19 @@ def _score(stats: dict[str, Any]) -> float:
 
 
 def build_validated_policy(snapshots: Iterable[dict[str, Any]], trades: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    """Build a deployable research artifact only after the full 1-year gate is met.
+    """Build a research artifact from live/same-day stored evidence only.
 
-    The artifact is derived exclusively from completed historical trades. It does not
-    accept live-provider snapshots and never uses a future outcome when scoring a trade
-    at its entry timestamp.
+    Pre-existing historical recordings are deliberately rejected as a learning
+    source. There is no calendar-day or trading-day startup gate; sample-size
+    controls remain at strategy promotion time.
     """
     values = list(snapshots)
     data_status = historical_data_status(values)
-    if not data_status.get("learning_ready"):
+    provenance = set(data_status.get("provenance") or [])
+    if not values or "RECORDED_HISTORICAL" in provenance or not provenance.issubset({"LIVE_PROVIDER"}):
         return {
             "schema_version": POLICY_SCHEMA_VERSION,
-            "status": "INSUFFICIENT_1Y_DATA",
+            "status": "LIVE_LEARNING_SOURCE_REQUIRED",
             "learning_ready": False,
             "historical_data": data_status,
             "strategies": {},
@@ -104,7 +105,7 @@ def build_validated_policy(snapshots: Iterable[dict[str, Any]], trades: Iterable
 
 
 def validate_live_policy(policy: dict[str, Any], live_timestamp: Any) -> dict[str, Any]:
-    """Fail closed unless a policy is a validated historical artifact with no future leak."""
+    """Fail closed unless a policy is validated and strictly prior to live time."""
     errors: list[str] = []
     if policy.get("schema_version") != POLICY_SCHEMA_VERSION:
         errors.append("schema_version")
@@ -113,7 +114,8 @@ def validate_live_policy(policy: dict[str, Any], live_timestamp: Any) -> dict[st
     if not policy.get("learning_ready"):
         errors.append("learning_ready")
     historical = policy.get("historical_data") or {}
-    if historical.get("status") != "VALID_HISTORICAL":
+    provenance = set(historical.get("provenance") or [])
+    if "RECORDED_HISTORICAL" in provenance or not provenance.issubset({"LIVE_PROVIDER"}):
         errors.append("historical_provenance")
     trained_until = _timestamp(policy.get("training_end"))
     live_at = _timestamp(live_timestamp)

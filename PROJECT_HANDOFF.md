@@ -55,6 +55,8 @@ The only learning sources are:
 
 The planned three-month READ-ONLY learning/review period begins from the next live market session. Evidence accumulates naturally from live sessions and their post-market stored-day research. A large historical dataset is not a prerequisite to start learning.
 
+The legacy `adaptive_learning.py` policy helper is aligned with this rule: it accepts only live-provider evidence for policy-building, has no one-year gate, and rejects pre-existing `RECORDED_HISTORICAL` provenance. Live-policy validation also rejects historical provenance and still fails closed on future training timestamps.
+
 ## Finalized daily learning workflow
 
 ### During market hours
@@ -103,18 +105,21 @@ Each trading day adds new events to the durable learning store. Existing days ar
 - **Daily scheduler reliability fixed:** successful completion is required before a day is marked trained; failed/no-data runs remain retryable; persisted completed days are recognized after restart.
 - Added scheduler completion-state regression tests.
 - Added complete after-market training persistence regression test.
+- **Removed the remaining legacy historical-learning dependency from `adaptive_learning.py`; tests now enforce live-only policy construction and rejection of pre-existing historical recordings.**
 
 ## Verification state
-Implementation commits for the finalized daily-training reliability work:
+Implementation commits for the finalized daily-learning work:
 - `98ff9c041e31fdccbee70fbf875b470a816f1b83` — retryable/durable scheduler completion.
 - `6244fb3fb3f342d9adae7e3ac9f9954bfd55eb11` — complete daily after-market training persistence.
 - `46a6f10961fbf7e049aeb2057ac8a66aa76ce163` — scheduler completion regression tests.
 - `3d69f0ee6472a6dcd82d6f63d380823cffcd54ba` — after-market persistence regression test.
+- `4c566ec94b036d896c2f202eb8a0936cd9866492` — legacy historical-learning dependency removed from adaptive policy helper.
+- `d23da5dde3f3a1ba9c957fb949fb6d86c2e6f8ec` — adaptive policy tests aligned with live-only learning.
 
-CI and deployment for these new commits must be verified before this implementation batch is considered production-complete. No production success is claimed until the corresponding GitHub workflow and Render evidence are observed.
+A CI run on `0f8fe36ac25df9f53f456bac7699a562b2ed29ec` exposed one stale legacy test (`test_policy_stays_blocked_until_one_year_is_available`): 91 tests passed and that test failed because the finalized plan intentionally removed the one-year gate. The stale test was corrected in `d23da5dde3f3a1ba9c957fb949fb6d86c2e6f8ec`. Fresh CI for the current `main` is now required; no passing result is claimed yet.
 
 ## Remaining verification / operational work
-1. Verify CI for the current `main` after the finalized daily-training changes.
+1. Verify CI for the current `main` after the finalized daily-learning changes.
 2. Ensure Render Blueprint sync applies `DATABASE_URL` from `quantnifty-learning` to `quantnifty-api`.
 3. Verify latest Render deployment serves the current `main` commit.
 4. Query the learning database after service startup to confirm `quantnifty_learning_events` is created and receives live events.

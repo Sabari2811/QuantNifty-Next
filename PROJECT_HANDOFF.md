@@ -106,6 +106,7 @@ Each trading day adds new events to the durable learning store. Existing days ar
 - Added scheduler completion-state regression tests.
 - Added complete after-market training persistence regression test.
 - **Removed the remaining legacy historical-learning dependency from `adaptive_learning.py`; tests now enforce live-only policy construction and rejection of pre-existing historical recordings.**
+- **Updated `APP_ARCHITECTURE.md` to make the live-only/same-day learning-source policy, daily persistence/retry semantics, and no-historical-bootstrap rule authoritative.**
 
 ## Verification state
 Implementation commits for the finalized daily-learning work:
@@ -115,13 +116,19 @@ Implementation commits for the finalized daily-learning work:
 - `3d69f0ee6472a6dcd82d6f63d380823cffcd54ba` — after-market persistence regression test.
 - `4c566ec94b036d896c2f202eb8a0936cd9866492` — legacy historical-learning dependency removed from adaptive policy helper.
 - `d23da5dde3f3a1ba9c957fb949fb6d86c2e6f8ec` — adaptive policy tests aligned with live-only learning.
+- `1b4c334a5b52002bf0b9aa697bc2711aef788619` — architecture documentation aligned with finalized learning plan.
 
-A CI run on `0f8fe36ac25df9f53f456bac7699a562b2ed29ec` exposed one stale legacy test (`test_policy_stays_blocked_until_one_year_is_available`): 91 tests passed and that test failed because the finalized plan intentionally removed the one-year gate. The stale test was corrected in `d23da5dde3f3a1ba9c957fb949fb6d86c2e6f8ec`. Fresh CI for the current `main` is now required; no passing result is claimed yet.
+Verification observed before this final tracker commit:
+- CI run `34148657883` for `0f8fe36...`/the finalized code path completed **success** after the stale one-year test was corrected in `d23da5...`.
+- Backtest Gate run `34148657886` completed **success** and verified the deployed backtest gate UI.
+- Production Evidence run `34148657992` completed **success**, including production deployment wait, authenticated live-market/historical-replay evidence, and browser E2E.
+
+This final tracker/documentation commit triggers a fresh CI/Backtest/Production-Evidence cycle; those latest runs must be checked before declaring the very latest `main` commit production-complete.
 
 ## Remaining verification / operational work
-1. Verify CI for the current `main` after the finalized daily-learning changes.
+1. Verify fresh CI/Backtest/Production Evidence for the final tracker commit.
 2. Ensure Render Blueprint sync applies `DATABASE_URL` from `quantnifty-learning` to `quantnifty-api`.
-3. Verify latest Render deployment serves the current `main` commit.
+3. Verify latest Render deployment serves the final `main` commit.
 4. Query the learning database after service startup to confirm `quantnifty_learning_events` is created and receives live events.
 5. Verify persistence across service restart/deploy.
 6. Run/confirm production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.

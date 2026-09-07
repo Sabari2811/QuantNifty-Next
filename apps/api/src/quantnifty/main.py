@@ -20,6 +20,7 @@ from quantnifty.backtest import BacktestConfig, run_backtest, validation_report
 from quantnifty.recording_api import router as recording_router
 from quantnifty.decision_validation import validate_snapshot
 from quantnifty.learning_store import learning_status, record_decision, record_snapshot
+from quantnifty.after_market_scheduler import after_market_loop
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -28,7 +29,7 @@ NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
 POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
-app = FastAPI(title="QuantNifty Next", version="1.8.2")
+app = FastAPI(title="QuantNifty Next", version="1.8.3")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
 app.include_router(recording_router)
@@ -150,15 +151,18 @@ async def continuous_market_refresh():
         await asyncio.sleep(POLL_SECONDS)
 
 @app.on_event("startup")
-async def start_background_refresh(): app.state.market_refresh_task=asyncio.create_task(continuous_market_refresh())
+async def start_background_refresh():
+    app.state.market_refresh_task=asyncio.create_task(continuous_market_refresh())
+    app.state.after_market_task=asyncio.create_task(after_market_loop())
 
 @app.on_event("shutdown")
 async def stop_background_refresh():
-    task=getattr(app.state,"market_refresh_task",None)
-    if task:
-        task.cancel()
-        try: await task
-        except asyncio.CancelledError: pass
+    for task_name in ("market_refresh_task", "after_market_task"):
+        task=getattr(app.state,task_name,None)
+        if task:
+            task.cancel()
+            try: await task
+            except asyncio.CancelledError: pass
 
 @app.get("/")
 def root():

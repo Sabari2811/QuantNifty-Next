@@ -46,7 +46,9 @@ def _pg_connection():
         return None
     try:
         import psycopg
-        return psycopg.connect(url, connect_timeout=5)
+        # Render Postgres requires TLS. Explicitly require it even when the
+        # injected connection string does not carry an sslmode query option.
+        return psycopg.connect(url, connect_timeout=5, sslmode="require")
     except Exception:
         return None
 

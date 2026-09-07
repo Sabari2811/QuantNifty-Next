@@ -29,7 +29,7 @@ Governance: FinalDecision is authoritative; Risk owns permission; ExecutionPlan 
 ## Strategy universe
 `directional`, `gamma_blast`, `early_accumulation`, `transition`, `range`, `breakout_watch`, `standby`, `cas_reentry`, `adaptive`.
 
-Live API remains intentionally restricted to `directional`, `gamma_blast`, and `adaptive`. The after-market research runner now covers the seven research strategies plus adaptive and routes explicit research modes through the canonical Adaptive Brain/FinalDecision/Risk pipeline. This does not weaken live safeguards.
+Live API remains intentionally restricted to `directional`, `gamma_blast`, and `adaptive`. The after-market research runner covers the seven research strategies plus adaptive and routes explicit research modes through the canonical Adaptive Brain/FinalDecision/Risk pipeline. This does not weaken live safeguards.
 
 ## Adaptive Brain
 Early accumulation uses near-ATM OI expansion, premium behavior, active volume, quiet spot, controlled IV and expected-move-relative premium. States are `EARLY_ACCUMULATION`, `WATCH_ACCUMULATION`, `NO_CLEAR_ACCUMULATION`. Entry confirmation uses `EARLY_ACCUMULATION_CONFIRMATION` / `ACCUMULATION_THEN_BREAKOUT_CONFIRMATION`. Adaptive exit considers capital protection, favorable move, exhaustion/gamma reversal, profit lock and trailing. Current adaptive exit is primarily spot-based; richer option-premium/IV/Greeks/liquidity confirmation remains research work. No exact top/bottom prediction is claimed.
@@ -37,7 +37,7 @@ Early accumulation uses near-ATM OI expansion, premium behavior, active volume, 
 ## Learning / storage
 Live refresh now creates/updates a read-only paper trade lifecycle through `live_paper_manager.py`: one active hypothetical trade at a time, restart recovery from persisted open outcome, MFE/MAE tracking, option-premium P&L when the selected leg is available, spot proxy fallback, and session-close closure. No broker order is submitted.
 
-`learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has a Postgres instance `quantnifty-learning` in Singapore, but the API service database environment variable still requires secure attachment and production persistence verification.
+`learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has a Postgres instance `quantnifty-learning` in Singapore. **The remaining production storage action is to wire the Render service environment variable to that database and verify persistence across restart/deploy; no database credential has been committed.**
 
 After-market loads the same day's stored snapshots, runs the full research strategy universe, persists the after-market research result and deterministic scenarios, then validates and persists a versioned future-safe Adaptive Policy candidate. `policy_runtime.py` loads only a prior-day policy with valid schema and future-safe/counterfactual metadata at service startup; current-day policy cannot be loaded.
 
@@ -55,7 +55,7 @@ Broader learning gate remains 252 trading days + 365 calendar days + valid recor
 - Replay/backtest consistency.
 - Adaptive API/UI and multipart handling.
 - One-year readiness gate/weekday counting.
-- `APP_ARCHITECTURE.md` and persistent handoff.
+- `APP_ARCHITECTURE.md` full architecture reference and persistent handoff.
 - Live learning store and live Adaptive decision recording.
 - After-market lab and scheduler.
 - PostgreSQL-capable learning backend.
@@ -68,18 +68,23 @@ Broader learning gate remains 252 trading days + 365 calendar days + valid recor
 - Scenario persistence through the durable research event store.
 - Future-safe policy persistence and prior-day loading.
 
+## Verification state
+- Commit `ac30e43b888686ecd521b76b527fe8bce7188d36` initially exposed a compatibility failure (`STRATEGIES` alias); fixed in `b598e9b200cf3bd98d544b822263c5c575582d4f`.
+- Latest verified CI for the implementation commit `b598e9b200cf3bd98d544b822263c5c575582d4f`: **success**, all tests passed.
+- Backtest Gate Evidence for the implementation pass: **success**.
+- Production Evidence for the implementation pass: **success**, including authenticated live-market/historical replay evidence and browser E2E.
+- `APP_ARCHITECTURE.md` was subsequently restored to the full reference and aligned with the live-learning additions in commit `fb3868d57843fa146927471af3435c55cedb683b`.
+- Current `main` therefore contains the verified implementation plus the architecture-documentation update. A fresh CI run is required after the documentation-only commit before final closeout.
+
 ## Remaining verification / operational work
-1. Attach/configure Render PostgreSQL securely and verify persistence across restart/deploy.
-2. Run CI against the latest implementation and fix any failures.
-3. Verify latest Render deployment is serving the latest `main` commit.
-4. Run production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load.
+1. Wire Render PostgreSQL securely to the API service and verify durable persistence across restart/deploy.
+2. Run fresh CI after the latest `APP_ARCHITECTURE.md` update.
+3. Verify the latest Render deployment serves the current `main` commit.
+4. Run/confirm production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
 5. Start/continue the 3-month READ-ONLY learning period from the next market session.
 6. Accumulate sufficient historical/live observations for the 252-day learning gate; do not claim one-year performance early.
 7. Research richer option-premium/IV/Greeks/liquidity exit confirmation after sufficient observations.
 8. Cleanup remaining deprecation/unused-import warnings.
-
-## Verification state
-Recent implementation commits include live paper integration, research strategy routing, scenario/policy persistence, and this handoff update. CI/production evidence from earlier commits cannot be reused as evidence for these latest changes; fresh verification is required.
 
 ## Non-negotiable rules
 - Never commit `data_Review.txt`.

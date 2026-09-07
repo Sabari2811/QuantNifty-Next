@@ -28,19 +28,23 @@ def test_rejects_incomplete_option_leg():
         raise AssertionError("incomplete option leg must be rejected")
 
 
-def test_live_provider_data_is_not_classified_as_historical():
+def test_live_provider_data_is_the_live_learning_source():
     result = historical_data_status([snap("2026-09-01T09:15:00+00:00", "LIVE_PROVIDER")])
-    assert result["status"] == "NON_HISTORICAL"
-    assert result["learning_ready"] is False
+    assert result["status"] == "LIVE_DATA"
+    assert result["learning_ready"] is True
+    assert result["learning_status"] == "LIVE_LEARNING_ONLY"
+    assert result["live_learning_source"] == "LIVE_PROVIDER"
+    assert result["post_market_learning_source"] == "STORED_DAY"
 
 
-def test_short_historical_sample_is_not_learning_ready():
+def test_no_one_year_history_gate():
     result = historical_data_status([
-        snap("2025-09-01T09:15:00+00:00"),
         snap("2026-09-01T09:15:00+00:00"),
+        snap("2026-09-01T09:16:00+00:00"),
     ])
-    assert result["trading_days"] == 2
-    assert result["calendar_span_days"] >= 365
-    assert result["learning_ready"] is False
-    assert result["learning_status"] == "INSUFFICIENT_1Y_DATA"
-    assert result["days_missing"] == 250
+    assert result["learning_ready"] is True
+    assert result["learning_status"] == "LIVE_LEARNING_ONLY"
+    assert "days_missing" not in result
+    assert "minimum_learning_trading_days" not in result
+    assert "minimum_learning_calendar_days" not in result
+    assert result["historical_replay_only"] is True

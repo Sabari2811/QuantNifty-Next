@@ -28,6 +28,20 @@ def test_cas_window_waits_without_valid_live_cas():
     assert result["allow_new_trade"] is False
 
 
+def test_exact_1515_boundary_is_cas_only():
+    before = session_decision_policy(snap("2026-09-07T09:44:59Z"))
+    at = session_decision_policy(snap("2026-09-07T09:45:00Z", {"direction": "BEARISH", "confidence": 70}))
+    assert before["phase"] == "NORMAL_ADAPTIVE"
+    assert at["phase"] == "CAS_REENTRY"
+    assert at["allow_normal_adaptive"] is False
+
+
+def test_exact_1530_boundary_is_closed():
+    at = session_decision_policy(snap("2026-09-07T10:00:00Z", {"direction": "BULLISH", "confidence": 99}))
+    assert at["phase"] == "CLOSED"
+    assert at["allow_new_trade"] is False
+
+
 def test_after_close_is_blocked():
     result = session_decision_policy(snap("2026-09-07T10:00:01Z", {"direction": "BULLISH", "confidence": 99}))
     assert result["phase"] == "CLOSED"

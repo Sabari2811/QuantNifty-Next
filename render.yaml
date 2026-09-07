@@ -9,3 +9,14 @@ services:
     startCommand: uvicorn quantnifty.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: quantnifty-learning
+          property: connectionString
+
+databases:
+  - name: quantnifty-learning
+    region: singapore
+    plan: free
+    postgresMajorVersion: 18

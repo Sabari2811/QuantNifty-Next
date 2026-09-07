@@ -37,7 +37,9 @@ Early accumulation uses near-ATM OI expansion, premium behavior, active volume, 
 ## Learning / storage
 Live refresh now creates/updates a read-only paper trade lifecycle through `live_paper_manager.py`: one active hypothetical trade at a time, restart recovery from persisted open outcome, MFE/MAE tracking, option-premium P&L when the selected leg is available, spot proxy fallback, and session-close closure. No broker order is submitted.
 
-`learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has a Postgres instance `quantnifty-learning` in Singapore. **The remaining production storage action is to wire the Render service environment variable to that database and verify persistence across restart/deploy; no database credential has been committed.**
+`learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has Postgres instance `quantnifty-learning` in Singapore. Render wiring is now implemented declaratively in `render.yaml`: the API service receives `DATABASE_URL` from the database's internal `connectionString`, and the database is declared in the Blueprint as the existing `quantnifty-learning` resource. No credential or connection string is committed. Render's documented `fromDatabase.connectionString` mechanism is the intended secure path for same-region service-to-Postgres connectivity.
+
+The Render API environment was also updated with the database resource ID as a non-secret deployment marker, and a deployment was triggered. The Blueprint commit now provides the actual `DATABASE_URL` binding once the Render Blueprint is synced/applied. Persistence still requires runtime verification after that binding is active.
 
 After-market loads the same day's stored snapshots, runs the full research strategy universe, persists the after-market research result and deterministic scenarios, then validates and persists a versioned future-safe Adaptive Policy candidate. `policy_runtime.py` loads only a prior-day policy with valid schema and future-safe/counterfactual metadata at service startup; current-day policy cannot be loaded.
 
@@ -67,24 +69,26 @@ Broader learning gate remains 252 trading days + 365 calendar days + valid recor
 - Full after-market strategy coverage through the canonical Adaptive pipeline.
 - Scenario persistence through the durable research event store.
 - Future-safe policy persistence and prior-day loading.
+- Render Blueprint wiring for secure Postgres connection injection.
 
 ## Verification state
 - Commit `ac30e43b888686ecd521b76b527fe8bce7188d36` initially exposed a compatibility failure (`STRATEGIES` alias); fixed in `b598e9b200cf3bd98d544b822263c5c575582d4f`.
 - Latest verified CI for the implementation commit `b598e9b200cf3bd98d544b822263c5c575582d4f`: **success**, all tests passed.
 - Backtest Gate Evidence for the implementation pass: **success**.
 - Production Evidence for the implementation pass: **success**, including authenticated live-market/historical replay evidence and browser E2E.
-- `APP_ARCHITECTURE.md` was subsequently restored to the full reference and aligned with the live-learning additions in commit `fb3868d57843fa146927471af3435c55cedb683b`.
-- Current `main` therefore contains the verified implementation plus the architecture-documentation update. A fresh CI run is required after the documentation-only commit before final closeout.
+- `render.yaml` Postgres wiring committed as `9f174360f7761f4504f341348e916ac276968718`.
+- Render deployment `dep-dafealgn74is739l6al0` was triggered and is currently building commit `1179112cbad34b98aa627cc8cc1be611e15097fb`; the Postgres Blueprint wiring is a subsequent `main` commit and therefore still requires deployment/sync verification.
 
 ## Remaining verification / operational work
-1. Wire Render PostgreSQL securely to the API service and verify durable persistence across restart/deploy.
-2. Run fresh CI after the latest `APP_ARCHITECTURE.md` update.
-3. Verify the latest Render deployment serves the current `main` commit.
-4. Run/confirm production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
-5. Start/continue the 3-month READ-ONLY learning period from the next market session.
-6. Accumulate sufficient historical/live observations for the 252-day learning gate; do not claim one-year performance early.
-7. Research richer option-premium/IV/Greeks/liquidity exit confirmation after sufficient observations.
-8. Cleanup remaining deprecation/unused-import warnings.
+1. Ensure Render Blueprint sync applies `DATABASE_URL` from `quantnifty-learning` to `quantnifty-api`.
+2. Verify latest Render deployment serves the current `main` commit.
+3. Query the learning database after service startup to confirm `quantnifty_learning_events` is created and receives live events.
+4. Verify persistence across service restart/deploy.
+5. Run/confirm production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
+6. Start/continue the 3-month READ-ONLY learning period from the next market session.
+7. Accumulate sufficient historical/live observations for the 252-day learning gate; do not claim one-year performance early.
+8. Research richer option-premium/IV/Greeks/liquidity exit confirmation after sufficient observations.
+9. Cleanup remaining deprecation/unused-import warnings.
 
 ## Non-negotiable rules
 - Never commit `data_Review.txt`.
@@ -95,4 +99,4 @@ Broader learning gate remains 252 trading days + 365 calendar days + valid recor
 - Every implementation change updates this handoff.
 
 ## Continuation
-Read this file and `APP_ARCHITECTURE.md`, inspect `main`, CI and Render, then continue from verification/operational work. Do not restart or redesign. Only mark work complete after tests and deployment/production evidence support it.
+Read this file and `APP_ARCHITECTURE.md`, inspect `main`, CI and Render, then continue from verification/operational work. Do not restart or redesign. Only mark an item complete after the relevant tests and deployment/production evidence support it.

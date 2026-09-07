@@ -19,7 +19,7 @@ from quantnifty.institutional_engine import final_decision, replay_signal_stack
 from quantnifty.backtest import BacktestConfig, run_backtest, validation_report
 from quantnifty.recording_api import router as recording_router
 from quantnifty.decision_validation import validate_snapshot
-from quantnifty.session_policy import session_decision_policy
+from quantnifty.learning_store import learning_status, record_decision, record_snapshot
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -28,7 +28,7 @@ NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
 POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
 
-app = FastAPI(title="QuantNifty Next", version="1.8.1")
+app = FastAPI(title="QuantNifty Next", version="1.8.2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
 app.include_router(recording_router)
@@ -136,8 +136,17 @@ async def snapshot() -> dict[str, Any]:
 
 async def continuous_market_refresh():
     while True:
-        try: await snapshot()
-        except Exception: pass
+        try:
+            data = await snapshot()
+            if str(data.get("data_integrity")) == "LIVE_PROVIDER":
+                try:
+                    decision = final_decision(data, cache.get("previous_snapshot"), "adaptive", "LIVE")
+                    record_snapshot(data)
+                    record_decision(data, decision)
+                except Exception:
+                    record_snapshot(data)
+        except Exception:
+            pass
         await asyncio.sleep(POLL_SECONDS)
 
 @app.on_event("startup")
@@ -169,7 +178,10 @@ def backtest_page():
 def api_health(): return health()
 @app.get("/api/v1/status")
 def status():
-    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","learning":learning_status(),"analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION","LIVE_LEARNING_RECORDER","AFTER_MARKET_LAB"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
+
+@app.get("/api/v1/learning/status")
+def learning_status_api(): return learning_status()
 
 @app.get("/api/v1/market")
 async def market():
@@ -234,7 +246,7 @@ async def replay_api(payload: dict[str,Any]):
     points=replay(normalize_candles(payload,payload.get("scrip_code"))); return {"mode":"READ_ONLY_REPLAY","summary":summary(points),"points":to_dict(points)}
 
 @app.post("/api/v1/backtest")
-async def backtest_api(payload: dict[str, Any]):
+async def backtest_api(payload: dict[str,Any]):
     snapshots=payload.get("snapshots")
     if not isinstance(snapshots,list) or len(snapshots)<2: raise HTTPException(400,"snapshots must contain at least 2 snapshot objects")
     if any(not isinstance(x,dict) for x in snapshots): raise HTTPException(400,"every snapshot must be an object")

@@ -1,10 +1,10 @@
 # QuantNifty-Next — Persistent Project Handoff
 
-**Purpose:** This file is the durable handoff/state document for continuing QuantNifty-Next across chats. A new chat should read this file first, then inspect the current `main` branch before changing code. GitHub `main` remains the authoritative source of implementation.
+**Purpose:** Durable cross-chat handoff/state document. A new chat must read this file first, then inspect current `main` before changing code. GitHub `main` is authoritative for implementation.
 
 **Last updated:** 2026-09-07  
 **Current branch:** `main`  
-**Current latest commit at handoff creation:** `3e9dd3216328be3b4360b0654a0b22961d03db9c` — `Make one-year readiness count trading weekdays only`  
+**Latest implementation commit at this tracker update:** `c5d66da14e0f7fff67e9a345fa8914b97f7277eb`  
 **Repository:** https://github.com/Sabari2811/QuantNifty-Next  
 **Production service:** `quantnifty-api` on Render  
 **Production URL:** https://quantnifty-api.onrender.com  
@@ -15,7 +15,7 @@
 
 ## 1. FINALIZED PRODUCT DIRECTION
 
-QuantNifty is evolving into a **Live Adaptive Brain + After-Market Research Lab**.
+QuantNifty is a **Live Adaptive Brain + After-Market Research Lab**.
 
 The Brain must:
 
@@ -23,35 +23,32 @@ The Brain must:
 2. Operate normally from **09:20 IST through 15:15 IST**.
 3. At **15:15 IST**, stop normal Adaptive Brain decisions.
 4. From **15:15 to 15:30 IST**, allow only **CAS-controlled re-entry** when valid, already-produced live CAS data is present.
-5. At **15:30 IST**, stop all decisions because the market session is closed.
+5. At **15:30 IST**, stop all decisions.
 6. Learn continuously from live market outcomes during the planned 3-month learning period.
-7. Store the complete live market/session evidence needed to evaluate decisions later.
-8. After market close, replay the entire stored day and test **all supported strategies**, not only the strategy selected live.
-9. Separate actual live experience from counterfactual/research experience.
-10. Generate reusable market scenarios from successful and failed patterns.
-11. Update adaptive statistics/policy only after the relevant outcome is known and only for future decisions.
-12. Remain READ-ONLY throughout the learning/validation period.
+7. Store live market/session evidence for later evaluation.
+8. After market close, replay the complete stored day and test all strategies that are actually exposed by the execution engine.
+9. Keep actual live experience separate from counterfactual/research experience.
+10. Generate reusable successful and failed market scenarios.
+11. Update adaptive statistics/policy only after outcomes are known and only for future decisions.
+12. Remain READ-ONLY throughout learning and validation.
 
-The 3-month live-learning approach replaces the requirement to wait for a pre-existing one-year option-chain dataset before the Brain can start learning. A one-year historical dataset remains useful for broader research, but it is **not required to start this live-learning experiment**.
+The 3-month live-learning approach allows learning to start without waiting for a pre-existing one-year option-chain dataset. One-year historical data remains useful for broader research and validation.
 
 ---
 
-## 2. CORE ARCHITECTURE MAP
+## 2. APP ARCHITECTURE MAP
 
 ```text
                          INDSTOCKS / INDMONEY
                                   |
                     +-------------+-------------+
                     |                           |
-               Live market                 Historical/API
-                 inputs                     research inputs
+               LIVE MARKET                 HISTORICAL/API
+                    |                           |
+                    v                           v
+             MARKET RECORDER              RESEARCH INPUTS
                     |
-                    v
-             +----------------+
-             | Market Recorder|
-             +----------------+
-                    |
-             immutable snapshots
+          immutable live snapshots
                     |
           +---------+----------+
           |                    |
@@ -59,14 +56,12 @@ The 3-month live-learning approach replaces the requirement to wait for a pre-ex
    LIVE ADAPTIVE BRAIN     AFTER-MARKET LAB
    09:20 -> 15:15         after 15:30
           |                    |
-          |              replay entire day
+          |              replay complete day
           |                    |
           |       +------------+-------------+
           |       |      |       |      |     |
           |       v      v       v      v     v
-          |   Directional Accumulation Gamma Transition Range
-          |       |      |       |      |     |
-          |       +------+-------+------+-----+
+          |   Directional Gamma  Adaptive  Transition/Range/etc.
           |                    |
           |             counterfactual results
           |                    |
@@ -86,52 +81,54 @@ The 3-month live-learning approach replaces the requirement to wait for a pre-ex
 
 ```text
 Live Snapshot
-    -> Analytics
-    -> Institutional Signal
-    -> Adaptive Strategy Selection
-    -> Risk Engine
-    -> FinalDecision
-    -> ExecutionPlan
-    -> READ-ONLY output
+ -> Analytics
+ -> Institutional Signal
+ -> Adaptive Strategy Selection
+ -> Risk Engine
+ -> FinalDecision
+ -> ExecutionPlan
+ -> READ-ONLY output
 ```
 
 ### After-market chain
 
 ```text
-Stored day
-    -> deterministic replay
-    -> run every strategy
-    -> calculate trade outcomes
-    -> MFE / MAE / P&L / win/loss / drawdown
-    -> compare strategies by regime
-    -> identify successful/failure scenarios
-    -> update research memory
-    -> validate policy changes
+Stored Day
+ -> deterministic replay
+ -> run every supported strategy
+ -> calculate P&L / MFE / MAE / drawdown
+ -> compare by regime and time
+ -> identify successes and failures
+ -> generate scenarios
+ -> update research memory
+ -> validate future policy changes
 ```
 
 ---
 
 ## 3. STRATEGY UNIVERSE
 
-Current Adaptive Brain strategy candidates:
+Target Adaptive Brain strategy universe:
 
 - `directional`
 - `gamma_blast`
-- `transition`
 - `early_accumulation`
+- `transition`
 - `range`
 - `breakout_watch`
 - `standby`
-- `cas_reentry` during 15:15–15:30 only
-- `adaptive` as the top-level selector
+- `cas_reentry` (15:15–15:30 only)
+- `adaptive` top-level selector
 
-The Brain should not blindly choose the historically best strategy. It should choose based on **current regime + current evidence + validated learned performance**, with conservative fallback to the anchor strategy.
+**Current execution-engine coverage:** `directional`, `gamma_blast`, and `adaptive` are currently directly exposed to `run_backtest`/canonical decision routes. The After-Market Lab explicitly reports the remaining strategy names as pending engine exposure rather than silently substituting another strategy.
+
+The Brain must select using current regime + current evidence + validated learned performance, with conservative fallback to an anchor strategy.
 
 ---
 
 ## 4. MARKET REGIMES / SCENARIOS
 
-Important regimes include:
+Important regimes:
 
 - Trend / directional
 - Early accumulation
@@ -148,86 +145,56 @@ Important regimes include:
 - CAS-controlled late-session re-entry
 - Exhaustion / trend termination
 
-Scenario learning should capture both **success and failure** patterns.
-
-Example:
-
-```text
-ACCUMULATION -> BREAKOUT -> EXHAUSTION
-```
-
-and:
-
-```text
-ACCUMULATION -> BREAKOUT -> FAILED BREAKOUT -> REVERSAL
-```
-
-The latter is especially valuable for improving confirmation gates and avoiding fake breakouts.
+Scenario learning must retain both positive and negative examples.
 
 ---
 
-## 5. EARLY ACCUMULATION LOGIC
+## 5. EARLY ACCUMULATION
 
-The Brain is designed to detect possible accumulation **before a confirmed breakout**, rather than waiting for the entire move.
+Current detector uses near-ATM options, OI expansion, premium behavior, active volume, quiet/compressed spot, controlled IV, and expected-move-relative premium conditions.
 
-Current evidence includes:
-
-- near-ATM option rows
-- OI expansion
-- premium stable/rising
-- active volume
-- spot quiet/compressed
-- controlled IV
-- expected-move-relative premium condition
-
-Current accumulation states:
+States:
 
 - `EARLY_ACCUMULATION`
 - `WATCH_ACCUMULATION`
 - `NO_CLEAR_ACCUMULATION`
 
-The system must never claim it can know the exact bottom/top. The goal is to identify **early evidence with confirmation and adaptive risk**, not predict exact turning points.
+The Brain does not claim exact bottom/top prediction. It identifies early evidence, waits for appropriate confirmation, and manages risk adaptively.
 
 ---
 
 ## 6. ADAPTIVE ENTRY / EXIT
 
-### Entry
-
-For `early_accumulation`, the execution plan uses stronger confirmation stages rather than blindly entering on the first accumulation signal.
-
-Current confirmation concepts:
+Early accumulation entry uses:
 
 - `EARLY_ACCUMULATION_CONFIRMATION`
 - `ACCUMULATION_THEN_BREAKOUT_CONFIRMATION`
 
-### Exit
-
-Current adaptive exit state considers:
+Adaptive exit currently considers:
 
 - capital protection
 - favorable move
 - exhaustion / gamma reversal
 - profit lock
-- trailing stop activation
+- trailing stop
 - continued trend/accumulation support
 
-Current implementation is primarily **spot-movement based with gamma/volume/pressure context**. A future enhancement may add stronger option-premium/IV/Greeks/liquidity confirmation after sufficient data and tests are available.
+Current exit implementation is primarily spot-movement based with gamma/volume/pressure context. Option-premium/IV/Greeks/liquidity confirmation remains a research enhancement.
 
 ---
 
 ## 7. SESSION / CAS POLICY
 
-All times are IST.
+All times are IST:
 
 ```text
-Before 09:20       PRE_OPEN       no decision
-09:20–15:15        NORMAL_ADAPTIVE normal Brain allowed
-15:15–15:30        CAS_REENTRY    normal Brain stopped; CAS only
-15:30 onward       CLOSED         no decision
+Before 09:20       PRE_OPEN        no decision
+09:20–15:15        NORMAL_ADAPTIVE normal Brain
+15:15–15:30        CAS_REENTRY     CAS only
+15:30 onward       CLOSED          no decision
 ```
 
-Exact boundaries are important:
+Exact boundaries:
 
 - 09:19:59 -> blocked
 - 09:20:00 -> allowed
@@ -236,95 +203,76 @@ Exact boundaries are important:
 - 15:29:59 -> CAS-only
 - 15:30:00 -> closed
 
-CAS must be **already-produced live CAS data**. The session policy must not synthesize CAS to manufacture a trade.
+CAS must be already-produced live CAS data. The session policy must not synthesize CAS.
 
 ---
 
-## 8. DATA INTEGRITY / LOOK-AHEAD RULES
+## 8. DATA INTEGRITY / LOOK-AHEAD
 
-### Live decisions
+Live decisions require live-provider data and pass the live data-integrity gate.
 
-Live decisions must use live provider data and must pass the live data-integrity gate.
+Replay/backtest may use recorded historical data.
 
-### Historical/replay decisions
-
-Recorded historical data may be used for replay/backtest/research.
-
-### Look-ahead prohibition
-
-A decision at timestamp `T` may use only information available at or before `T`.
-
-Future market movement, future outcome, or after-market replay result must never be injected into the original live decision.
+A decision at time `T` may use only information available at or before `T`.
 
 ```text
-TODAY 10:00
-  decision is frozen
-
-TODAY 15:30+
-  research learns what happened
-
-TOMORROW 09:20+
-  validated learning can influence future decisions
+TODAY 10:00  -> decision frozen
+TODAY 15:30+ -> research learns outcome
+NEXT SESSION -> validated learning may influence future decisions
 ```
 
 ---
 
-## 9. LIVE LEARNING LOOP — 3 MONTH EXPERIMENT
+## 9. THREE-MONTH LIVE LEARNING PLAN
 
-During the planned 3-month learning period:
+During the three-month READ-ONLY experiment:
 
 ```text
 09:20
-  -> start live learning
-  -> capture snapshots continuously
-  -> compute analytics
-  -> make Adaptive Brain decision
-  -> record decision state
-  -> track hypothetical/READ-ONLY trade lifecycle
-  -> record MFE / MAE / outcome
+ -> capture live snapshots
+ -> calculate analytics
+ -> Adaptive Brain decision
+ -> record decision
+ -> track hypothetical lifecycle
+ -> resolve MFE / MAE / outcome
 
 15:15
-  -> stop normal Brain
-  -> CAS-only policy
+ -> stop normal Brain
+ -> CAS-only
 
 15:30
-  -> close live session
-  -> freeze live-day records
-  -> launch after-market research
+ -> freeze live day
+ -> run After-Market Lab
 ```
 
-The Brain can operate from Day 1, but learned overrides must be conservative while sample sizes are small.
-
-Suggested learning progression (configurable, not a hard-coded claim):
-
-```text
-Small sample      -> baseline/anchor dominates
-Growing sample    -> learned statistics have limited influence
-Strong sample     -> learned policy can influence selection
-Validated sample  -> policy candidate eligible for promotion
-```
+Learning influence must be conservative while sample sizes are small.
 
 ---
 
-## 10. AFTER-MARKET LAB — FINALIZED REQUIREMENT
+## 10. AFTER-MARKET STRATEGY LAB
 
-After 15:30, the system must replay the complete stored market day and test **all strategies** against the same data.
+After 15:30 the system must replay the stored day and compare strategies using the same market data.
 
-At minimum:
+Current implementation now includes `after_market_lab.py` and `after_market_scheduler.py`.
 
-1. Directional
-2. Early Accumulation
-3. Gamma Blast
-4. Gamma Transition
-5. Range
-6. Breakout/confirmation behavior
-7. Adaptive
-8. CAS re-entry where the session window applies
-9. Relevant exit policies
+The lab currently executes:
 
-For every strategy, collect:
+- `directional`
+- `gamma_blast`
+- `adaptive`
 
-- number of opportunities
+and explicitly reports these planned strategies as pending direct execution-engine exposure:
+
+- `early_accumulation`
+- `transition`
+- `range`
+- `breakout_watch`
+
+This is intentional: unsupported strategies are **not** falsely mapped to another strategy.
+
+For tested strategies collect:
+
+- opportunities
 - trades
 - wins/losses
 - gross P&L
@@ -337,26 +285,37 @@ For every strategy, collect:
 - MFE
 - MAE
 - holding time
-- false breakout rate
-- regime-specific performance
+- regime performance
 - time-of-day performance
-- expiry behavior where applicable
-
-### Critical separation
-
-**LIVE_MEMORY** = what the Brain actually selected/experienced live.
-
-**RESEARCH_MEMORY** = what every strategy would have done when replayed after close.
-
-Counterfactual results must never be represented as actual live trades.
+- expiry behavior
+- false-breakout behavior where available
 
 ---
 
-## 11. SCENARIO / EXPERIENCE LIBRARY
+## 11. LIVE MEMORY VS RESEARCH MEMORY
 
-The After-Market Lab should convert important replay outcomes into reusable scenarios.
+**LIVE_MEMORY:** actual live Adaptive Brain decisions and hypothetical/read-only lifecycle outcomes.
 
-Example schema:
+**RESEARCH_MEMORY:** after-market counterfactual results for strategies that were not selected live.
+
+Counterfactual results must never be represented as actual live trades.
+
+The current learning store writes separate JSONL streams for:
+
+```text
+snapshots.jsonl
+decisions.jsonl
+outcomes.jsonl
+research.jsonl
+```
+
+Each event carries `schema_version` and storage metadata.
+
+---
+
+## 12. SCENARIO / EXPERIENCE LIBRARY
+
+Future research records should capture:
 
 ```text
 scenario_id
@@ -378,87 +337,130 @@ MAE
 breakout outcome
 false_breakout flag
 exhaustion evidence
-CAS state if applicable
+CAS state
 outcome classification
 ```
 
-Scenario classifications should include both positive and negative examples.
+Both successful and failed scenarios are valuable.
 
 ---
 
-## 12. LEARNING / POLICY PROMOTION RULES
-
-Learning must be **outcome-aware but future-safe**.
-
-A research result becomes eligible to influence future decisions only after:
-
-1. the relevant outcome is closed,
-2. the data is validated,
-3. the sample belongs to the appropriate regime/strategy bucket,
-4. no look-ahead contamination is present,
-5. policy comparison passes the configured minimum evidence threshold.
-
-The eventual live policy should be versioned, validated and reversible.
-
-Recommended promotion lifecycle:
+## 13. LEARNING / POLICY PROMOTION
 
 ```text
 RAW EXPERIENCE
-      -> VALIDATED EXPERIENCE
-      -> LEARNED STATISTICS
-      -> WALK-FORWARD/OOS VALIDATION
-      -> POLICY CANDIDATE
-      -> POLICY vN
-      -> LIVE READ-ONLY
+ -> VALIDATED EXPERIENCE
+ -> LEARNED STATISTICS
+ -> WALK-FORWARD / OOS VALIDATION
+ -> POLICY CANDIDATE
+ -> POLICY vN
+ -> FUTURE LIVE READ-ONLY BRAIN
 ```
 
-If a learned policy is unavailable, insufficiently trained, invalid, or fails validation, the system must safely fall back to the anchor strategy / standby rather than forcing learned behavior.
+A policy may influence future live decisions only after the relevant outcome is closed, data is validated, no look-ahead exists, and minimum evidence thresholds are satisfied.
+
+If a learned policy is unavailable/invalid/insufficient, fall back to the anchor strategy or standby.
 
 ---
 
-## 13. CURRENT SOFTWARE ARCHITECTURE
+## 14. CURRENT SOFTWARE ARCHITECTURE
 
 Key modules:
 
-- `main.py` — live provider ingestion, analytics, API routes
-- `institutional_engine.py` — Institutional Signal -> RiskEngine -> FinalDecision -> ExecutionPlan
-- `research_brain.py` — regime detection, adaptive strategy selection, accumulation, adaptive exit, learning memory helpers
-- `session_policy.py` — 09:20/15:15/15:30 session policy and CAS-only late-session behavior
-- `decision_validation.py` — snapshot/decision-stage validation and fail-closed consistency checks
+- `main.py` — live provider ingestion, analytics, API, live recorder loop
+- `institutional_engine.py` — Institutional Signal -> Risk -> FinalDecision -> ExecutionPlan
+- `research_brain.py` — regime detection, accumulation, adaptive selection and exit
+- `session_policy.py` — session/CAS timing policy
+- `decision_validation.py` — fail-closed validation
 - `replay.py` — deterministic replay
-- `backtest.py` — backtest/validation execution loop
-- `strike_selector.py` — strike policy
-- `historical.py` — canonical historical snapshot contract and 1-year readiness gate
-- `recording_loader.py` — recorded Parquet/JSON ingestion
-- `recording_api.py` — historical replay/validation API
+- `backtest.py` — backtest/validation execution
+- `historical.py` — canonical historical contract and one-year readiness
+- `recording_loader.py` — recorder ingestion
+- `recording_api.py` — historical validation API
+- `learning_store.py` — live learning event persistence abstraction
+- `after_market_lab.py` — after-market multi-strategy research
+- `after_market_scheduler.py` — daily post-close orchestration
+- `adaptive_learning.py` — research policy artifact/validation helpers
 - `web/backtest.html` — Backtest UI
 
-Architecture rules:
+Architecture rules remain:
 
-- One canonical owner per domain concept.
-- `StrategySignal` must not bypass Decision/Risk.
-- `FinalDecision` is authoritative.
-- Risk owns permission to trade.
-- `ExecutionPlan` describes execution only and never submits orders.
-- Actual trade lifecycle state is separate from signal/decision state.
-- Performance consumes actual trade records.
-- Replay reuses the same analytics -> decision -> risk pipeline.
-- UI uses stable view models.
-- Configuration should not be hard-coded into business logic.
-- Time must be deterministic/injectable for tests.
+- one canonical owner per domain concept
+- `StrategySignal` cannot bypass Decision/Risk
+- `FinalDecision` is authoritative
+- Risk owns permission to trade
+- ExecutionPlan describes execution only and never submits orders
+- actual trade lifecycle is separate from signal/decision state
+- performance consumes actual trade records
+- replay reuses analytics -> decision -> risk
+- UI uses stable view models
+- configuration is not embedded in business logic
+- time is deterministic/injectable for tests
 
 ---
 
-## 14. CURRENT VALIDATION / BACKTEST SEMANTICS
+## 15. LIVE RECORDER IMPLEMENTATION STATUS
 
-Replay diagnostics evaluate decision observations independently of the backtest execution loop.
+Implemented:
 
-Therefore two gate counters are intentionally retained:
+- background live market refresh already existed and remains the source of live snapshots
+- each successful live-provider snapshot is now recorded
+- each live snapshot is evaluated through canonical Adaptive `FinalDecision` and recorded separately
+- `/api/v1/learning/status` exposes recorder counts
+- `/api/v1/status` exposes learning state
+- local JSONL fallback is available for development/runtime testing
+- storage is explicitly marked `FILESYSTEM_ONLY` until a durable production store is attached
 
-- **Risk Gate** = all decision observations evaluated by replay diagnostics.
-- **Execution Gate** = opportunities evaluated by the backtest execution loop, which can skip new entries while a position is open.
+**Important production limitation:** Render's current web service is a free service and the new learning store currently writes to its local filesystem. This is not sufficient as a three-month durable production data store across service replacement/deployment. A durable Render Postgres/other persistent store must be wired before relying on this as the authoritative three-month dataset.
 
-Example known scenario:
+A Render Postgres instance named `quantnifty-learning` was provisioned in Singapore as a persistence target, but application wiring/connection configuration still needs to be completed and verified.
+
+---
+
+## 16. AFTER-MARKET SCHEDULER STATUS
+
+Implemented:
+
+- scheduler starts with the API service
+- weekdays only
+- first run at/after **15:35 IST**
+- runs once per day
+- loads stored snapshots for the current day
+- executes the current supported backtests
+- records research results separately
+- remains READ-ONLY
+
+Pending hardening:
+
+- durable shared store
+- restart/idempotency audit beyond in-process day guard
+- complete direct strategy exposure for planned sub-strategies
+- richer scenario extraction
+
+---
+
+## 17. HISTORICAL READINESS
+
+Software gate:
+
+- minimum learning trading days: **252**
+- minimum calendar span: **365 days**
+- weekends excluded from trading-day count
+- valid recorded historical provenance required
+- statuses include `READY_FOR_1Y_LEARNING` and `INSUFFICIENT_1Y_DATA`
+
+The finalized live-learning plan does not wait for this gate before collecting new live data.
+
+---
+
+## 18. CURRENT VALIDATION / BACKTEST SEMANTICS
+
+Replay diagnostics and execution-loop counters have different scopes.
+
+- **Risk Gate:** all decision observations evaluated by replay diagnostics.
+- **Execution Gate:** opportunities actually considered by the backtest execution loop.
+
+Known sample:
 
 ```text
 Decision observations: 22
@@ -467,186 +469,181 @@ Execution Gate:        1 approved / 18 blocked
 Actual trades:         1
 ```
 
-These are different scopes and must not be collapsed.
-
-Blocked reason counts can overlap because they are reason flags, not necessarily mutually exclusive categories.
+Blocked reason counts may overlap because they are reason flags.
 
 ---
 
-## 15. HISTORICAL READINESS
-
-The software has a historical readiness contract:
-
-- minimum learning trading days: **252**
-- minimum learning calendar span: **365 days**
-- trading-day count excludes weekends
-- provenance must be valid recorded historical data
-- readiness states include `READY_FOR_1Y_LEARNING` and `INSUFFICIENT_1Y_DATA`
-
-This gate remains useful for broader historical research, but the finalized 3-month live-learning plan does not wait for it before collecting live experience.
-
-Known recorder evidence available before this plan was only a small sample (about 23 market-hours snapshots across roughly 11 trading days), so it is not sufficient to claim one-year strategy performance.
-
----
-
-## 16. CURRENT PROJECT STATUS AT HANDOFF
+## 19. CURRENT PROJECT STATUS
 
 ### Completed / implemented
 
-- Canonical architecture and decision/risk/execution separation
-- Institutional Signal / RiskEngine / FinalDecision / ExecutionPlan flow
-- Adaptive strategy selector
-- Market regime detection
-- Early accumulation detector
-- Accumulation -> breakout confirmation path
-- Direction-aware strategy selection
-- Adaptive exhaustion/trailing exit logic
-- Day-by-day adaptive memory in backtest
-- 09:20 normal Brain start
-- 15:15 CAS-only transition
-- 15:30 market close stop
-- Live data-integrity protection
-- Decision-stage validation
-- Replay/backtest consistency improvements
-- Adaptive API/UI support
-- Multipart strategy/config handling fix
-- One-year historical readiness endpoint/contract
-- Weekend exclusion from trading-day readiness count
-- Exact session-boundary test coverage
+- canonical decision/risk/execution architecture
+- Institutional Signal / Risk / FinalDecision / ExecutionPlan
+- Adaptive selector
+- market regime detection
+- early accumulation detection
+- accumulation -> breakout confirmation
+- direction-aware selection
+- adaptive exhaustion/trailing exit
+- day-by-day adaptive memory in backtest
+- 09:20 / 15:15 / 15:30 session policy
+- CAS-only late session
+- live data-integrity protection
+- decision-stage validation
+- replay/backtest consistency fixes
+- Adaptive API/UI
+- multipart strategy/config handling
+- one-year readiness contract
+- weekday-only readiness counting
+- exact session boundary tests
 - READ-ONLY execution protection
 - CI regression coverage
+- persistent project handoff documentation
+- application architecture documentation
+- **live learning recorder implementation**
+- **live Adaptive decision recording**
+- **after-market scheduler implementation**
+- **after-market research lab implementation for currently supported strategies**
+- **separate live/research event streams**
+- **learning status endpoint**
 
-### Current major work remaining
+### Pending major items
 
-1. **Persistent live market recorder / learning store**
-   - durable storage of live snapshots, decisions, outcomes and counterfactual research results
-   - must survive service restarts/deployments
-   - must be separated from secrets and code
+1. **Durable production learning storage**
+   - wire the provisioned Render Postgres to the application
+   - verify persistence across deployment/restart
+   - migrate/retain JSONL fallback only for development
 
-2. **After-Market Strategy Lab**
-   - automatically run after close
-   - replay the entire stored day
-   - execute all strategy simulations
-   - calculate comparative metrics
-   - produce scenario records
+2. **Complete strategy execution exposure for After-Market Lab**
+   - directly expose/test `early_accumulation`, `transition`, `range`, `breakout_watch` through the same canonical pipeline
+   - never substitute another strategy silently
 
-3. **Scenario / Counterfactual experience store**
-   - distinguish actual live decisions from hypothetical alternatives
-   - retain successful and failed scenarios
+3. **Scenario engine**
+   - extract reusable successful/failure scenarios from research results
+   - persist scenario records
 
-4. **Persistent Adaptive Policy**
-   - versioned learned statistics/policy
-   - validation gate
-   - rollback/fallback to anchor
-   - explicit insufficient-training state
+4. **Outcome lifecycle completion**
+   - connect live decision records to resolved MFE/MAE/P&L outcomes
+   - record outcomes only after resolution
 
-5. **Three-month learning orchestration**
-   - daily live capture
-   - after-close research job
-   - next-session policy loading
-   - monitoring of data completeness
+5. **Persistent Adaptive Policy**
+   - build/version learned policy from validated live + research evidence
+   - promotion gate
+   - rollback/fallback
+   - insufficient-training state
 
-6. **Production validation for the complete new loop**
-   - live snapshot -> Adaptive Brain -> Risk -> FinalDecision
-   - 09:20/15:15/15:30 behavior
-   - CAS re-entry gate
-   - recorder persistence
-   - after-market replay
-   - READ-ONLY guarantee
+6. **Three-month orchestration hardening**
+   - daily completeness checks
+   - restart/idempotency recovery
+   - missing-data detection
+   - policy load before next session
 
-7. **Additional exit research**
-   - evaluate option-premium / IV / Greeks / liquidity confirmation for adaptive exits using real accumulated data
+7. **Production evidence**
+   - verify latest deployment
+   - verify live provider -> Brain -> Risk -> FinalDecision
+   - verify session boundaries and CAS
+   - verify recorder persistence
+   - verify after-market job
+   - verify READ-ONLY guarantee
 
-8. **Cleanup**
-   - remove unused imports and address non-blocking framework deprecation warnings where appropriate.
+8. **Adaptive exit research**
+   - evaluate option premium / IV / Greeks / liquidity confirmation using accumulated data
+
+9. **Cleanup**
+   - unused imports
+   - framework deprecation warnings where appropriate
 
 ---
 
-## 17. KNOWN IMPORTANT COMMITS
+## 20. RECENT IMPLEMENTATION COMMITS
 
 | Commit | Purpose |
 |---|---|
 | `7494bd38ebf41e4398625b4aa7955e0cb4b091ef` | Multipart/API regression baseline; CI 58 passed |
-| `208488...` | Adaptive research fixture/counterfactual fixes |
-| `0d586...` | Adaptive Brain UI selector |
-| `ae08e46264493d8f8d687520a9d9d5ee43b5f324` | Finalize canonical decision-gate contract assertions |
-| `9a921a915ba20beaad56a0c1a70c54fe90a23fd3` | Expose one-year adaptive learning readiness |
-| `3e9dd3216328be3b4360b0654a0b22961d03db9c` | Make one-year readiness count trading weekdays only |
+| `ae08e46264493d8f8d687520a9d9d5ee43b5f324` | Canonical decision-gate contract assertions |
+| `9a921a915ba20beaad56a0c1a70c54fe90a23fd3` | One-year adaptive learning readiness endpoint |
+| `3e9dd3216328be3b4360b0654a0b22961d03db9c` | Weekday-only one-year readiness count |
+| `3df4a6eaef0e905952e07a1969012c816d904fb8` | Persistent project handoff + Adaptive plan |
+| `a50b0f7571f2d84dc7ea05a986fe5c6f04738b2e` | Application architecture + master plan documentation |
+| `1c605a3b091390a4bd2de58a620b9c5f233c5444` | Durable learning-store abstraction |
+| `d8b8cfdc1b436bd1a05d320068f33e96f9ceb60e` | After-market multi-strategy research lab |
+| `064ff334fc4c8547da86901a6848bdbe95e195e3` | Daily after-market scheduler |
+| `512169a12a1e034b91cb24b7dfe79750f53c53c9` | Wire live Adaptive learning recorder |
+| `f83bc6a65f96169fc4b696225ed51a36e38dec58` | Learning-store regression tests |
+| `c5d66da14e0f7fff67e9a345fa8914b97f7277eb` | After-market lab coverage |
 
-At this handoff, `3e9dd3216328be3b4360b0654a0b22961d03db9c` is the verified latest `main` commit.
+The tracker update itself is a separate commit after the implementation commits.
 
 ---
 
-## 18. CI / VALIDATION EVIDENCE
+## 21. CI / DEPLOYMENT EVIDENCE
 
-Latest verified CI associated with the readiness work:
+Previously verified CI:
 
-- GitHub Actions run `34076388908`
-- Job `101603230111`
+- run `34076388908`
+- job `101603230111`
 - **77 passed, 6 warnings**
 - compileall passed
 
-Warnings were non-fatal framework/action deprecations.
+The new learning-store/lab commits have been pushed after that verification. Their CI and production deployment must be checked before calling this implementation production-validated.
 
-A later production-evidence workflow was observed running against the readiness commit; its final result must be rechecked before being called successful.
-
-Do not claim a production deployment/evidence result without rechecking current Render/GitHub state.
+Do not claim a Render deployment is live without checking current Render deployment state.
 
 ---
 
-## 19. DATA / FILE RULES
+## 22. DATA / SECRET RULES
 
-- `data_Review.txt` is recorder export evidence and must **not** be committed to GitHub.
-- Raw market recordings should be stored outside Git source control or in an explicitly designed durable data store.
-- Secrets/API tokens must never be committed to this repository.
-- Existing environment variable for the provider token is `INDSTOCKS_API_TOKEN`.
+- `data_Review.txt` must not be committed.
+- Raw market recordings belong in durable external storage, not source control.
+- API tokens/secrets must never be committed.
+- Provider token environment variable: `INDSTOCKS_API_TOKEN`.
 
 ---
 
-## 20. RENDER / PRODUCTION
+## 23. RENDER / PRODUCTION
 
-Render workspace: `quantnifty-next`  
+Workspace: `quantnifty-next`  
 Service: `quantnifty-api`  
 Region: Singapore  
 Production: https://quantnifty-api.onrender.com  
-Backtest UI: https://quantnifty-api.onrender.com/backtest
+Backtest: https://quantnifty-api.onrender.com/backtest
 
-Render auto-deploys `main`. Always inspect the current deployment before declaring a newly pushed commit live.
+Render auto-deploys `main`.
+
+A Render Postgres target named `quantnifty-learning` was created in Singapore on 2026-09-07. It is currently a free database with an expiry shown by Render; it must not be treated as the final long-term three-month production store until an appropriate durable plan/configuration is confirmed.
 
 ---
 
-## 21. NEXT IMPLEMENTATION ORDER
+## 24. NEXT IMPLEMENTATION ORDER
 
-Do not redesign the project. Continue from `main`.
-
-Recommended implementation order:
+Do not redesign the project.
 
 ```text
-1. Inspect current main + this handoff
-2. Verify latest Render deployment + CI
-3. Implement durable live recorder / learning store
-4. Implement after-market orchestration
-5. Replay all strategies on stored day
-6. Persist counterfactual/scenario results
-7. Add daily learning/policy update pipeline
-8. Add versioned validated Adaptive Policy with safe fallback
-9. Add production evidence for the complete loop
-10. Run the 3-month READ-ONLY learning period
-11. Review evidence and only then consider any execution enablement
+1. Verify CI for the new recorder/lab commits
+2. Verify latest Render deployment
+3. Wire durable production storage
+4. Verify recorder persistence across restart/deploy
+5. Complete direct exposure of every planned strategy through canonical FinalDecision/Risk
+6. Make After-Market Lab test every planned strategy
+7. Implement scenario extraction/persistence
+8. Implement resolved live outcome/MFE/MAE/P&L lifecycle
+9. Implement persistent validated Adaptive Policy
+10. Add daily policy load/fallback
+11. Add full production evidence
+12. Begin 3-month READ-ONLY learning period
+13. Review evidence before any execution enablement
 ```
 
 ### Non-negotiable
 
-**No real-money order execution during the learning/validation phase.**
-
-The system may generate signals, simulate trades, calculate hypothetical P&L, and learn from market data, but `orders_placed` must remain zero and live trading must remain disabled until separately authorized after validation.
+`orders_placed = 0` and `trading_enabled = false` throughout learning/validation until separately authorized.
 
 ---
 
-## 22. NEW-CHAT CONTINUATION INSTRUCTION
+## 25. NEW-CHAT CONTINUATION INSTRUCTION
 
-When continuing this project in a new chat, the first instruction can be:
+Use:
 
-> **Read `PROJECT_HANDOFF.md` from QuantNifty-Next main, inspect the current repository state and latest commit, then continue implementation from the documented pending items. Do not restart or redesign the project. Verify before claiming completion.**
+> **Read `PROJECT_HANDOFF.md` and `APP_ARCHITECTURE.md` from QuantNifty-Next main. Inspect the current repository, latest commit, CI and Render deployment. Continue implementation from the documented pending items. Do not restart or redesign the project. Update the tracker after every implementation and only mark work complete after verification.**
 
-This file is a handoff, not a substitute for inspecting current source code. The new chat must still inspect the repository and current CI/Render state before modifying or reporting status.
+The tracker is persistent project context, not a substitute for inspecting current source code.

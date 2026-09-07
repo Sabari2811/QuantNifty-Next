@@ -11,6 +11,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from quantnifty.backtest import BacktestConfig, _is_market_session, validation_report
+from quantnifty.historical import historical_data_status
 from quantnifty.institutional_engine import final_decision
 from quantnifty.recording_loader import load_recording
 from quantnifty.research_brain import counterfactual_gate_analysis, market_regime, pre_move_state, strategy_selector
@@ -107,6 +108,21 @@ def recording_status():
     if root is None: return {"status": "NOT_CONFIGURED", "configured": False, "root": None, "bundles": 0}
     if not root.exists(): return {"status": "PATH_UNAVAILABLE", "configured": True, "root": str(root), "bundles": 0}
     bundles = sorted({p.parent for p in root.rglob("runtime.json")}); return {"status": "AVAILABLE" if bundles else "NO_BUNDLES", "configured": True, "root": str(root), "bundles": len(bundles)}
+
+@router.get("/api/v1/recording/learning-status")
+def recording_learning_status():
+    root = _root()
+    if root is None:
+        return {"status": "NOT_CONFIGURED", "learning_ready": False, "minimum_trading_days": 252, "minimum_calendar_days": 365}
+    if not root.exists():
+        return {"status": "PATH_UNAVAILABLE", "learning_ready": False, "root": str(root), "minimum_trading_days": 252, "minimum_calendar_days": 365}
+    try:
+        snapshots = load_recording(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(503, f"historical recording unavailable: {exc}") from exc
+    result = historical_data_status(snapshots)
+    result.update({"status": "OK", "mode": "READ_ONLY_RECORDED_HISTORICAL", "root": str(root)})
+    return result
 
 @router.get("/api/v1/recording/snapshots")
 def recording_snapshots():

@@ -13,38 +13,36 @@ QuantNifty is a **Live Adaptive Brain + After-Market Research Lab**.
 - Live decisions use only data available at decision time.
 - Adaptive Brain: 09:20–15:15 IST.
 - 15:15–15:30 IST: normal Brain stops; only already-produced live CAS may authorize `cas_reentry`.
-- 15:30 IST: decisions stop.
+- 15:30 IST: decisions stop and open paper trades must be closed as `SESSION_CLOSE`.
 - Learn for a planned 3-month READ-ONLY period.
-- Store live snapshots and decisions separately from counterfactual research.
-- After close, replay the stored day and test every strategy actually exposed by the canonical engine.
+- Store live snapshots, decisions and paper outcomes separately from counterfactual research.
+- After close, replay the stored day and test the full research strategy universe.
 - Only closed, validated, future-safe outcomes may influence future policy.
 
 ## Architecture / ownership
-`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan`
+`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Learning Store`
 
-Core ownership: `main.py` provider/analytics/API; `institutional_engine.py` signal/risk/FinalDecision/ExecutionPlan; `research_brain.py` adaptive regimes/selection/accumulation/exits; `session_policy.py` session/CAS; `decision_validation.py` validation; `backtest.py`/`replay.py` deterministic research; `historical.py` readiness; `recording_loader.py`/`recording_api.py` recorder/replay; `adaptive_learning.py` policy helpers; `learning_store.py` durable learning events; `after_market_lab.py` research; `after_market_scheduler.py` orchestration; `paper_trade_tracker.py` read-only outcome lifecycle; `scenario_engine.py` scenario extraction; `adaptive_policy.py` policy validation/promotion gates; `web/backtest.html` UI.
+Core ownership: `main.py` provider/analytics/API/live refresh; `institutional_engine.py` signal/risk/FinalDecision/ExecutionPlan; `research_brain.py` adaptive regimes/selection/accumulation/exits and explicit research overrides; `session_policy.py` session/CAS; `decision_validation.py` validation; `backtest.py`/`replay.py` deterministic research; `historical.py` readiness; `recording_loader.py`/`recording_api.py` recorder/replay; `adaptive_learning.py` policy helpers; `learning_store.py` durable learning events; `after_market_lab.py` full-day research; `after_market_scheduler.py` orchestration; `paper_trade_tracker.py` read-only outcome lifecycle; `live_paper_manager.py` live outcome integration/restart recovery; `scenario_engine.py` scenario extraction; `research_strategy_runner.py` canonical research strategy routing; `adaptive_policy.py` policy validation; `policy_runtime.py` persistence/next-session loading; `web/backtest.html` UI.
 
 Governance: FinalDecision is authoritative; Risk owns permission; ExecutionPlan never submits orders; actual and counterfactual experience remain separate; replay reuses the canonical pipeline; time must remain deterministic/injectable.
 
 ## Strategy universe
-Target: `directional`, `gamma_blast`, `early_accumulation`, `transition`, `range`, `breakout_watch`, `standby`, `cas_reentry`, `adaptive`.
+`directional`, `gamma_blast`, `early_accumulation`, `transition`, `range`, `breakout_watch`, `standby`, `cas_reentry`, `adaptive`.
 
-Current direct backtest/canonical exposure remains `directional`, `gamma_blast`, `adaptive`. The After-Market Lab explicitly reports other strategies as pending and never silently substitutes one strategy for another.
+Live API remains intentionally restricted to `directional`, `gamma_blast`, and `adaptive`. The after-market research runner now covers the seven research strategies plus adaptive and routes explicit research modes through the canonical Adaptive Brain/FinalDecision/Risk pipeline. This does not weaken live safeguards.
 
 ## Adaptive Brain
 Early accumulation uses near-ATM OI expansion, premium behavior, active volume, quiet spot, controlled IV and expected-move-relative premium. States are `EARLY_ACCUMULATION`, `WATCH_ACCUMULATION`, `NO_CLEAR_ACCUMULATION`. Entry confirmation uses `EARLY_ACCUMULATION_CONFIRMATION` / `ACCUMULATION_THEN_BREAKOUT_CONFIRMATION`. Adaptive exit considers capital protection, favorable move, exhaustion/gamma reversal, profit lock and trailing. Current adaptive exit is primarily spot-based; richer option-premium/IV/Greeks/liquidity confirmation remains research work. No exact top/bottom prediction is claimed.
 
 ## Learning / storage
-Live refresh records `snapshots`, `decisions`, `outcomes`, and `research` under `adaptive-learning-event-v1`. PostgreSQL is supported through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with JSONL fallback. Render has a Postgres instance `quantnifty-learning` in Singapore, but the API service still needs its database environment variable attached and persistence verified.
+Live refresh now creates/updates a read-only paper trade lifecycle through `live_paper_manager.py`: one active hypothetical trade at a time, restart recovery from persisted open outcome, MFE/MAE tracking, option-premium P&L when the selected leg is available, spot proxy fallback, and session-close closure. No broker order is submitted.
 
-After-market currently replays `directional`, `gamma_blast`, `adaptive` at/after 15:35 IST and keeps research counterfactual. `paper_trade_tracker.py` now provides non-executing hypothetical trade MFE/MAE/close lifecycle; its integration into the live recorder remains pending.
+`learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has a Postgres instance `quantnifty-learning` in Singapore, but the API service database environment variable still requires secure attachment and production persistence verification.
 
-`scenario_engine.py` now extracts deterministic counterfactual scenarios such as accumulation breakout, gamma blast, gamma transition, positive-gamma range, compression/breakout watch, liquidity risk, failed direction, and exhaustion/profit-lock.
-
-`adaptive_policy.py` now defines a versioned policy contract with anchor fallback, minimum sample gate, minimum improvement gate, and explicit future-safe/counterfactual metadata. It does not yet persist or load policies; promotion integration remains pending.
+After-market loads the same day's stored snapshots, runs the full research strategy universe, persists the after-market research result and deterministic scenarios, then validates and persists a versioned future-safe Adaptive Policy candidate. `policy_runtime.py` loads only a prior-day policy with valid schema and future-safe/counterfactual metadata at service startup; current-day policy cannot be loaded.
 
 ## Historical readiness
-Broader learning gate: 252 trading days + 365 calendar days + valid recorded historical provenance. Existing recorder evidence is far shorter; do not claim one-year strategy performance.
+Broader learning gate remains 252 trading days + 365 calendar days + valid recorded historical provenance. `data_Review.txt` is usable as historical/research evidence but remains uncommitted and is not a substitute for the one-year learning gate.
 
 ## Completed
 - Canonical decision/risk/execution architecture.
@@ -65,29 +63,23 @@ Broader learning gate: 252 trading days + 365 calendar days + valid recorded his
 - Read-only paper outcome tracker + MFE/MAE/boundary tests.
 - Scenario extraction engine + tests.
 - Versioned adaptive policy validation contract + promotion-gate tests.
+- Live paper outcome integration with restart recovery.
+- Full after-market strategy coverage through the canonical Adaptive pipeline.
+- Scenario persistence through the durable research event store.
+- Future-safe policy persistence and prior-day loading.
 
-## Pending implementation order
+## Remaining verification / operational work
 1. Attach/configure Render PostgreSQL securely and verify persistence across restart/deploy.
-2. Expose `early_accumulation`, `transition`, `range`, `breakout_watch` through canonical FinalDecision/Risk for research/backtest without weakening live safeguards.
-3. Integrate paper outcome lifecycle into live recording and persist closed MFE/MAE/P&L outcomes.
-4. Persist scenario results from after-market research.
-5. Persist validated Adaptive Policy vN with promotion, rollback and fallback; then load it only for future sessions.
-6. Add next-session policy loading and daily completeness checks.
-7. Run complete production evidence for recorder + lab + policy flow.
-8. Continue 3-month READ-ONLY learning.
-9. Research richer option-premium/IV/Greeks/liquidity exit confirmation.
-10. Cleanup unused imports/deprecation warnings.
+2. Run CI against the latest implementation and fix any failures.
+3. Verify latest Render deployment is serving the latest `main` commit.
+4. Run production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load.
+5. Start/continue the 3-month READ-ONLY learning period from the next market session.
+6. Accumulate sufficient historical/live observations for the 252-day learning gate; do not claim one-year performance early.
+7. Research richer option-premium/IV/Greeks/liquidity exit confirmation after sufficient observations.
+8. Cleanup remaining deprecation/unused-import warnings.
 
 ## Verification state
-Implementation commits in this pass:
-- `06a2655603328e3a9da70cee64231c8e5c301a08` — read-only paper outcome tracker.
-- `a93781341d7ae3157b19e38bd3b44c49de303ed7` — outcome tracker tests.
-- `84bccb0502b9033a74b7397ab0efb375a0b407a7` — scenario engine.
-- `5c206e409fc42b0bd97ac1b1194cae2031069beb` — adaptive policy contract.
-- `0fd2d8a5777e9ee890726a6463a4ca3ba26c81fa` — scenario/policy tests.
-- Current handoff update follows these changes.
-
-CI and Production Evidence for prior tracker commit `64e2e0b75b2a23241dfbf740e11246bc4c3b3083` completed successfully. New commits after that verification require a fresh CI run before completion is claimed. Render auto-deploy is enabled, but production must be rechecked against the latest commit before declaring new code live.
+Recent implementation commits include live paper integration, research strategy routing, scenario/policy persistence, and this handoff update. CI/production evidence from earlier commits cannot be reused as evidence for these latest changes; fresh verification is required.
 
 ## Non-negotiable rules
 - Never commit `data_Review.txt`.
@@ -98,4 +90,4 @@ CI and Production Evidence for prior tracker commit `64e2e0b75b2a23241dfbf740e11
 - Every implementation change updates this handoff.
 
 ## Continuation
-Read this file and `APP_ARCHITECTURE.md`, inspect `main`, CI and Render, then continue from pending items. Do not restart or redesign. Only mark work complete after tests and deployment/production evidence support it.
+Read this file and `APP_ARCHITECTURE.md`, inspect `main`, CI and Render, then continue from verification/operational work. Do not restart or redesign. Only mark work complete after tests and deployment/production evidence support it.

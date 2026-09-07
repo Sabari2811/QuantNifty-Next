@@ -14,7 +14,7 @@ QuantNifty is a **Live Adaptive Brain + After-Market Research Lab**.
 - Adaptive Brain: 09:20–15:15 IST.
 - 15:15–15:30 IST: normal Brain stops; only already-produced live CAS may authorize `cas_reentry`.
 - 15:30 IST: decisions stop and open paper trades must be closed as `SESSION_CLOSE`.
-- Learn for a planned 3-month READ-ONLY period starting from live data on the next market session.
+- Learn continuously from live market observations; the planned learning/review horizon is approximately three months, with no historical-data startup gate.
 - Store live snapshots, decisions and paper outcomes separately from counterfactual research.
 - After close, replay **that stored live day only** and test the full research strategy universe.
 - Only closed, validated, future-safe outcomes may influence future policy.
@@ -39,7 +39,9 @@ Live refresh creates/updates a read-only paper trade lifecycle through `live_pap
 
 `learning_store.py` supports PostgreSQL through `QUANTNIFTY_DATABASE_URL` or `DATABASE_URL`, with filesystem fallback. Render has Postgres instance `quantnifty-learning` in Singapore. Render wiring is implemented declaratively in `render.yaml`: the API service receives `DATABASE_URL` from the database's internal `connectionString`, and the database is declared in the Blueprint as the existing `quantnifty-learning` resource. No credential or connection string is committed.
 
-After-market loads the same day's stored live snapshots, runs the full research strategy universe, persists the after-market research result and deterministic scenarios, then validates and persists a versioned future-safe Adaptive Policy candidate. `policy_runtime.py` loads only a prior-day policy with valid schema and future-safe/counterfactual metadata at service startup; current-day policy cannot be loaded.
+Every live session continuously stores the live market snapshot and live decision evidence. Closed read-only paper outcomes store strategy, direction, entry/exit, P&L when available, MFE/MAE, exit reason and execution-disabled markers. The stored snapshot preserves the canonical market payload rather than training from an external historical bootstrap.
+
+After-market training runs automatically on trading weekdays at/after 15:35 IST. It loads only the completed same-day stored live snapshots, runs the full research strategy universe, extracts deterministic scenarios, validates/persists the future-safe policy candidate, and then persists one complete daily research/training record containing the strategy results, rankings, scenarios and policy reference. A scheduler day is marked complete only after the lab returns `COMPLETED`; `NO_DATA` and exceptions remain retryable. On service restart, a durable completed research record prevents duplicate daily training.
 
 ## Learning source policy — finalized
 **Historical learning is removed completely.** There is no 252-trading-day gate, 365-calendar-day gate, historical bootstrap requirement, or historical performance requirement for Adaptive learning.
@@ -51,7 +53,28 @@ The only learning sources are:
 
 `data_Review.txt` and any other pre-existing historical recordings are **replay/reference evidence only**. They must not train, seed, initialize, promote, or influence the live Adaptive Brain or its policy memory.
 
-The 3-month READ-ONLY learning period begins from the next live market session. Evidence accumulates naturally from live sessions and their post-market stored-day research. A large historical dataset is not a prerequisite to start learning.
+The planned three-month READ-ONLY learning/review period begins from the next live market session. Evidence accumulates naturally from live sessions and their post-market stored-day research. A large historical dataset is not a prerequisite to start learning.
+
+## Finalized daily learning workflow
+
+### During market hours
+- Capture the live provider snapshot on every refresh.
+- Preserve the complete available market payload, including option-chain fields and analytics available from the provider (OI, previous OI, volume, IV, bid/ask and Greeks such as Delta/Gamma/Theta/Vega where supplied).
+- Run the canonical Adaptive Brain → Signal → Risk → FinalDecision path using only current/previous live observations.
+- Persist the decision separately from the snapshot.
+- Maintain the read-only paper trade lifecycle and persist closed outcomes including P&L/MFE/MAE where determinable.
+
+### After market close
+- At/after 15:35 IST, freeze the completed same-day stored observations for research.
+- Run all configured research strategies against the same stored-day information.
+- Calculate strategy results and trade-level counterfactuals.
+- Generate and persist scenarios, including failed/negative cases.
+- Validate and persist a future-safe policy candidate.
+- Persist a complete daily training/research event only after policy/scenario enrichment.
+- Never rewrite the original live decision.
+
+### Accumulation
+Each trading day adds new events to the durable learning store. Existing days are retained; learning is incremental rather than overwritten. PostgreSQL is the production durability target, with JSONL fallback for local/testing operation.
 
 ## Completed
 - Canonical decision/risk/execution architecture.
@@ -65,7 +88,7 @@ The 3-month READ-ONLY learning period begins from the next live market session. 
 - Adaptive API/UI and multipart handling.
 - **Removed the one-year historical learning gate.**
 - Live learning store and live Adaptive decision recording.
-- After-market lab and scheduler.
+- After-market lab and weekday scheduler.
 - PostgreSQL-capable learning backend.
 - Learning-store and lab regression tests.
 - Read-only paper outcome tracker + MFE/MAE/boundary tests.
@@ -76,23 +99,29 @@ The 3-month READ-ONLY learning period begins from the next live market session. 
 - Scenario persistence through the durable research event store.
 - Future-safe policy persistence and prior-day loading.
 - Render Blueprint wiring for secure Postgres connection injection.
+- **Daily after-market training persistence ordering fixed:** the durable daily research event now includes policy/scenario enrichment.
+- **Daily scheduler reliability fixed:** successful completion is required before a day is marked trained; failed/no-data runs remain retryable; persisted completed days are recognized after restart.
+- Added scheduler completion-state regression tests.
+- Added complete after-market training persistence regression test.
 
 ## Verification state
-- Historical gate removal implemented in `apps/api/src/quantnifty/historical.py`.
-- Historical contract tests updated in `apps/api/tests/test_historical.py` to verify that short/no historical coverage no longer blocks learning.
-- Implementation commits: `44321bc3efaeff06ff154c00de7a9eb401938e25` and `20693e49894b821a510ddd699ccb3f6406d8420d0`.
-- CI for these latest commits still needs to be run/verified before marking the change fully validated.
-- Render PostgreSQL wiring remains subject to runtime deployment verification.
+Implementation commits for the finalized daily-training reliability work:
+- `98ff9c041e31fdccbee70fbf875b470a816f1b83` — retryable/durable scheduler completion.
+- `6244fb3fb3f342d9adae7e3ac9f9954bfd55eb11` — complete daily after-market training persistence.
+- `46a6f10961fbf7e049aeb2057ac8a66aa76ce163` — scheduler completion regression tests.
+- `3d69f0ee6472a6dcd82d6f63d380823cffcd54ba` — after-market persistence regression test.
+
+CI and deployment for these new commits must be verified before this implementation batch is considered production-complete. No production success is claimed until the corresponding GitHub workflow and Render evidence are observed.
 
 ## Remaining verification / operational work
-1. Run/verify CI after the historical-learning-gate removal.
+1. Verify CI for the current `main` after the finalized daily-training changes.
 2. Ensure Render Blueprint sync applies `DATABASE_URL` from `quantnifty-learning` to `quantnifty-api`.
 3. Verify latest Render deployment serves the current `main` commit.
 4. Query the learning database after service startup to confirm `quantnifty_learning_events` is created and receives live events.
 5. Verify persistence across service restart/deploy.
 6. Run/confirm production evidence for live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
-7. Start the 3-month READ-ONLY learning period from the next market session using **live data + same-day post-market stored data only**.
-8. Accumulate live evidence naturally; no 252-day target is a learning gate.
+7. Start the READ-ONLY learning/review period from the next live market session using **live data + same-day post-market stored data only**.
+8. Accumulate live evidence naturally; no historical-day target is a learning gate.
 9. Cleanup remaining deprecation/unused-import warnings.
 
 ## Non-negotiable rules

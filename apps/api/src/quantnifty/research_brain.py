@@ -102,8 +102,6 @@ def accumulation_detector(snapshot: dict[str, Any], previous: dict[str, Any] | N
         doi_pct = _pct(oi, prev_oi) if prev_oi else 0.0
         dpct = _pct(price, prev_price) if prev_price else 0.0
         premium_ratio = price / em if em > 0 else 999.0
-        # Accumulation proxy: OI expands while premium is stable/rising, volume is active,
-        # spot has not yet escaped, and IV is not already excessively expanded.
         oi_build = doi_pct >= 2.0
         price_held = dpct >= -1.5
         active = volume > 0
@@ -116,11 +114,9 @@ def accumulation_detector(snapshot: dict[str, Any], previous: dict[str, Any] | N
         if best is None or score > best["score"]:
             best = candidate
     if best and best["score"] >= 70:
-        direction = "BULLISH" if best["side"] == "CE" else "BEARISH"
-        state = "EARLY_ACCUMULATION"
+        direction = "BULLISH" if best["side"] == "CE" else "BEARISH"; state = "EARLY_ACCUMULATION"
     elif best and best["score"] >= 50:
-        direction = "BULLISH" if best["side"] == "CE" else "BEARISH"
-        state = "WATCH_ACCUMULATION"
+        direction = "BULLISH" if best["side"] == "CE" else "BEARISH"; state = "WATCH_ACCUMULATION"
     else:
         direction = "NEUTRAL"; state = "NO_CLEAR_ACCUMULATION"
     return {"state": state, "direction": direction, "score": round(best["score"], 1) if best else 0.0, "candidate": best, "candidates": candidates, "spot_change_pct": round(_pct(spot, prev_spot), 4) if prev_spot else 0.0, "iv_change_pct": round(_pct(iv, piv), 2) if piv else 0.0, "method": "near_atm_OI+premium+volume+IV+expected_move"}
@@ -134,11 +130,9 @@ def adaptive_exit_state(snapshot: dict[str, Any], previous: dict[str, Any] | Non
     move = (spot - entry) / entry * 100.0 if direction == "BULLISH" else (entry - spot) / entry * 100.0
     pre = pre_move_state(snapshot, previous); vol = _volume(snapshot); pvol = _volume(previous); volume_change = _pct(vol, pvol) if pvol else 0.0
     gamma = _f(snapshot.get("gex")); pgamma = _f(previous.get("gex")); gamma_reversal = pgamma != 0 and ((gamma > 0) != (pgamma > 0))
-    pressure = pre["pressure_bias"]
-    aligned = pressure == direction
+    pressure = pre["pressure_bias"]; aligned = pressure == direction
     exhaustion = move >= 0.8 and volume_change <= -20 and not aligned
-    hard_exit = move <= -0.5
-    take_profit = move >= 1.8 and (exhaustion or gamma_reversal)
+    hard_exit = move <= -0.5; take_profit = move >= 1.8 and (exhaustion or gamma_reversal)
     trailing = max(0.35, min(1.0, move * 0.45)) if move > 0 else 0.35
     if hard_exit: action, reason = "EXIT", "protect_capital"
     elif take_profit: action, reason = "EXIT", "profit_exhaustion_or_gamma_reversal"
@@ -183,11 +177,8 @@ def adaptive_day_policy(snapshot: dict[str, Any], previous: dict[str, Any] | Non
     by_regime = memory.get("by_regime") or {}; stats = by_regime.get(regime) or {}; global_stats = memory.get("global") or {}
     candidates = []
     for strategy in strategies:
-        s = stats.get(strategy) or {}; n = int(s.get("trades", 0)); wins = int(s.get("wins", 0)); pnl = _f(s.get("net_pnl")); g = global_stats.get(strategy) or {}; gn = int(g.get("trades", 0)); gp = _f(g.get("net_pnl"))
-        win_rate = (wins + 1.0) / (n + 2.0); avg_pnl = pnl / n if n else 0.0; global_avg = gp / gn if gn else 0.0; evidence = min(1.0, n / 5.0)
-        score = 0.55 * win_rate + 0.45 * (0.5 + max(-0.5, min(0.5, (avg_pnl + global_avg) / 400.0)))
-        score = score * (0.35 + 0.65 * evidence) + 0.5 * (0.65 - 0.65 * evidence)
-        candidates.append((score, strategy, n, win_rate, avg_pnl))
+        s = stats.get(strategy) or {}; n = int(s.get("trades", 0)); wins = int(s.get("wins", 0)); pnl = _f(s.get("net_pnl")); g = global_stats.get(strategy) or {}; gn = int(g.get("trades", 0)); gp = _f(g.get("net_pnl")); win_rate = (wins + 1.0) / (n + 2.0); avg_pnl = pnl / n if n else 0.0; global_avg = gp / gn if gn else 0.0; evidence = min(1.0, n / 5.0)
+        score = 0.55 * win_rate + 0.45 * (0.5 + max(-0.5, min(0.5, (avg_pnl + global_avg) / 400.0))); score = score * (0.35 + 0.65 * evidence) + 0.5 * (0.65 - 0.65 * evidence); candidates.append((score, strategy, n, win_rate, avg_pnl))
     anchor = base["selected_strategy"] if base["selected_strategy"] in strategies else "directional"; ranked = sorted(candidates, reverse=True); chosen = anchor; reason = "regime anchor; insufficient prior evidence to override"; anchor_row = next(c for c in candidates if c[1] == anchor)
     for row in ranked:
         if row[1] == anchor: continue
@@ -213,7 +204,16 @@ def update_adaptive_memory(memory: dict[str, Any], trade: dict[str, Any], day: s
 
 def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
     memory = snapshot.get("_adaptive_memory")
-    return adaptive_day_policy(snapshot, previous, memory) if isinstance(memory, dict) else _base_strategy_selection(snapshot, previous)
+    selected = adaptive_day_policy(snapshot, previous, memory) if isinstance(memory, dict) else _base_strategy_selection(snapshot, previous)
+    research_strategy = str(snapshot.get("_research_strategy") or "").strip().lower()
+    if research_strategy in {"directional", "gamma_blast", "early_accumulation", "transition", "range", "breakout_watch", "standby"}:
+        base = _base_strategy_selection(snapshot, previous)
+        selected = {**base, "selected_strategy": research_strategy, "reason": f"explicit research strategy={research_strategy}", "learning": {"research_override": True}}
+        if research_strategy in {"directional", "gamma_blast", "transition", "early_accumulation"} and selected["preferred_direction"] == "NEUTRAL":
+            selected["preferred_direction"] = str((snapshot.get("recorded_bias") or snapshot.get("bias") or "NEUTRAL")).upper()
+        if research_strategy == "standby":
+            selected["preferred_direction"] = "NEUTRAL"
+    return selected
 
 
 def _spot_outcome(snapshots: list[dict[str, Any]], entry_index: int, direction: str, stop_pct: float, target_pct: float, max_hold_bars: int) -> dict[str, Any]:

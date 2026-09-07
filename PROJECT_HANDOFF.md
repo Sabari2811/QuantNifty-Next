@@ -108,6 +108,7 @@ Each trading day adds new events to the durable learning store. Existing days ar
 - **Removed the remaining legacy historical-learning dependency from `adaptive_learning.py`; tests now enforce live-only policy construction and rejection of pre-existing historical recordings.**
 - **Updated `APP_ARCHITECTURE.md` to make the live-only/same-day learning-source policy, daily persistence/retry semantics, and no-historical-bootstrap rule authoritative.**
 - **Fixed Render PostgreSQL TLS connection handling:** the learning store now explicitly uses `sslmode=require` for PostgreSQL connections.
+- **Added production evidence assertion:** `/api/v1/status` must report PostgreSQL learning durability and database availability, preventing a production deployment from being declared healthy while silently falling back to filesystem storage.
 
 ## Verification state
 Implementation commits for the finalized daily-learning work:
@@ -119,26 +120,25 @@ Implementation commits for the finalized daily-learning work:
 - `d23da5dde3f3a1ba9c957fb949fb6d86c2e6f8ec` — adaptive policy tests aligned with live-only learning.
 - `1b4c334a5b52002bf0b9aa697bc2711aef788619` — architecture documentation aligned with finalized learning plan.
 - `1fbd51a7209fa6d7da3c4357ef64e2a170a98a3b` — Render PostgreSQL TLS connection fix.
+- `50588241c9f029f0c3072dd85c02a3023d98807b` — production PostgreSQL durability evidence assertion.
 
-Verified before this latest TLS fix:
-- CI run `34148786448` for final commit `5cd65bf2...` completed **success**.
-- Backtest Gate run `34148786444` for final commit `5cd65bf2...` completed **success**.
-- Production Evidence run `34148786433` for final commit `5cd65bf2...` completed **success**, including production deployment wait, authenticated live-market/historical-replay evidence, and browser E2E.
-- Render deployment `dep-dafep5n9r02s73fb83mg` served the prior Postgres-wired commit successfully.
-
-The TLS fix is now committed and will trigger a fresh CI/deployment/evidence cycle. It must be verified on its resulting production deployment before this item is marked production-complete.
+Verification observed for the current code path:
+- CI run `34150740603` for commit `ec961518...` completed **success** after the TLS fix.
+- Production Evidence run `34150740568` for commit `ec961518...` completed **success** with the existing production smoke/E2E suite.
+- Backtest Gate remains previously verified on the finalized architecture; the new production-evidence assertion will be included in the fresh cycle triggered by the latest workflow change.
+- Render Postgres instance is `quantnifty-learning`, status `available`, PostgreSQL 18.
+- Direct Render SQL verification still cannot be performed by the connector because its connection currently fails with `FATAL: SSL/TLS required`; the application-side connection was explicitly hardened with `sslmode=require` and the production evidence workflow now verifies the application's own PostgreSQL availability instead.
 
 ## Remaining verification / operational work
-1. Verify CI for TLS-fix commit `1fbd51a7209fa6d7da3c4357ef64e2a170a98a3b`.
-2. Verify Render deployment of the TLS-fix commit reaches `live`.
-3. Verify the production learning store reports PostgreSQL availability rather than filesystem fallback.
-4. Re-run the Render SQL verification once the connector can establish its required TLS connection; the previous query failed at the Render connector layer with `FATAL: SSL/TLS required`.
-5. Verify `quantnifty_learning_events` creation and event counts after live data arrives.
-6. Verify persistence across service restart/deploy.
-7. Verify production live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
-8. Start the READ-ONLY learning/review period from the next live market session using **live data + same-day post-market stored data only**.
-9. Accumulate live evidence naturally; no historical-day target is a learning gate.
-10. Cleanup remaining deprecation/unused-import warnings.
+1. Verify the fresh CI / Production Evidence / Backtest Gate cycle for the latest workflow commit.
+2. Verify the latest Render deployment serves the latest `main` commit and passes the new PostgreSQL durability assertion.
+3. Verify the production `/api/v1/status` learning block reports `durability=POSTGRESQL` and `database_available=true`.
+4. Verify `quantnifty_learning_events` creation and event counts after genuine live data arrives.
+5. Verify persistence across service restart/deploy.
+6. Verify production live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
+7. Start the READ-ONLY learning/review period from the next live market session using **live data + same-day post-market stored data only**.
+8. Accumulate live evidence naturally; no historical-day target is a learning gate.
+9. Cleanup remaining deprecation/unused-import warnings.
 
 ## Non-negotiable rules
 - Never commit `data_Review.txt` or use it as a learning source.

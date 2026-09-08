@@ -1,6 +1,6 @@
 # QuantNifty-Next — Persistent Project Handoff
 
-**Updated:** 2026-09-07  
+**Updated:** 2026-09-08  
 **Branch:** `main`  
 **Repository:** https://github.com/Sabari2811/QuantNifty-Next  
 **Production:** https://quantnifty-api.onrender.com  
@@ -109,6 +109,7 @@ Each trading day adds new events to the durable learning store. Existing days ar
 - **Updated `APP_ARCHITECTURE.md` to make the live-only/same-day learning-source policy, daily persistence/retry semantics, and no-historical-bootstrap rule authoritative.**
 - **Fixed Render PostgreSQL TLS connection handling:** the learning store now explicitly uses `sslmode=require` for PostgreSQL connections.
 - **Added production evidence assertion:** `/api/v1/status` must report PostgreSQL learning durability and database availability, preventing a production deployment from being declared healthy while silently falling back to filesystem storage.
+- **Added temporary live-validation runtime harness:** `.github/workflows/live-validation-harness.yml` keeps the current free Render web service awake during today's validation window and polls `/health` and `/api/v1/status`, recording live snapshot freshness, PostgreSQL durability, database availability and paper-trade status. It is READ-ONLY and never submits orders.
 
 ## Verification state
 Implementation commits for the finalized daily-learning work:
@@ -121,24 +122,29 @@ Implementation commits for the finalized daily-learning work:
 - `1b4c334a5b52002bf0b9aa697bc2711aef788619` — architecture documentation aligned with finalized learning plan.
 - `1fbd51a7209fa6d7da3c4357ef64e2a170a98a3b` — Render PostgreSQL TLS connection fix.
 - `50588241c9f029f0c3072dd85c02a3023d98807b` — production PostgreSQL durability evidence assertion.
+- `3bf1662ae8e964df4a624c3f54d9816b7c07977f` — temporary live-validation runtime harness.
 
 Verification observed for the current code path:
-- CI run `34150740603` for commit `ec961518...` completed **success** after the TLS fix.
-- Production Evidence run `34150740568` for commit `ec961518...` completed **success** with the existing production smoke/E2E suite.
-- Backtest Gate remains previously verified on the finalized architecture; the new production-evidence assertion will be included in the fresh cycle triggered by the latest workflow change.
+- CI run `34150970969` completed **success** for the current production code before the runtime harness addition.
+- Backtest Gate run `34150970991` completed **success** for the same production code.
 - Render Postgres instance is `quantnifty-learning`, status `available`, PostgreSQL 18.
-- Direct Render SQL verification still cannot be performed by the connector because its connection currently fails with `FATAL: SSL/TLS required`; the application-side connection was explicitly hardened with `sslmode=require` and the production evidence workflow now verifies the application's own PostgreSQL availability instead.
+- The latest Render deployment for commit `a0b585e52a8c772e4533b24f2786c4d57c0ace33` is live.
+- Before the harness fix, Render runtime logs and service metrics showed no runtime evidence during today's market window. The service is configured as a **Free** web service, and Render documents that Free web services spin down after 15 minutes without inbound traffic. This is incompatible with an always-on background market recorder unless the service is kept active or moved to a paid always-on compute plan.
+- The current `render.yaml` declares `/health`, but the existing Render service configuration reported an empty health-check path; Blueprint synchronization has not been independently confirmed. The application itself exposes `/health` and `/api/v1/status`.
 
 ## Remaining verification / operational work
-1. Verify the fresh CI / Production Evidence / Backtest Gate cycle for the latest workflow commit.
-2. Verify the latest Render deployment serves the latest `main` commit and passes the new PostgreSQL durability assertion.
-3. Verify the production `/api/v1/status` learning block reports `durability=POSTGRESQL` and `database_available=true`.
+1. Verify the live-validation harness run reaches the production service and records fresh `/health` + `/api/v1/status` evidence during today's remaining market window.
+2. Verify the production `/api/v1/status` learning block reports `durability=POSTGRESQL` and `database_available=true`.
+3. Verify genuine live snapshots/decisions/paper outcomes are being persisted in PostgreSQL.
 4. Verify `quantnifty_learning_events` creation and event counts after genuine live data arrives.
 5. Verify persistence across service restart/deploy.
 6. Verify production live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
-7. Start the READ-ONLY learning/review period from the next live market session using **live data + same-day post-market stored data only**.
-8. Accumulate live evidence naturally; no historical-day target is a learning gate.
-9. Cleanup remaining deprecation/unused-import warnings.
+7. Verify the 15:15–15:30 CAS window behavior from live evidence where a valid CAS signal exists; otherwise record the fail-closed standby evidence.
+8. Verify the automatic after-market lab at/after 15:35 IST using today's stored live data only.
+9. Verify the future-safe policy is persisted and loaded on the next eligible session.
+10. Start/continue the READ-ONLY learning/review period using **live data + same-day post-market stored data only**.
+11. Cleanup the temporary validation harness after today's evidence is captured, unless an always-on production compute plan is selected.
+12. Cleanup remaining deprecation/unused-import warnings.
 
 ## Non-negotiable rules
 - Never commit `data_Review.txt` or use it as a learning source.

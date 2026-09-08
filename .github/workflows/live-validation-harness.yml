@@ -1,0 +1,68 @@
+name: QuantNifty Live Validation Harness
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quantnifty-live-validation
+  cancel-in-progress: true
+
+jobs:
+  live-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Keep production awake and collect runtime evidence
+        shell: bash
+        env:
+          BASE_URL: https://quantnifty-api.onrender.com
+          STOP_AT_IST: '16:00'
+        run: |
+          set -u
+          echo "LIVE_VALIDATION_HARNESS=START"
+          echo "UTC=$(date -u --iso-8601=seconds)"
+          echo "IST=$(TZ=Asia/Kolkata date --iso-8601=seconds)"
+          echo "This harness is a temporary validation aid for the Render Free-plan idle limitation."
+          echo "It does not place orders or alter trading permissions."
+
+          end_epoch="$(TZ=Asia/Kolkata date -d "$(date +%F) ${STOP_AT_IST}:00" +%s)"
+          while [ "$(date +%s)" -lt "$end_epoch" ]; do
+            now_ist="$(TZ=Asia/Kolkata date --iso-8601=seconds)"
+            echo "--- $now_ist ---"
+
+            health_code="$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 45 "$BASE_URL/health" || true)"
+            echo "HEALTH_HTTP=$health_code"
+            if [ -s /tmp/health.json ]; then cat /tmp/health.json; echo; fi
+
+            status_code="$(curl -sS -o /tmp/status.json -w '%{http_code}' --max-time 45 "$BASE_URL/api/v1/status" || true)"
+            echo "STATUS_HTTP=$status_code"
+            if [ -s /tmp/status.json ]; then
+              cat /tmp/status.json
+              echo
+              python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('/tmp/status.json')
+          try:
+              data=json.loads(p.read_text())
+              print('RUNTIME_CACHED=', data.get('cached'))
+              print('RUNTIME_UPDATED_AT=', data.get('updated_at'))
+              learning=data.get('learning') or {}
+              print('LEARNING_DURABILITY=', learning.get('durability'))
+              print('LEARNING_DATABASE_AVAILABLE=', learning.get('database_available'))
+              print('LEARNING_CONFIGURED=', learning.get('configured'))
+              print('LIVE_PAPER_STATUS=', data.get('live_paper_status'))
+          except Exception as exc:
+              print('STATUS_PARSE_ERROR=', exc)
+          PY
+            fi
+
+            sleep 60
+          done
+
+          echo "LIVE_VALIDATION_HARNESS=END"

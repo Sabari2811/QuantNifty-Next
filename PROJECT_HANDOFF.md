@@ -110,6 +110,7 @@ Each trading day adds new events to the durable learning store. Existing days ar
 - **Fixed Render PostgreSQL TLS connection handling:** the learning store now explicitly uses `sslmode=require` for PostgreSQL connections.
 - **Added production evidence assertion:** `/api/v1/status` must report PostgreSQL learning durability and database availability, preventing a production deployment from being declared healthy while silently falling back to filesystem storage.
 - **Added temporary live-validation runtime harness:** `.github/workflows/live-validation-harness.yml` keeps the current free Render web service awake during today's validation window and polls `/health` and `/api/v1/status`, recording live snapshot freshness, PostgreSQL durability, database availability and paper-trade status. It is READ-ONLY and never submits orders.
+- **Hardened live-validation evidence:** the harness now performs a real `/api/v1/market` provider read each cycle, requires `LIVE_PROVIDER` data with a valid spot and option-chain rows, requires a fresh cached snapshot (`<=90s`), requires PostgreSQL durability/database availability, and fails closed if these conditions are not met. This removes the previous false-green state where a healthy web process could be mistaken for successful live ingestion/learning.
 
 ## Verification state
 Implementation commits for the finalized daily-learning work:
@@ -123,6 +124,7 @@ Implementation commits for the finalized daily-learning work:
 - `1fbd51a7209fa6d7da3c4357ef64e2a170a98a3b` — Render PostgreSQL TLS connection fix.
 - `50588241c9f029f0c3072dd85c02a3023d98807b` — production PostgreSQL durability evidence assertion.
 - `3bf1662ae8e964df4a624c3f54d9816b7c07977f` — temporary live-validation runtime harness.
+- `577f2e905e6ce886b1c66c3b8ff5b602bc8bc244` — strict live-provider/snapshot/learning validation harness.
 
 Verification observed for the current code path:
 - CI run `34150970969` completed **success** for the current production code before the runtime harness addition.
@@ -131,10 +133,12 @@ Verification observed for the current code path:
 - The latest Render deployment for commit `a0b585e52a8c772e4533b24f2786c4d57c0ace33` is live.
 - Before the harness fix, Render runtime logs and service metrics showed no runtime evidence during today's market window. The service is configured as a **Free** web service, and Render documents that Free web services spin down after 15 minutes without inbound traffic. This is incompatible with an always-on background market recorder unless the service is kept active or moved to a paid always-on compute plan.
 - The current `render.yaml` declares `/health`, but the existing Render service configuration reported an empty health-check path; Blueprint synchronization has not been independently confirmed. The application itself exposes `/health` and `/api/v1/status`.
+- Render deployment `dep-daft1ldbedkc73fsk4q0` for commit `88287cb0e42ac7ec9e7e33d0750adbcea9b09983` is **LIVE**. Runtime logs show successful `/health` and `/api/v1/status` requests every minute from the validation harness.
+- A direct Render SQL diagnostic query currently fails because the Render SQL connector itself does not negotiate the database TLS requirement; this does **not** prove application-side PostgreSQL failure because `learning_store.py` explicitly uses `sslmode=require`. The production application must therefore be verified through `/api/v1/learning/status`, which uses the application's TLS-capable connection path.
 
 ## Remaining verification / operational work
-1. Verify the live-validation harness run reaches the production service and records fresh `/health` + `/api/v1/status` evidence during today's remaining market window.
-2. Verify the production `/api/v1/status` learning block reports `durability=POSTGRESQL` and `database_available=true`.
+1. Verify the updated strict live-validation harness executes successfully against the live production service.
+2. Verify the production `/api/v1/status` learning block reports `durability=POSTGRESQL` and `database_available=true` through the application connection path.
 3. Verify genuine live snapshots/decisions/paper outcomes are being persisted in PostgreSQL.
 4. Verify `quantnifty_learning_events` creation and event counts after genuine live data arrives.
 5. Verify persistence across service restart/deploy.

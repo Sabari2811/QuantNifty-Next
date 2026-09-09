@@ -22,7 +22,7 @@ QuantNifty is a **Live Adaptive Brain + After-Market Research Lab**.
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Learning Store`
 
-Core ownership: `main.py` provider/analytics/API/live refresh; `institutional_engine.py` signal/risk/FinalDecision/ExecutionPlan; `research_brain.py` adaptive regimes/selection/accumulation/exits and explicit research overrides; `session_policy.py` session/CAS; `decision_validation.py` validation; `replay.py`/`backtest.py` deterministic research; `historical.py` snapshot normalization/provenance diagnostics only; `recording_loader.py`/`recording_api.py` recorder/replay; `adaptive_learning.py` policy helpers; `learning_store.py` durable learning events; `after_market_lab.py` full-day research; `after_market_scheduler.py` orchestration; `paper_trade_tracker.py` read-only outcome lifecycle; `live_paper_manager.py` live outcome integration/restart recovery; `scenario_engine.py` scenario extraction; `research_strategy_runner.py` canonical research strategy routing; `adaptive_policy.py` policy validation; `policy_runtime.py` persistence/next-session loading; `web/backtest.html` UI.
+Core ownership: `main.py` provider/analytics/API/live refresh; `institutional_engine.py` signal/risk/FinalDecision/ExecutionPlan; `research_brain.py` adaptive regimes/selection/accumulation/exits and explicit research overrides; `session_policy.py` session/CAS; `decision_validation.py` validation; `replay.py`/`backtest.py` deterministic research; `historical.py` snapshot normalization/provenance diagnostics only; `recording_loader.py`/`recording_api.py` recorder/replay; `adaptive_learning.py` policy helpers; `learning_store.py` durable learning events; `after_market_lab.py` full-day research; `after_market_scheduler.py` orchestration; `paper_trade_tracker.py` read-only outcome lifecycle; `live_paper_manager.py` live outcome integration/restart recovery; `scenario_engine.py` scenario extraction; `research_strategy_runner.py` canonical research strategy routing; `adaptive_policy.py` policy validation; `policy_runtime.py` persistence/next-session loading; `web/backtest.html` UI; `paper_ledger_api.py` read-only paper ledger and session decision summary.
 
 Governance: FinalDecision is authoritative; Risk owns permission; ExecutionPlan never submits orders; actual and counterfactual experience remain separate; replay reuses the canonical pipeline; time must remain deterministic/injectable.
 
@@ -114,6 +114,8 @@ Each trading day adds new events to the durable learning store. Existing days ar
 - **Added local live-validation bootstrap:** `.env.example` documents the required non-secret local runtime variables, and `scripts/run_local.ps1` installs the existing API package and starts the existing FastAPI app in READ-ONLY mode on `127.0.0.1:8000`. It requires both `INDSTOCKS_API_TOKEN` and `DATABASE_URL` so local validation does not silently fall back to filesystem learning storage.
 - **Added production runtime observability:** `runtime_observability.py` exposes `/api/v1/runtime-evidence` and emits a structured `QUANTNIFTY_RUNTIME_EVIDENCE` heartbeat every 30 seconds containing cached LIVE_PROVIDER snapshot timestamp/spot/rows, data-integrity state, PostgreSQL learning durability/counts and paper-trade state.
 - **Added Render-compatible startup observability:** `sitecustomize.py` attaches the runtime evidence heartbeat to the existing `uvicorn quantnifty.main:app` process without changing trading behavior. It also records a safe PostgreSQL connectivity diagnostic with credentials redacted.
+- **Added read-only paper ledger API:** `/api/v1/paper/ledger` exposes closed paper trades for an IST trading day with entry/exit, quantity, exit reason, MFE/MAE, P&L basis and aggregated P&L, plus the same-day decision count/approval and signal distribution. Open trades are excluded from realized P&L. No broker charges are fabricated; `net_pnl` equals the stored paper P&L proxy until a broker cost model is explicitly implemented.
+- Added paper-ledger aggregation regression test.
 
 ## Verification state
 Implementation commits for the finalized daily-learning work:
@@ -134,6 +136,9 @@ Implementation commits for the finalized daily-learning work:
 - `893892a3a468f249793333d2a2ab006ade4ec4cd` — Render Blueprint start command updated to run the observability wrapper.
 - `3a7e2c8d8c869f8fd5966a8ad9adc0c6378c9a9d` — Render-compatible startup observability hook.
 - `068a08b3e9cf11a9a33e45e60dae808d2c4fba81` — safe PostgreSQL connectivity diagnostic.
+- `b982289f92c1be806a9041023295b1b1de2bb4e6` — read-only paper ledger API.
+- `ecc040c200776311330291cfc2ca2b0036ba1d8e` — production app route wiring for paper ledger.
+- `1c4bbab78a9716542bf2e40fe94426fc5c63be71` — paper ledger aggregation regression test.
 
 ## Live verification evidence — 2026-09-09
 The production service is now producing application-owned runtime evidence during the live market session.
@@ -147,7 +152,10 @@ Verified from Render runtime logs:
 - `paper_trade_status=OPEN`
 - `trading=DISABLED`
 
-This is the first direct production evidence proving that the background recorder is receiving genuine live provider data, rather than merely proving that the web process is healthy.
+Later runtime evidence also showed PostgreSQL reachable with `durability=POSTGRESQL`, numeric decision/snapshot counters and `outcomes=2` during the live session.
+
+### Paper ledger verification surface
+The production app now exposes a read-only ledger endpoint at `/api/v1/paper/ledger`. It returns only `CLOSED` outcomes for the requested IST day, excludes open trades from realized P&L, and includes the same-day decision summary. P&L is explicitly labeled as a paper proxy: option-premium P&L is used when both entry/exit option prices are available, otherwise the existing spot proxy is used. Broker charges are currently `0.0` because no cost model has been implemented; this is not presented as broker-realized net P&L.
 
 ### PostgreSQL blocker found and diagnosed
 The same production evidence showed:
@@ -157,9 +165,9 @@ The same production evidence showed:
 
 The new safe diagnostic identified the exact cause: `DATABASE_URL` currently contains the literal text `${{quantnifty-learning.DATABASE_URL}}` rather than a resolved Postgres connection URL. The Render environment-variable API accepted that literal value; the application then correctly rejected it as invalid connection information. No secret was exposed.
 
-Render's documented Blueprint mechanism is `fromDatabase: { name: quantnifty-learning, property: connectionString }`, which resolves the internal connection string during Blueprint sync. The manually managed service has not synchronized that Blueprint value, so its current `DATABASE_URL` must be replaced in the Render service Environment settings with the actual internal Postgres connection URL (do not paste the secret into chat). citeturn3search0turn3search1
+Render's documented Blueprint mechanism is `fromDatabase: { name: quantnifty-learning, property: connectionString }`, which resolves the internal connection string during Blueprint sync. The manually managed service has not synchronized that Blueprint value, so its current `DATABASE_URL` must be replaced in the Render service Environment settings with the actual internal Postgres connection URL (do not paste the secret into chat).
 
-The Render Postgres instance itself is `available`, but it remains on the Free plan and is scheduled to expire 2026-10-07. Render documents that Free Postgres instances have a 30-day limit. citeturn2search0
+The Render Postgres instance itself is `available`, but it remains on the Free plan and is scheduled to expire 2026-10-07.
 
 ## Remaining verification / operational work
 1. Replace the literal `DATABASE_URL` reference in the Render service with the actual internal connection URL from `quantnifty-learning` (via Render Dashboard; never share the secret in chat).
@@ -171,7 +179,7 @@ The Render Postgres instance itself is `available`, but it remains on the Free p
 7. Verify the automatic after-market lab at/after 15:35 IST using today's stored live data only.
 8. Verify the future-safe policy is persisted and loaded on the next eligible session.
 9. Start/continue the READ-ONLY learning/review period using **live data + same-day post-market stored data only**.
-10. Upgrade the Render API and Postgres compute plans if the user chooses always-on production durability; Free web services spin down after 15 minutes of no inbound traffic, and Free Postgres expires after 30 days. citeturn2search0
+10. Upgrade the Render API and Postgres compute plans if the user chooses always-on production durability; Free web services spin down after 15 minutes of no inbound traffic, and Free Postgres expires after 30 days.
 11. Cleanup the temporary validation harness after today's evidence is captured, unless an always-on production compute plan is selected.
 12. Cleanup remaining deprecation/unused-import warnings.
 

@@ -1,9 +1,9 @@
 """QuantNifty runtime observability bootstrap.
 
 Python imports sitecustomize during interpreter startup when the repository root
-is on sys.path. This installs a small, explicit observability hook without
-changing the existing uvicorn start command on the manually-managed Render
-service. It never changes trading behavior or submits orders.
+is on sys.path. This installs explicit observability and decision-event wiring
+without changing the existing uvicorn start command on the manually-managed
+Render service. It never changes trading behavior or submits orders.
 """
 from __future__ import annotations
 
@@ -83,6 +83,25 @@ if FastAPI is not None:
 
         @self.on_event("startup")
         async def _start_runtime_evidence() -> None:
+            # main.py binds record_decision directly at import time. Wrap that
+            # binding here so the existing live pipeline remains untouched while
+            # duplicate decision-event persistence is suppressed.
+            try:
+                from quantnifty.decision_event_gate import DecisionEventGate
+                from quantnifty import main as quantnifty_main
+                gate = DecisionEventGate()
+                original_record_decision = quantnifty_main.record_decision
+
+                def _record_decision_if_changed(snapshot, decision):
+                    if gate.should_emit(decision):
+                        return original_record_decision(snapshot, decision)
+                    return None
+
+                quantnifty_main.record_decision = _record_decision_if_changed
+                self.state.quantnifty_decision_event_gate = gate
+                print("QUANTNIFTY_DECISION_EVENT_GATE enabled", flush=True)
+            except Exception as exc:
+                print(f"QUANTNIFTY_DECISION_EVENT_GATE_ERROR {exc}", flush=True)
             self.state.quantnifty_runtime_evidence_task = asyncio.create_task(_emit_runtime_evidence())
 
         @self.on_event("shutdown")

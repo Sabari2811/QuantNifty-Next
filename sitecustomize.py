@@ -49,6 +49,12 @@ if FastAPI is not None:
         if getattr(self, "title", None) != "QuantNifty Next":
             return
 
+        try:
+            from quantnifty.paper_ledger_api import router as paper_ledger_router
+            self.include_router(paper_ledger_router)
+        except Exception as exc:
+            print(f"QUANTNIFTY_PAPER_LEDGER_ROUTE_ERROR {exc}", flush=True)
+
         async def _emit_runtime_evidence() -> None:
             while True:
                 try:

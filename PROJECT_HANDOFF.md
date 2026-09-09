@@ -112,7 +112,8 @@ Each trading day adds new events to the durable learning store. Existing days ar
 - **Added temporary live-validation runtime harness:** `.github/workflows/live-validation-harness.yml` keeps the current free Render web service awake during today's validation window and polls `/health` and `/api/v1/status`, recording live snapshot freshness, PostgreSQL durability, database availability and paper-trade status. It is READ-ONLY and never submits orders.
 - **Hardened live-validation evidence:** the harness now performs a real `/api/v1/market` provider read each cycle, requires `LIVE_PROVIDER` data with a valid spot and option-chain rows, requires a fresh cached snapshot (`<=90s`), requires PostgreSQL durability/database availability, and fails closed if these conditions are not met. This removes the previous false-green state where a healthy web process could be mistaken for successful live ingestion/learning.
 - **Added local live-validation bootstrap:** `.env.example` documents the required non-secret local runtime variables, and `scripts/run_local.ps1` installs the existing API package and starts the existing FastAPI app in READ-ONLY mode on `127.0.0.1:8000`. It requires both `INDSTOCKS_API_TOKEN` and `DATABASE_URL` so local validation does not silently fall back to filesystem learning storage.
-- **Added production runtime observability:** `runtime_observability.py` exposes `/api/v1/runtime-evidence` and emits a structured `QUANTNIFTY_RUNTIME_EVIDENCE` heartbeat every 30 seconds containing cached LIVE_PROVIDER snapshot timestamp/spot/rows, data-integrity state, PostgreSQL learning durability/counts and paper-trade state. Render now starts the wrapper so live ingestion can be proven from application-owned evidence rather than request-log traffic alone.
+- **Added production runtime observability:** `runtime_observability.py` exposes `/api/v1/runtime-evidence` and emits a structured `QUANTNIFTY_RUNTIME_EVIDENCE` heartbeat every 30 seconds containing cached LIVE_PROVIDER snapshot timestamp/spot/rows, data-integrity state, PostgreSQL learning durability/counts and paper-trade state.
+- **Added Render-compatible startup observability:** `sitecustomize.py` attaches the runtime evidence heartbeat to the existing `uvicorn quantnifty.main:app` process without changing trading behavior. It also records a safe PostgreSQL connectivity diagnostic with credentials redacted.
 
 ## Verification state
 Implementation commits for the finalized daily-learning work:
@@ -130,25 +131,47 @@ Implementation commits for the finalized daily-learning work:
 - `0515b828573bea57b4cfad4c1d8f39cc134669e3` — safe local runtime environment template.
 - `ec6078b36d735088a6b6bcc1b38b22afbeee4818` — read-only local runner.
 - `c39b2d128622f585b1770411fe36f56f5208dba6` — runtime observability endpoint and structured evidence heartbeat.
-- `893892a3a468f249793333d2a2ab006ade4ec4cd` — Render start command updated to run the observability wrapper.
+- `893892a3a468f249793333d2a2ab006ade4ec4cd` — Render Blueprint start command updated to run the observability wrapper.
+- `3a7e2c8d8c869f8fd5966a8ad9adc0c6378c9a9d` — Render-compatible startup observability hook.
+- `068a08b3e9cf11a9a33e45e60dae808d2c4fba81` — safe PostgreSQL connectivity diagnostic.
 
-## Current verification result
-- The new runtime observability code is committed to `main`.
-- The current Render service before this deployment was confirmed live, but its logs showed only `/api/v1/status` traffic and no `/api/v1/market` evidence. That was insufficient to claim live provider ingestion.
-- The new wrapper will emit application-owned evidence independently of inbound request traffic. A valid market-session heartbeat must show `cached_snapshot=true`, `data_integrity=LIVE_PROVIDER`, positive spot/rows, and PostgreSQL durability/availability before live ingestion is considered proven.
-- **No live-ingestion success is claimed yet from the new wrapper.** It must first deploy and produce a heartbeat during the live market session.
+## Live verification evidence — 2026-09-09
+The production service is now producing application-owned runtime evidence during the live market session.
+
+Verified from Render runtime logs:
+- `cached_snapshot=true`
+- `data_integrity=LIVE_PROVIDER`
+- `rows=82`
+- live NIFTY spot observed at `23546.0`, then `23549.45`, then `23560.7`, then `23556.75`
+- snapshot timestamps advanced from `08:29:13Z` through `08:34:05Z`
+- `paper_trade_status=OPEN`
+- `trading=DISABLED`
+
+This is the first direct production evidence proving that the background recorder is receiving genuine live provider data, rather than merely proving that the web process is healthy.
+
+### PostgreSQL blocker found and diagnosed
+The same production evidence showed:
+- `learning.configured=true`
+- `durability=POSTGRESQL_CONFIGURED_UNAVAILABLE`
+- `database_available=false`
+
+The new safe diagnostic identified the exact cause: `DATABASE_URL` currently contains the literal text `${{quantnifty-learning.DATABASE_URL}}` rather than a resolved Postgres connection URL. The Render environment-variable API accepted that literal value; the application then correctly rejected it as invalid connection information. No secret was exposed.
+
+Render's documented Blueprint mechanism is `fromDatabase: { name: quantnifty-learning, property: connectionString }`, which resolves the internal connection string during Blueprint sync. The manually managed service has not synchronized that Blueprint value, so its current `DATABASE_URL` must be replaced in the Render service Environment settings with the actual internal Postgres connection URL (do not paste the secret into chat). citeturn3search0turn3search1
+
+The Render Postgres instance itself is `available`, but it remains on the Free plan and is scheduled to expire 2026-10-07. Render documents that Free Postgres instances have a 30-day limit. citeturn2search0
 
 ## Remaining verification / operational work
-1. Verify the new Render deployment is live and `QUANTNIFTY_RUNTIME_EVIDENCE` heartbeats appear.
-2. During the live market session, require heartbeat evidence with `LIVE_PROVIDER`, valid spot/rows, fresh snapshot timestamp and PostgreSQL durability/availability.
-3. Verify genuine live snapshots/decisions/paper outcomes are being persisted in PostgreSQL.
-4. Verify `quantnifty_learning_events` counts increase from genuine live data.
-5. Verify persistence across service restart/deploy.
-6. Verify local live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
-7. Verify the 15:15–15:30 CAS window behavior from live evidence where a valid CAS signal exists; otherwise record the fail-closed standby evidence.
-8. Verify the automatic after-market lab at/after 15:35 IST using today's stored live data only.
-9. Verify the future-safe policy is persisted and loaded on the next eligible session.
-10. Start/continue the READ-ONLY learning/review period using **live data + same-day post-market stored data only**.
+1. Replace the literal `DATABASE_URL` reference in the Render service with the actual internal connection URL from `quantnifty-learning` (via Render Dashboard; never share the secret in chat).
+2. Verify runtime evidence changes to `durability=POSTGRESQL`, `database_available=true`, and event counts are numeric.
+3. Verify genuine live snapshots/decisions/paper outcomes increase PostgreSQL event counts.
+4. Verify persistence across service restart/deploy.
+5. Verify local live recorder → paper outcomes → after-market lab → policy persistence/load with PostgreSQL enabled.
+6. Verify the 15:15–15:30 CAS window behavior from live evidence where a valid CAS signal exists; otherwise record the fail-closed standby evidence.
+7. Verify the automatic after-market lab at/after 15:35 IST using today's stored live data only.
+8. Verify the future-safe policy is persisted and loaded on the next eligible session.
+9. Start/continue the READ-ONLY learning/review period using **live data + same-day post-market stored data only**.
+10. Upgrade the Render API and Postgres compute plans if the user chooses always-on production durability; Free web services spin down after 15 minutes of no inbound traffic, and Free Postgres expires after 30 days. citeturn2search0
 11. Cleanup the temporary validation harness after today's evidence is captured, unless an always-on production compute plan is selected.
 12. Cleanup remaining deprecation/unused-import warnings.
 

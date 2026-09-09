@@ -9,12 +9,36 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 from datetime import datetime, timezone
 
 try:
     from fastapi import FastAPI
 except Exception:
     FastAPI = None  # type: ignore[assignment,misc]
+
+
+def _safe_db_diagnostic() -> dict[str, object]:
+    url = (os.getenv("QUANTNIFTY_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip()
+    if not url:
+        return {"configured": False, "error": "DATABASE_URL is empty"}
+    try:
+        from urllib.parse import urlsplit
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+        port = parsed.port or 5432
+        user = parsed.username or ""
+        import psycopg
+        with psycopg.connect(url, connect_timeout=5, sslmode="require") as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT current_database(), current_user")
+                database, current_user = cur.fetchone()
+        return {"configured": True, "reachable": True, "host": host, "port": port, "user": user, "database": database, "current_user": current_user, "sslmode": "require"}
+    except Exception as exc:
+        message = str(exc)
+        message = re.sub(r"(postgres(?:ql)?://[^:/@]+:)[^@]+(@)", r"\1***\2", message, flags=re.IGNORECASE)
+        return {"configured": True, "reachable": False, "error": message[:500], "sslmode": "require"}
 
 
 if FastAPI is not None:
@@ -43,6 +67,7 @@ if FastAPI is not None:
                             "data_integrity": snapshot.get("data_integrity") if isinstance(snapshot, dict) else None,
                         },
                         "learning": learning_status(),
+                        "database_diagnostic": _safe_db_diagnostic(),
                         "paper_trade_status": "OPEN" if live_paper.active is not None else "IDLE",
                     }
                     print("QUANTNIFTY_RUNTIME_EVIDENCE " + json.dumps(evidence, separators=(",", ":"), sort_keys=True, default=str), flush=True)

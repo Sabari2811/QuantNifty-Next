@@ -1,4 +1,4 @@
-name: Repair live intelligence data transport
+name: Repair live intelligence transport
 
 on:
   push:
@@ -9,27 +9,71 @@ permissions:
 
 jobs:
   repair:
-    if: github.event.head_commit.message != 'fix: repair live intelligence data transport'
+    if: github.event.head_commit.message != 'fix: repair live intelligence transport'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Patch transport reliability
+      - name: Patch live transport and UI
         shell: python
         run: |
           from pathlib import Path
 
           main_path = Path('apps/api/src/quantnifty/main.py')
           text = main_path.read_text()
-          old_market = '''@app.get("/api/v1/market")\nasync def market():\n    try: return await snapshot()\n    except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc'''
-          new_market = '''@app.get("/api/v1/market")\nasync def market():\n    # Serve the already-produced live snapshot immediately when the background\n    # refresh loop has populated the cache. This keeps the UI responsive even\n    # when the provider is slow or rate-limited during a browser request.\n    if cache.get("snapshot") is not None:\n        return cache["snapshot"]\n    try:\n        return await snapshot()\n    except Exception as exc:\n        raise HTTPException(status_code=503, detail=str(exc)) from exc'''
+
+          old_market = '''@app.get("/api/v1/market")
+async def market():
+    try: return await snapshot()
+    except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc'''
+          new_market = '''@app.get("/api/v1/market")
+async def market():
+    cached = cache.get("snapshot")
+    if cached is not None:
+        return cached
+    try:
+        return await snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc'''
           if old_market not in text:
               raise SystemExit('market endpoint pattern not found')
           text = text.replace(old_market, new_market, 1)
 
-          old_ws = '''@app.websocket("/ws/market")\nasync def websocket_market(ws: WebSocket):\n    await ws.accept()\n    try:\n        while True:\n            try: data=await snapshot(); await ws.send_json(data)\n            except Exception as exc: await ws.send_json({"error":str(exc),"mode":"READ_ONLY"})\n            await asyncio.sleep(POLL_SECONDS)\n    except WebSocketDisconnect: return'''
-          new_ws = '''@app.websocket("/ws/market")\nasync def websocket_market(ws: WebSocket):\n    await ws.accept()\n    try:\n        while True:\n            try:\n                data = cache.get("snapshot")\n                if data is None:\n                    data = await snapshot()\n                await ws.send_json(data)\n            except WebSocketDisconnect:\n                return\n            except RuntimeError as exc:\n                # A browser can close the socket between receive/send. Do not\n                # attempt a second send on an already-closed WebSocket.\n                if "close message" in str(exc).lower() or "send" in str(exc).lower():\n                    return\n                return\n            except Exception as exc:\n                try:\n                    await ws.send_json({"error": str(exc), "mode": "READ_ONLY"})\n                except (WebSocketDisconnect, RuntimeError):\n                    return\n            await asyncio.sleep(POLL_SECONDS)\n    except WebSocketDisconnect:\n        return'''
+          old_ws = '''@app.websocket("/ws/market")
+async def market_ws(ws: WebSocket):
+    await ws.accept()
+    while True:
+        try:
+            data = await snapshot()
+            await ws.send_json(data)
+            await asyncio.sleep(2)
+        except WebSocketDisconnect:
+            return
+        except Exception as exc:
+            try:
+                await ws.send_json({"error": str(exc)})
+                await asyncio.sleep(2)
+            except Exception:
+                return'''
+          new_ws = '''@app.websocket("/ws/market")
+async def market_ws(ws: WebSocket):
+    await ws.accept()
+    while True:
+        try:
+            data = cache.get("snapshot")
+            if data is None:
+                data = await snapshot()
+            await ws.send_json(data)
+            await asyncio.sleep(2)
+        except WebSocketDisconnect:
+            return
+        except Exception as exc:
+            try:
+                await ws.send_json({"error": str(exc), "mode": "READ_ONLY"})
+                await asyncio.sleep(2)
+            except Exception:
+                return'''
           if old_ws not in text:
               raise SystemExit('websocket endpoint pattern not found')
           text = text.replace(old_ws, new_ws, 1)
@@ -38,7 +82,7 @@ jobs:
           html_path = Path('apps/api/src/quantnifty/web/intelligence.html')
           html = html_path.read_text()
           old_tail = '''initial();connect();refreshTradeSignal();setInterval(refreshTradeSignal,5000);'''
-          new_tail = '''initial();connect();refreshTradeSignal();setInterval(refreshTradeSignal,5000);setInterval(()=>{if(document.visibilityState!==\"hidden\")initial()},10000);window.addEventListener(\"error\",e=>{if($(\"status\"))$(\"status\").textContent=\"UI error: \"+(e.message||\"unknown client error\")});'''
+          new_tail = '''initial();connect();refreshTradeSignal();setInterval(refreshTradeSignal,5000);setInterval(()=>{if(document.visibilityState!=="hidden")initial()},10000);window.addEventListener("error",e=>{if($("status"))$("status").textContent="UI error: "+(e.message||"unknown client error")});window.addEventListener("unhandledrejection",e=>{if($("status"))$("status").textContent="UI error: "+(e.reason?.message||e.reason||"unhandled rejection")});'''
           if old_tail not in html:
               raise SystemExit('intelligence bootstrap pattern not found')
           html = html.replace(old_tail, new_tail, 1)
@@ -47,16 +91,22 @@ jobs:
           handoff = Path('PROJECT_HANDOFF.md')
           h = handoff.read_text()
           marker = '## UI status — 2026-09-11\n'
-          note = '''### Live Intelligence transport hardening — 2026-09-11\nThe Market Intelligence transport was hardened after production showed static placeholders despite a healthy background LIVE_PROVIDER cache. `/api/v1/market` now serves the latest cached live snapshot immediately when available, falling back to a provider refresh only when the cache is empty. `/ws/market` now streams the cached snapshot first and exits cleanly when the browser closes the socket instead of attempting a second send after a close message. The intelligence page also retries the market bootstrap periodically while visible and surfaces client-side errors. No decision, learning, paper-trade or real-execution logic changed; trading remains READ ONLY / DISABLED.\n\n'''
+          note = '''### Live Intelligence transport hardening — 2026-09-11
+Production showed a healthy LIVE_PROVIDER cache while the Market Intelligence page remained on static placeholders. The transport is hardened so `/api/v1/market` serves the latest cached snapshot immediately when present, `/ws/market` streams the cached snapshot first, and browser-side bootstrap retries continue while the page is visible. Client-side errors are surfaced instead of remaining silently hidden. No decision, learning, paper-trade or real-execution logic changed; trading remains READ ONLY / DISABLED.
+
+'''
           if note not in h:
               h = h.replace(marker, marker + note, 1)
           handoff.write_text(h)
+      - name: Validate changed Python modules
+        run: |
+          python -m compileall -q apps/api/src/quantnifty
       - name: Commit repaired transport
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add apps/api/src/quantnifty/main.py apps/api/src/quantnifty/web/intelligence.html PROJECT_HANDOFF.md
-          git commit -m "fix: repair live intelligence data transport"
+          git commit -m "fix: repair live intelligence transport"
           git push
       - name: Remove temporary repair workflow
         run: |

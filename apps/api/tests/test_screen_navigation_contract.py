@@ -22,4 +22,5 @@ def test_intelligence_marks_current_screen_without_hiding_backtest():
     assert 'data-qn-nav="intelligence"' in text
     assert 'data-qn-nav="raw"' in text
     assert 'data-qn-nav="backtest"' in text
-    assert "path === '/intelligence'" in text or "path==='/intelligence'" in text
+    assert "const currentPath=location.pathname" in text
+    assert "link.getAttribute('href')===currentPath" in text

@@ -1,0 +1,27 @@
+name: QuantNifty Live Liveness Wake
+
+on:
+  schedule:
+    # Keep the free Render web service awake during the NSE session.
+    # 03:40-09:50 UTC = 09:10-15:20 IST on weekdays.
+    - cron: '*/10 3-9 * * 1-5'
+    - cron: '0,10,20,30,40,50 10 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  health-wake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Wake and verify production API
+        run: |
+          set -euo pipefail
+          body="$(curl --fail --silent --show-error --max-time 30 https://quantnifty-api.onrender.com/health)"
+          echo "production health: $body"
+          python - <<'PY' "$body"
+          import json, sys
+          payload=json.loads(sys.argv[1])
+          assert payload.get('status') == 'ok', payload
+          assert payload.get('provider') == 'INDstocks', payload
+          assert payload.get('provider_configured') is True, payload
+          PY

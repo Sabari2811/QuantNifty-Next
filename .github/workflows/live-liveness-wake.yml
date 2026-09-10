@@ -1,6 +1,8 @@
 name: QuantNifty Live Liveness Wake
 
 on:
+  push:
+    branches: [main]
   schedule:
     # Keep the free Render web service awake during the NSE session.
     # 03:40-09:50 UTC = 09:10-15:20 IST on weekdays.

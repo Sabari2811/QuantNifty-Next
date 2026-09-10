@@ -36,8 +36,21 @@ The production Market Intelligence page was observed remaining on `Connecting…
 ### Market Intelligence live-stream fix — 2026-09-10
 The existing Market Intelligence page was blank because its browser WebSocket client connected to `/ws`, while the backend exposes the live market WebSocket at `/ws/market`. `apps/api/src/quantnifty/web/intelligence.html` was corrected to use `/ws/market`, display live-stream errors, reconnect after disconnects, and retry the initial `/api/v1/market` fetch so transient startup/cache timing does not leave the page blank. This is a UI transport/reliability fix only; no trading or Brain decision logic was changed.
 
+## AI decision engine — incremental learning — 2026-09-11
+The existing Adaptive Brain has now been connected to **same-day closed paper outcomes** at runtime rather than waiting exclusively for the next after-market policy artifact.
+
+- `learning_store.py` now assigns event days using the **Asia/Kolkata trading day**, preventing UTC-date rollover from mixing two IST sessions.
+- Learning event IDs now include trade/lifecycle identity when available, preventing an OPEN and CLOSED outcome at the same timestamp from colliding in durable storage.
+- `research_brain.strategy_selector()` now rebuilds a lightweight runtime Adaptive memory from only the current IST day's durable `CLOSED` paper outcomes.
+- The runtime memory feeds `adaptive_day_policy()` on subsequent live decisions, so completed same-day outcomes can influence later decisions incrementally.
+- A validated prior-day future-safe policy remains the starting policy until same-day outcome evidence exists; once same-day evidence exists, the live selector uses the current-day adaptive memory rather than blindly overriding it with the stale prior-day policy.
+- The Intelligence page's institutional/risk/execution stack now uses the **adaptive** decision path rather than a separate hard-coded directional path, keeping the visible decision stack aligned with the actual Adaptive Brain.
+- Counterfactual research outcomes remain research-only and are not inserted into live Adaptive memory.
+- No historical recordings, `data_Review.txt`, or old replay evidence are used for this runtime learning path.
+- Real-money execution remains disabled/read-only.
+
 ## Architecture / ownership
-`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Learning Store`
+`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
 
 Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, `paper_ledger_api.py`, and `web/*` UI.
 
@@ -57,7 +70,17 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - No order-placement controls.
 
 ## Validation
-Latest UI repair code is committed on `main`. The repair is presentation/transport resilience only and keeps the existing `/api/v1/paper/signal` polling, `/ws/market` stream, and read-only paper lifecycle intact. Render deployment and live production validation are required before this repair is considered production-verified. After deployment, verify the navigation drawer opens and routes to Raw Data and Backtest, `/api/v1/market` renders live data without refresh, `/api/v1/paper/signal` returns successfully, the monitor updates, CE/PE colors are correct, the Execution Plan is on the left with the full Live P&L Monitor immediately to its right, Institutional Signal Engine is on the left of Risk & Final Decision in the second row, and active paper trades show correct live mark/P&L. Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain pending the 2026-09-11 live session. Real-money execution remains disabled.
+The same-day incremental learning change is committed on `main` with unit coverage added to `test_adaptive_brain.py`. Push-triggered GitHub validation workflows are running for the new commit, including backtest-gate, production-evidence, paper-ledger and liveness evidence. Render production deployment for the new code is still required before this AI-engine change is considered live-verified.
+
+Required production validation after deployment:
+- `/api/v1/market` remains live and cached.
+- `/api/v1/paper/signal` succeeds and monitor remains read-only.
+- `/api/v1/status` reports learning durability and `trading=DISABLED`.
+- A closed same-day paper outcome appears in durable `outcomes` storage with the correct IST `day`.
+- The next live decision exposes Adaptive learning telemetry and `same_day_trades` without using historical data.
+- A prior-day future-safe policy is not allowed to override same-day learned evidence.
+- No counterfactual/replay outcome enters live Adaptive memory.
+- Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain part of the live validation gate.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

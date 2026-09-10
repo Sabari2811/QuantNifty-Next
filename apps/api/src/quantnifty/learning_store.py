@@ -5,12 +5,23 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 SCHEMA_VERSION = "adaptive-learning-event-v1"
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def trading_day(timestamp: str | None) -> str | None:
+    if not timestamp:
+        return None
+    try:
+        return datetime.fromisoformat(str(timestamp).replace("Z", "+00:00")).astimezone(IST).date().isoformat()
+    except ValueError:
+        return None
 
 
 def _root() -> Path:
@@ -46,8 +57,6 @@ def _pg_connection():
         return None
     try:
         import psycopg
-        # Render Postgres requires TLS. Explicitly require it even when the
-        # injected connection string does not carry an sslmode query option.
         return psycopg.connect(url, connect_timeout=5, sslmode="require")
     except Exception:
         return None

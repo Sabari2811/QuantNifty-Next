@@ -72,7 +72,7 @@ def flatten_chain(data: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
     root=data.get("data") or data; strikes=root.get("strikes") or root.get("option_chain") or {}; items=strikes.items() if isinstance(strikes,dict) else []; rows=[]
     for key,value in items:
         try: strike=float(key)
-        except (TypeError,ValueError): continue
+        except (TypeError, ValueError): continue
         if not isinstance(value,dict): continue
         for leg,side in ((value.get("ce") or value.get("call") or value.get("CE") or {},"CE"),(value.get("pe") or value.get("put") or value.get("PE") or {},"PE")):
             if leg: rows.append(norm_leg(leg,strike,side))
@@ -203,8 +203,13 @@ def learning_status_api(): return learning_status()
 
 @app.get("/api/v1/market")
 async def market():
-    try: return await snapshot()
-    except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
+    cached = cache.get("snapshot")
+    if cached is not None:
+        return cached
+    try:
+        return await snapshot()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 @app.get("/api/v1/analytics")
 async def analytics_api(): return await market()
 @app.get("/api/v1/intelligence")
@@ -296,7 +301,18 @@ async def websocket_market(ws: WebSocket):
     await ws.accept()
     try:
         while True:
-            try: data=await snapshot(); await ws.send_json(data)
-            except Exception as exc: await ws.send_json({"error":str(exc),"mode":"READ_ONLY"})
+            try:
+                data = cache.get("snapshot")
+                if data is None:
+                    data = await snapshot()
+                await ws.send_json(data)
+            except WebSocketDisconnect:
+                return
+            except Exception as exc:
+                try:
+                    await ws.send_json({"error": str(exc), "mode": "READ_ONLY"})
+                except Exception:
+                    return
             await asyncio.sleep(POLL_SECONDS)
-    except WebSocketDisconnect: return
+    except WebSocketDisconnect:
+        return

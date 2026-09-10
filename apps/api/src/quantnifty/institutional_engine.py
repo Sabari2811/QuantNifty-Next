@@ -88,8 +88,10 @@ def institutional_signal(data: dict[str, Any], previous: dict[str, Any] | None =
     return {"direction": direction, "confidence": round(confidence, 1), "scores": {k: round(v, 1) for k, v in raw.items()}, "evidence": evidence, "gamma": gamma, "oi_flow": oi, "volatility": vol, "dealer": dealer, "historical_evidence": ev}
 
 
-def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, signal: dict[str, Any]) -> dict[str, Any]:
-    selection = strategy_selector(data, previous); preferred = str(selection.get("preferred_direction") or "NEUTRAL").upper(); direction = str(signal.get("direction") or "NEUTRAL").upper(); confidence = _f(signal.get("confidence"))
+def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, signal: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:
+    runtime_data = dict(data)
+    runtime_data["_learning_runtime"] = mode.upper() == "LIVE"
+    selection = strategy_selector(runtime_data, previous); preferred = str(selection.get("preferred_direction") or "NEUTRAL").upper(); direction = str(signal.get("direction") or "NEUTRAL").upper(); confidence = _f(signal.get("confidence"))
     if preferred in {"BULLISH", "BEARISH"}:
         if direction == "NEUTRAL": direction = preferred; confidence = max(confidence, _f(selection.get("confidence")))
         elif direction != preferred: direction = "NEUTRAL"
@@ -98,18 +100,18 @@ def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, sign
 
 
 def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
-    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; replay = mode.upper() in {"BACKTEST", "REPLAY"}; input_validation = validate_snapshot(data, mode); gates = {"direction": signal.get("direction") in {"BULLISH", "BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK", "COMPRESSION"}, "data_integrity": input_validation["valid"]}
+    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; replay = mode.upper() in {"BACKTEST", "REPLAY"}; input_validation = validate_snapshot(data, mode); gates = {"direction": signal.get("direction") in {"BULLISH","BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK","COMPRESSION"}, "data_integrity": input_validation["valid"]}
     selected = None
     if strategy == "gamma_blast": gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE"; gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
     elif strategy == "adaptive":
         selected = ((signal.get("adaptive") or {}).get("selected_strategy") or "standby").lower()
         if selected == "gamma_blast": gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE"; gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
         elif selected == "transition": gates["gamma_transition"] = ((signal.get("adaptive") or {}).get("regime") == "GAMMA_TRANSITION")
-        elif selected == "early_accumulation": gates["accumulation_entry"] = signal.get("direction") in {"BULLISH", "BEARISH"} and _f(signal.get("confidence")) >= 60 and _f(data.get("liquidity_score")) >= 60
-        elif selected in {"range", "breakout_watch", "standby"}: gates["strategy_entry"] = False
+        elif selected == "early_accumulation": gates["accumulation_entry"] = signal.get("direction") in {"BULLISH","BEARISH"} and _f(signal.get("confidence")) >= 60 and _f(data.get("liquidity_score")) >= 60
+        elif selected in {"range","breakout_watch","standby"}: gates["strategy_entry"] = False
         elif selected == "cas_reentry": gates["cas_reentry"] = True
     reasons = [k for k, ok in gates.items() if not ok]
-    return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast", "early_accumulation"} else 1.0}
+    return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast","early_accumulation"} else 1.0}
 
 
 def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str, Any]) -> dict[str, Any]:
@@ -120,13 +122,13 @@ def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str,
     entry = "WAIT_FOR_TRIGGER" if approved else None; entry_mode = "STANDARD_CONFIRMATION"
     if selected_strategy == "early_accumulation": entry = "EARLY_ACCUMULATION_CONFIRMATION"; entry_mode = "ACCUMULATION_THEN_BREAKOUT_CONFIRMATION"
     if selected_strategy == "cas_reentry": entry = "CAS_CONFIRMED_REENTRY"; entry_mode = "CAS_REENTRY_CONFIRMATION"
-    exit_policy = {"mode": "ADAPTIVE_EXHAUSTION_TRAIL", "initial_stop_pct": .5 if selected_strategy == "early_accumulation" else 1.25, "target_rr": 2.0, "profit_action": "TRAIL_ON_EXHAUSTION", "exit_signals": ["volume_decay", "gamma_reversal", "pressure_failure"]}
+    exit_policy = {"mode": "ADAPTIVE_EXHAUSTION_TRAIL", "initial_stop_pct": .5 if selected_strategy == "early_accumulation" else 1.25, "target_rr": 2.0, "profit_action": "TRAIL_ON_EXHAUSTION", "exit_signals": ["volume_decay","gamma_reversal","pressure_failure"]}
     return {"status": "APPROVED_READ_ONLY" if approved else "BLOCKED", "execution_enabled": False, "direction": direction, "instrument": chosen, "entry": entry, "entry_mode": entry_mode, "stop_points": round(stop, 2) if approved else None, "target_points": round(stop * 2, 2) if approved else None, "risk_reward": 2.0 if approved else None, "exit_policy": exit_policy, "order_action": "DISABLED", "note": "Plan only. No broker order can be submitted by this engine."}
 
 
 def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None, strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
     requested = str(strategy or "directional").strip().lower()
-    if requested not in {"directional", "gamma_blast", "adaptive"}: raise ValueError("strategy must be directional, gamma_blast, or adaptive")
+    if requested not in {"directional","gamma_blast","adaptive"}: raise ValueError("strategy must be directional, gamma_blast, or adaptive")
     input_validation = validate_snapshot(data, mode)
     session = session_decision_policy(data)
     signal = institutional_signal(data, previous)
@@ -134,7 +136,7 @@ def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None,
         if session["phase"] == "CAS_REENTRY":
             cas = session["cas"]; signal = dict(signal); signal["direction"] = cas["direction"] if cas["valid"] else "NEUTRAL"; signal["confidence"] = max(_f(signal.get("confidence")), cas["confidence"]) if cas["valid"] else _f(signal.get("confidence")); signal["adaptive"] = {"regime": "CAS_REENTRY", "selected_strategy": "cas_reentry" if cas["valid"] else "standby", "preferred_direction": cas["direction"], "readiness_pct": cas["confidence"], "reason": session["reason"], "risk_profile": "CAS_CONTROLLED", "learning": {"cas_source": cas.get("source")}}
         elif session["phase"] == "NORMAL_ADAPTIVE":
-            signal = _adaptive_signal(data, previous, signal)
+            signal = _adaptive_signal(data, previous, signal, mode)
         else:
             signal = dict(signal); signal["direction"] = "NEUTRAL"; signal["adaptive"] = {"regime": session["phase"], "selected_strategy": "standby", "preferred_direction": "NEUTRAL", "readiness_pct": 0.0, "reason": session["reason"], "risk_profile": "CLOSED"}
     risk = risk_engine(data, signal, requested, mode); risk["session"] = session

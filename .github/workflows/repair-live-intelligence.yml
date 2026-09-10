@@ -14,15 +14,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Patch live transport and UI
         shell: python
         run: |
           from pathlib import Path
-
           main_path = Path('apps/api/src/quantnifty/main.py')
           text = main_path.read_text()
-
           old_market = '''@app.get("/api/v1/market")
 async def market():
     try: return await snapshot()
@@ -36,46 +33,38 @@ async def market():
         return await snapshot()
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc'''
-          if old_market not in text:
-              raise SystemExit('market endpoint pattern not found')
+          if old_market not in text: raise SystemExit('market endpoint pattern not found')
           text = text.replace(old_market, new_market, 1)
-
           old_ws = '''@app.websocket("/ws/market")
-async def market_ws(ws: WebSocket):
+async def websocket_market(ws: WebSocket):
     await ws.accept()
-    while True:
-        try:
-            data = await snapshot()
-            await ws.send_json(data)
-            await asyncio.sleep(2)
-        except WebSocketDisconnect:
-            return
-        except Exception as exc:
-            try:
-                await ws.send_json({"error": str(exc)})
-                await asyncio.sleep(2)
-            except Exception:
-                return'''
+    try:
+        while True:
+            try: data=await snapshot(); await ws.send_json(data)
+            except Exception as exc: await ws.send_json({"error":str(exc),"mode":"READ_ONLY"})
+            await asyncio.sleep(POLL_SECONDS)
+    except WebSocketDisconnect: return'''
           new_ws = '''@app.websocket("/ws/market")
-async def market_ws(ws: WebSocket):
+async def websocket_market(ws: WebSocket):
     await ws.accept()
-    while True:
-        try:
-            data = cache.get("snapshot")
-            if data is None:
-                data = await snapshot()
-            await ws.send_json(data)
-            await asyncio.sleep(2)
-        except WebSocketDisconnect:
-            return
-        except Exception as exc:
+    try:
+        while True:
             try:
-                await ws.send_json({"error": str(exc), "mode": "READ_ONLY"})
-                await asyncio.sleep(2)
-            except Exception:
-                return'''
-          if old_ws not in text:
-              raise SystemExit('websocket endpoint pattern not found')
+                data = cache.get("snapshot")
+                if data is None:
+                    data = await snapshot()
+                await ws.send_json(data)
+            except WebSocketDisconnect:
+                return
+            except Exception as exc:
+                try:
+                    await ws.send_json({"error": str(exc), "mode": "READ_ONLY"})
+                except Exception:
+                    return
+            await asyncio.sleep(POLL_SECONDS)
+    except WebSocketDisconnect:
+        return'''
+          if old_ws not in text: raise SystemExit('websocket endpoint pattern not found')
           text = text.replace(old_ws, new_ws, 1)
           main_path.write_text(text)
 
@@ -83,10 +72,8 @@ async def market_ws(ws: WebSocket):
           html = html_path.read_text()
           old_tail = '''initial();connect();refreshTradeSignal();setInterval(refreshTradeSignal,5000);'''
           new_tail = '''initial();connect();refreshTradeSignal();setInterval(refreshTradeSignal,5000);setInterval(()=>{if(document.visibilityState!=="hidden")initial()},10000);window.addEventListener("error",e=>{if($("status"))$("status").textContent="UI error: "+(e.message||"unknown client error")});window.addEventListener("unhandledrejection",e=>{if($("status"))$("status").textContent="UI error: "+(e.reason?.message||e.reason||"unhandled rejection")});'''
-          if old_tail not in html:
-              raise SystemExit('intelligence bootstrap pattern not found')
-          html = html.replace(old_tail, new_tail, 1)
-          html_path.write_text(html)
+          if old_tail not in html: raise SystemExit('intelligence bootstrap pattern not found')
+          html_path.write_text(html.replace(old_tail, new_tail, 1))
 
           handoff = Path('PROJECT_HANDOFF.md')
           h = handoff.read_text()
@@ -95,12 +82,9 @@ async def market_ws(ws: WebSocket):
 Production showed a healthy LIVE_PROVIDER cache while the Market Intelligence page remained on static placeholders. The transport is hardened so `/api/v1/market` serves the latest cached snapshot immediately when present, `/ws/market` streams the cached snapshot first, and browser-side bootstrap retries continue while the page is visible. Client-side errors are surfaced instead of remaining silently hidden. No decision, learning, paper-trade or real-execution logic changed; trading remains READ ONLY / DISABLED.
 
 '''
-          if note not in h:
-              h = h.replace(marker, marker + note, 1)
-          handoff.write_text(h)
+          if note not in h: handoff.write_text(h.replace(marker, marker + note, 1))
       - name: Validate changed Python modules
-        run: |
-          python -m compileall -q apps/api/src/quantnifty
+        run: python -m compileall -q apps/api/src/quantnifty
       - name: Commit repaired transport
         run: |
           git config user.name "github-actions[bot]"

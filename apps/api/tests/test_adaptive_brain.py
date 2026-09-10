@@ -1,5 +1,6 @@
 from quantnifty.research_brain import adaptive_day_policy, strategy_selector, update_adaptive_memory
 from quantnifty.learning_store import trading_day
+from quantnifty.market_brain import decision_intelligence
 
 
 def snap(spot=24500, bias="BULLISH", gex=10):
@@ -78,3 +79,24 @@ def test_non_live_selector_never_reads_live_outcomes(monkeypatch):
     monkeypatch.setattr("quantnifty.research_brain.load_events", fail_if_called)
     selected = strategy_selector({**snap(), "_learning_runtime": False})
     assert selected["selected_strategy"] == "directional"
+
+
+def test_intelligence_propagates_replay_mode_to_adaptive_stack(monkeypatch):
+    seen = {}
+
+    def fake_final_decision(data, previous=None, strategy="directional", mode="LIVE"):
+        seen["mode"] = mode
+        assert mode == "REPLAY"
+        return {
+            "signal": {"direction": "NEUTRAL", "confidence": 0},
+            "risk": {"approved": False},
+            "execution_plan": {"execution_enabled": False},
+            "status": "NO_TRADE",
+            "authoritative": "FINAL_DECISION",
+            "trading": "DISABLED",
+        }
+
+    monkeypatch.setattr("quantnifty.market_brain.final_decision", fake_final_decision)
+    result = decision_intelligence(snap(), None, mode="REPLAY")
+    assert seen["mode"] == "REPLAY"
+    assert result["final_decision"]["trading"] == "DISABLED"

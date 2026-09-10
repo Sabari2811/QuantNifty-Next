@@ -7,30 +7,41 @@
 **Backtest:** https://quantnifty-api.onrender.com/backtest  
 **Execution:** READ-ONLY; no real orders; `trading=DISABLED`.
 
-## Current UI work
-The operator UI is being extended to expose the already-implemented read-only paper ledger and decision-event data: today's Brain decisions, actual paper trades, open positions, entry/exit evidence, scenario/rationale, exit reasons, and realized/unrealized/total P&L. Counterfactual research remains separate from actual paper trades.
-
 ## Product plan
-QuantNifty-Next is a **Live Adaptive Brain + After-Market Research Lab**. Live decisions use only data available at decision time. Adaptive Brain runs 09:20–15:15 IST; 15:15–15:30 IST permits only already-produced live CAS `cas_reentry`; 15:30 IST closes all paper positions with `SESSION_CLOSE`. No overnight paper positions. Learning is only from current/future live provider observations and same-day stored live observations. Historical recordings and `data_Review.txt` are replay/reference only and never seed or train live Adaptive memory/policy.
+QuantNifty-Next is a **Live Adaptive Brain + After-Market Research Lab**.
+
+- Live decisions use only data available at decision time.
+- Adaptive Brain: 09:20–15:15 IST.
+- 15:15–15:30 IST: only already-produced live CAS may authorize `cas_reentry`.
+- 15:30 IST: new decisions stop and all open paper trades must close as `SESSION_CLOSE`.
+- No paper position may be carried into the next IST trading day.
+- Learn only from `LIVE_PROVIDER` current/future observations and `STORED_DAY` same-day completed live observations.
+- Historical learning/bootstrap/performance gates are removed completely.
+- `data_Review.txt` and old recordings are replay/reference evidence only and must never seed, train, promote or influence live Adaptive memory/policy.
+- After close, replay the stored live day only, test the research universe, extract scenarios and persist a future-safe policy candidate.
+
+## UI status — 2026-09-10
+The requested operator-facing Today/Paper Trading & Brain Decisions UI is a required implementation item. It must consume the existing canonical read-only ledger and decision-event APIs and show today's decisions, actual paper trades, positions, scenarios/rationale, entry/exit evidence, results and realized/unrealized/total P&L. This documentation commit records the requirement; it does not claim the UI implementation is complete until the UI code is changed, tested, deployed and verified.
 
 ## Architecture / ownership
-`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Learning Store`.
-Core ownership includes `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, `paper_ledger_api.py`, and `web/*` UI. FinalDecision is authoritative; Risk owns permission; ExecutionPlan never submits orders.
+`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Learning Store`
 
-## Strategy universe
-`directional`, `gamma_blast`, `early_accumulation`, `transition`, `range`, `breakout_watch`, `standby`, `cas_reentry`, `adaptive`. Live API remains intentionally restricted to `directional`, `gamma_blast`, and `adaptive`; after-market research covers the research universe.
+Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, `paper_ledger_api.py`, and `web/*` UI.
 
-## Storage / paper lifecycle
-Production PostgreSQL uses DATABASE_URL/QUANTNIFTY_DATABASE_URL with TLS `sslmode=require`; JSONL is fallback for local/testing. Paper trade records contain trade ID, strategy, direction, entry time/spot, option instrument/security ID/symbol/strike/side, entry price/source, quantity/lot size, Brain signal/confidence/evidence/rationale, Adaptive regime/strategy/readiness/reason, risk approval/gates/reasons, MFE/MAE, exit time/spot/option price/source, exit reason, exit Brain/risk context, realized/gross P&L, P&L basis, read-only marker and day. Prior-day stale OPEN rows are reconciled against that trade day's last stored LIVE_PROVIDER snapshot; no overnight carry.
+## Paper ledger
+`/api/v1/paper/ledger?day=YYYY-MM-DD` is read-only and exposes closed trades, same-day open positions, dynamic marks, realized/unrealized/total P&L, decision summary, stale-open diagnostics and `overnight_carry=false`. Paper entries contain complete Brain/risk/entry/exit evidence, MFE/MAE and explicit reasons. No real orders are submitted.
 
-## Dynamic P&L ledger
-`/api/v1/paper/ledger?day=YYYY-MM-DD` is read-only. It exposes closed trades, same-day open positions, dynamic executable-side marks, unrealized P&L, realized P&L, total/net P&L, decision summary, stale-open diagnostic and `overnight_carry=false`. No broker charges are fabricated.
-
-## UI requirement
-The operator UI must provide a Today/Paper Trading & Brain Decisions experience backed directly by the canonical ledger/decision APIs. It must show session/read-only status; KPI cards for decisions/approvals/blocks/trades/open positions/winners/losers/win rate/realized/unrealized/total P&L; a trade table; open-position live marks; expandable trade detail with scenario, Brain rationale/evidence, Adaptive regime/readiness, risk gates/approval, MFE/MAE, exit context/reason and P&L basis; and a decision timeline clearly distinguishing decisions that did not become trades. No order-placement controls and no counterfactual research presented as actual trades.
+## UI acceptance criteria
+- Session/read-only status and selected IST day.
+- KPI cards: Brain decisions, approved, blocked, actual paper trades, open positions, winners, losers, win rate, realized P&L, unrealized P&L, total/net P&L.
+- Trade table with trade ID, entry/exit time, direction, strategy/sub-strategy, option symbol/strike/side, quantity, entry/exit price, exit reason, result and P&L.
+- Open positions with live mark, mark source/timestamp, unrealized P&L/%.
+- Expandable trade detail with scenario, Brain rationale/evidence, confidence, Adaptive regime/readiness/reason, risk gates/approval, MFE/MAE, exit context/reason and P&L basis.
+- Decision timeline that clearly distinguishes actual trades from non-trade decisions and never presents counterfactual research as trades.
+- No order-placement controls.
 
 ## Validation
-Live-session evidence for full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence, and restart behavior remains pending the 2026-09-11 live session. UI implementation must be verified in production after deployment. Real-money execution remains disabled.
+Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain pending the 2026-09-11 live session. UI must be verified after deployment. Real-money execution remains disabled.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

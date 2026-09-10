@@ -71,6 +71,7 @@ The gate is now **restart-safe for the same IST trading day**: production startu
 - Read-only paper ledger API and aggregation tests.
 - Decision-event deduplication with regression coverage.
 - **Restart-safe decision-event deduplication:** same-day latest decision seeding plus runtime emitted/suppressed counters.
+- **Market-session liveness protection:** scheduled production `/health` wake/verification workflow added for the free Render web service during NSE weekdays; it performs no trading action.
 
 ## Verification / implementation commits
 - `4c566ec94b036d896c2f202eb8a0936cd9866492` — historical learning dependency removed.
@@ -87,9 +88,12 @@ The gate is now **restart-safe for the same IST trading day**: production startu
 - `eba092527ae2ba7e4bc69425a2cc7a7c90761639` — restart-safe gate state/counters.
 - `2832a36054c1da684cc28cf171a0b9ac51cc4e78` — production wiring, same-day seeding and runtime gate observability.
 - `d7728e491d424b3f2c7fd1e7ec6faa7ed5a425d3` — restart/dedup regression coverage.
+- `00880f50c5184a8118316bc8414ca350c5108b1b` — market-session liveness wake/verification workflow.
 
 ## Live evidence — 2026-09-10
 Production startup after the API token update and latest deployment showed the decision-event gate enabled. Live provider ingestion was active with `LIVE_PROVIDER`, 82 option-chain rows and NIFTY spot around 23,418. PostgreSQL was reachable with TLS and `durability=POSTGRESQL`; `trading=DISABLED`. At the observed window, persisted counters advanced to 797 snapshots, 628 decisions and 13 outcomes, with 2 research runs. The gate itself was enabled in the running process. A full same-day behavioral dedup ratio still requires observing the session through its market-state transitions; it must not be inferred from counters alone.
+
+The Render service is on the free plan and had a clean idle shutdown at 07:33:18Z. The new liveness workflow is intended to prevent that sleep during the NSE session, but this workflow change is **not yet production-verified**; its first successful scheduled execution must be observed before the uptime item can be marked complete.
 
 ## Remaining verification
 1. Observe a full live session and verify repeated identical actionable states produce many snapshots but only one persisted decision event.
@@ -97,7 +101,7 @@ Production startup after the API token update and latest deployment showed the d
 3. Reconcile approved decisions with paper-position lifecycle and closed outcomes/P&L, including the 1-lot validation scenario.
 4. Verify automatic same-day after-market research completion/persistence after the live session.
 5. Verify restart/deploy during an active trading day does not duplicate the latest same-day decision signature.
-6. Resolve Render operational uptime/Free-plan risk separately; do not claim it complete until verified.
+6. Verify the new market-session liveness workflow executes successfully and keeps `quantnifty-api` awake during the NSE session.
 
 ## Non-negotiable rules
 - Never commit API tokens/secrets or `data_Review.txt`.

@@ -46,6 +46,7 @@ The existing Adaptive Brain has now been connected to **same-day closed paper ou
 - The runtime memory feeds `adaptive_day_policy()` on subsequent live decisions, so completed same-day outcomes can influence later decisions incrementally.
 - A validated prior-day future-safe policy remains the starting policy until same-day outcome evidence exists; once same-day evidence exists, the live selector uses the current-day adaptive memory rather than blindly overriding it with the stale prior-day policy.
 - The Intelligence page's institutional/risk/execution stack now uses the **adaptive** decision path rather than a separate hard-coded directional path, keeping the visible decision stack aligned with the actual Adaptive Brain.
+- `decision_intelligence()` now propagates its explicit `mode` into the adaptive final-decision stack, so any replay/research caller cannot accidentally fall back to LIVE-mode same-day learning.
 - Counterfactual research outcomes remain research-only and are not inserted into live Adaptive memory.
 - No historical recordings, `data_Review.txt`, or old replay evidence are used for this runtime learning path.
 - Real-money execution remains disabled/read-only.
@@ -71,7 +72,7 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - No order-placement controls.
 
 ## Validation
-Unit coverage for same-day Adaptive learning and IST session boundaries is committed in `test_adaptive_brain.py`. Push-triggered GitHub validation workflows are running for the implementation commits, including backtest-gate, production-evidence, paper-ledger and liveness evidence. Render production deployment for the new AI-engine code is still required before this change is considered live-verified.
+Unit coverage for same-day Adaptive learning, IST session boundaries, non-LIVE learning isolation, and explicit Intelligence mode propagation is committed in `test_adaptive_brain.py`. Temporary live-transport repair automation has been removed after the source-level fix, and Python bytecode artifacts are no longer tracked; `.gitignore` now excludes local Python caches and environment files.
 
 Required production validation after deployment:
 - `/api/v1/market` remains live and cached.
@@ -81,6 +82,7 @@ Required production validation after deployment:
 - The next LIVE decision exposes Adaptive learning telemetry and `same_day_trades` without using historical data.
 - A prior-day future-safe policy is not allowed to override same-day learned evidence.
 - Replay/backtest decisions do not load same-day live Adaptive memory.
+- `decision_intelligence(..., mode="REPLAY")` propagates REPLAY into its adaptive stack.
 - No counterfactual/replay outcome enters live Adaptive memory.
 - Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain part of the live validation gate.
 

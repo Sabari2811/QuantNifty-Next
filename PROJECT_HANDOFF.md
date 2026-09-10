@@ -52,12 +52,12 @@ Every Brain-approved paper entry now persists enough evidence to reconstruct the
 Paper entries are read-only simulations only. No broker order is submitted.
 
 ### Same-day rule
-`session_close_required()` now treats **15:30 IST and later** as a mandatory close boundary. Active paper positions are closed by the live manager at the first live snapshot at/after that boundary with `SESSION_CLOSE`. If a restored active position is detected from a different IST day, it is not restored as an active current-day position; an active day can therefore never intentionally carry forward.
+`session_close_required()` treats **15:30 IST and later** as a mandatory close boundary. Active paper positions are closed by the live manager at the first live snapshot at/after that boundary with `SESSION_CLOSE`. If a restored active position is detected from a different IST day, it is not restored as an active current-day position.
 
-If a runtime ever encounters a timestamp from a different trading day while an active paper position exists, the lifecycle uses `OVERNIGHT_GUARD` rather than silently continuing the position.
+A startup recovery pass now reconciles any unresolved prior-day OPEN paper trade against the **last stored LIVE_PROVIDER snapshot from that trade's own day**, recording `SESSION_CLOSE_RECOVERY` and its realized P&L. This prevents stale OPEN rows from becoming next-day positions without inventing a next-day price. If a live runtime crosses a trading-day boundary while active, the lifecycle uses `OVERNIGHT_GUARD` rather than silently carrying the position.
 
 ## Dynamic P&L ledger — finalized 2026-09-10
-`/api/v1/paper/ledger?day=YYYY-MM-DD` is read-only and now exposes both realized and live mark-to-market state.
+`/api/v1/paper/ledger?day=YYYY-MM-DD` is read-only and exposes realized and live mark-to-market state.
 
 - `ledger`: closed trades for the selected IST day.
 - `open_positions`: currently open same-day paper positions.
@@ -66,21 +66,17 @@ If a runtime ever encounters a timestamp from a different trading day while an a
 - `summary.realized_pnl` = closed-trade P&L.
 - `summary.unrealized_pnl` = current open-position mark-to-market P&L.
 - `summary.total_pnl` / `net_pnl` = realized + unrealized.
-- Closed-trade option P&L is `(exit_price - entry_price) * quantity` when both option prices are available; otherwise the existing directional spot proxy is used.
+- Closed-trade option P&L is `(exit_price - entry_price) * quantity` when both option prices are available; otherwise the directional spot proxy is used.
 - Broker charges are not fabricated.
-- Legacy same-day outcome rows without the new explicit `day` field are still recoverable by their entry/exit timestamps.
-- The ledger also exposes the same-day Brain decision summary and a `stale_open_positions` diagnostic for any older unresolved OPEN record.
-- `overnight_carry` is explicitly `False` in the API contract.
+- Legacy same-day outcome rows without the new explicit `day` field remain recoverable by entry/exit timestamps.
+- The ledger exposes the same-day Brain decision summary and `stale_open_positions` diagnostic.
+- `overnight_carry` is explicitly `False`.
 
 ## Decision-event model — finalized
-**Snapshots and decision events are separate concepts.** Every live provider refresh continues to be processed and may be stored as a snapshot. The durable `decisions` ledger emits only when the actionable state changes, instead of recording an identical decision on every polling cycle.
-
-`decision_event_gate.py` owns the event signature. The signature includes market direction, strategy, risk approval state, selected sub-strategy and session phase. Repeated identical states are not persisted as new decision events. State transitions are persisted. The gate does not suppress live analytics, risk evaluation or paper-position management.
-
-The gate is restart-safe for the same IST trading day: production startup restores the latest same-day persisted decision signature before live polling resumes. Runtime emitted/suppressed counters make deduplication auditable.
+Snapshots and decision events are separate. Every live provider refresh continues to be processed/stored, while the durable decisions ledger emits only when the actionable state changes. `decision_event_gate.py` owns the signature across market direction, strategy, risk approval, selected sub-strategy and session phase. Restart-safe same-day seeding prevents duplicate latest signatures.
 
 ## After-market research
-After close, research runs on the completed same-day stored live data only, persists scenarios and a future-safe policy candidate, and marks a day complete only after successful research persistence. Failed/`NO_DATA` runs remain retryable. Historical recordings never become live Adaptive training data.
+After close, research runs on completed same-day stored live data only, persists scenarios and a future-safe policy candidate, and marks a day complete only after successful research persistence. Failed/`NO_DATA` runs remain retryable. Historical recordings never become live Adaptive training data.
 
 ## Completed / implemented
 - Canonical decision/risk/execution architecture.
@@ -97,30 +93,41 @@ After close, research runs on the completed same-day stored live data only, pers
 - Read-only paper ledger API and aggregation tests.
 - Decision-event deduplication and restart-safe same-day seeding.
 - Market-session liveness wake/verification workflow for the free Render web service.
-- **2026-09-10:** complete Brain paper-trade evidence persisted at entry/exit, quantity/lot sizing exposed, explicit entry/exit reasons and decision context persisted, dynamic open-position mark-to-market P&L added, realized + unrealized + total P&L aggregation added, and no-overnight contract added.
+- Complete Brain paper-trade evidence, quantity/lot sizing, entry/exit reasons and decision context.
+- Dynamic realized + unrealized + total P&L aggregation.
+- Prior-day stale OPEN reconciliation at the prior session's last stored live snapshot.
 
 ## Key implementation commits
 - `00880f50c5184a8118316bc8414ca350c5108b1b` — market-session liveness wake/verification workflow.
 - `569b6322fc5d231a35841c2cfa0b951399c35df0` — push-triggered liveness verification.
 - `574990b0dd06604a42263e40cace5cb36355cde0` — production liveness state documentation.
-- `a4c6edec90389f41778cd3958d279b3b3876a20c` — paper session boundary/trading-day helpers.
-- `907d934ecda4c9713084ff494f83e20b8bab25e9` — complete Brain paper-trade evidence and quantity persistence.
-- `ce3a33d0ec7b9ad5f382f5b8987b43f6c677a2c8` — dynamic open-position P&L ledger.
-- `12accb2134999cf8c3cb9cfb253d4141b54a787d` — paper lifecycle/ledger regression tests.
+- `49e966a20e12393d3d63f2ca03c9fded7b9abe6e` — stale paper-position reconciliation at prior session close.
+- `349ef05509d8c7390ff0a999edc8f5530d2badbb` — stale-lifecycle P&L diagnostic fix.
 
 ## Validation checklist
 1. Full live-session repeated-state decision dedup — pending full-session evidence.
 2. Direction/approval/strategy/sub-strategy/session transitions — pending full-session evidence.
-3. **Paper trade lifecycle and P&L:** implementation complete; production reconciliation must be re-observed after deployment, including a 1-lot validation scenario.
+3. **Paper trade lifecycle and P&L:** implementation complete; production ledger contract passed and returned today's persisted ledger; final post-recovery production reconciliation is pending deployment of `349ef055...`.
 4. Automatic same-day after-market research completion/persistence — pending final post-session evidence.
-5. Restart/deploy during active trading day does not duplicate the latest same-day decision signature — implementation/evidence present; final active-day observation remains part of the gate.
-6. **Liveness workflow:** verified successful in GitHub Actions run `34463616621` on commit `574990b0...`; production wake path is PASS.
-7. **Dynamic P&L contract:** unit/regression coverage added; production `/api/v1/paper/ledger` must be observed after the new deployment to close the runtime evidence item.
+5. Restart/deploy during active trading day does not duplicate latest same-day decision signature — implementation/evidence present; final active-day observation remains part of the gate.
+6. **Liveness workflow:** previously verified successful in GitHub Actions run `34463616621`.
+7. **Dynamic P&L contract:** production evidence run `34490929098` passed on commit `884bccca...`; a new run `34491160141` is validating the stale-recovery update.
 
-## Live evidence / operational state
-Production has previously shown `LIVE_PROVIDER`, 82 option-chain rows, PostgreSQL durability, decision-event gate activity, and `trading=DISABLED`. During the 2026-09-10 live session the paper manager was observed `OPEN`, later returned to `IDLE`, and persisted outcome count increased; exact historical trade rows were not previously exposed in runtime logs, which motivated this implementation.
+## Production P&L evidence captured before stale-recovery redeploy
+The production paper ledger evidence run for 2026-09-10 returned:
+- 38 closed paper trades.
+- Realized P&L: **-₹13.90**.
+- Unrealized P&L: **₹0.00**; no current open position at the time of the report.
+- Total/net P&L: **-₹13.90**.
+- 38 trades had option-premium P&L available.
+- Charges modeled: ₹0.00 (not fabricated).
+- 87 same-day decision events: 47 approved, 40 blocked.
+- Production spot at ledger snapshot: 23,477.8.
+- Trading remained disabled.
+- The report detected 1 unresolved prior-day OPEN lifecycle row; the new recovery implementation is specifically intended to reconcile that row at its own prior-day final live snapshot and remove the overnight carry condition.
 
-The Render free service had an idle shutdown at 07:33:18Z; the scheduled liveness workflow was added and later verified successfully. A fresh production process started after the implementation commits.
+## Operational state
+Production has shown `LIVE_PROVIDER`, 82 option-chain rows, PostgreSQL durability, decision-event gate activity and `trading=DISABLED`. The Render free service had an idle shutdown at 07:33:18Z; the liveness workflow was added and verified.
 
 ## Non-negotiable rules
 - Never commit API tokens/secrets or `data_Review.txt`.

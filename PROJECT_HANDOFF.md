@@ -1,6 +1,6 @@
 # QuantNifty-Next — Persistent Project Handoff
 
-**Updated:** 2026-09-09  
+**Updated:** 2026-09-10  
 **Branch:** `main`  
 **Repository:** https://github.com/Sabari2811/QuantNifty-Next  
 **Production:** https://quantnifty-api.onrender.com  
@@ -40,7 +40,7 @@ PostgreSQL is the production durability target through `DATABASE_URL`/`QUANTNIFT
 Live refresh persists immutable market snapshots and a read-only paper lifecycle. Closed outcomes include entry/exit, P&L basis, MFE/MAE and exit reason where determinable. After-market training runs on trading weekdays at/after 15:35 IST, uses only that completed same-day stored data, persists scenarios and a future-safe policy candidate, and marks a day complete only after successful research persistence. Failed/`NO_DATA` runs remain retryable.
 
 ## Decision-event model — finalized
-**Snapshots and decision events are separate concepts.** Every live provider refresh continues to be processed and may be stored as a snapshot. The durable `decisions` ledger now emits only when the actionable state changes, instead of recording an identical decision on every polling cycle.
+**Snapshots and decision events are separate concepts.** Every live provider refresh continues to be processed and may be stored as a snapshot. The durable `decisions` ledger emits only when the actionable state changes, instead of recording an identical decision on every polling cycle.
 
 `decision_event_gate.py` owns the event signature. The signature includes:
 - market direction (`BULLISH`, `BEARISH`, `NEUTRAL`)
@@ -51,7 +51,7 @@ Live refresh persists immutable market snapshots and a read-only paper lifecycle
 
 Repeated identical states are not persisted as new decision events. State transitions are persisted. This does **not** suppress the live decision pipeline, analytics, risk evaluation, or paper-position management; it only reduces duplicate decision-event persistence.
 
-This means a market can remain `BEARISH` for an hour while hundreds of snapshots are captured, but the decision ledger records the meaningful transition rather than hundreds of duplicate predictions. A new entry/approval state, direction transition, strategy transition or session boundary creates a new decision event.
+The gate is now **restart-safe for the same IST trading day**: production startup restores the latest same-day persisted decision signature before live polling resumes. It also exposes emitted/suppressed counters in runtime evidence, making deduplication directly auditable without changing trading behavior.
 
 ## Paper ledger
 `/api/v1/paper/ledger` is read-only. It returns closed paper trades for an IST day, excludes open trades from realized P&L, and provides same-day decision summary. P&L is explicitly a paper proxy: option-premium P&L when both entry/exit option prices exist, otherwise spot proxy. Broker charges are not fabricated.
@@ -69,7 +69,8 @@ This means a market can remain `BEARISH` for an hour while hundreds of snapshots
 - Scenario extraction and future-safe policy persistence/loading.
 - Production runtime observability and PostgreSQL diagnostics.
 - Read-only paper ledger API and aggregation tests.
-- **Decision-event deduplication:** `decision_event_gate.py` plus regression tests; production startup wiring through `sitecustomize.py`.
+- Decision-event deduplication with regression coverage.
+- **Restart-safe decision-event deduplication:** same-day latest decision seeding plus runtime emitted/suppressed counters.
 
 ## Verification / implementation commits
 - `4c566ec94b036d896c2f202eb8a0936cd9866492` — historical learning dependency removed.
@@ -83,18 +84,20 @@ This means a market can remain `BEARISH` for an hour while hundreds of snapshots
 - `4e6364646f97448db0424e5ce5d957749337cca4` — decision event gate.
 - `26faf74ef564b3f48b7da9207f379da248fa412c` — decision event gate tests.
 - `3eafdd469969f295fc2e83e33d23234f51cf3942` — production startup wiring for decision-event gate.
+- `eba092527ae2ba7e4bc69425a2cc7a7c90761639` — restart-safe gate state/counters.
+- `2832a36054c1da684cc28cf171a0b9ac51cc4e78` — production wiring, same-day seeding and runtime gate observability.
+- `d7728e491d424b3f2c7fd1e7ec6faa7ed5a425d3` — restart/dedup regression coverage.
 
-## Live evidence — 2026-09-09
-Production evidence previously verified genuine `LIVE_PROVIDER` snapshots with 82 option-chain rows, advancing NIFTY spots, PostgreSQL reachable with `durability=POSTGRESQL`, and `trading=DISABLED`. The paper ledger response for 2026-09-09 showed 502 persisted decision events before this deduplication change, of which 7 were approved and 495 blocked; the latest state was `NEUTRAL/STANDBY` because the session was already `CLOSED`. That 502 count was correctly identified as polling-level decision persistence rather than 502 independent market predictions.
+## Live evidence — 2026-09-10
+Production startup after the API token update and latest deployment showed the decision-event gate enabled. Live provider ingestion was active with `LIVE_PROVIDER`, 82 option-chain rows and NIFTY spot around 23,418. PostgreSQL was reachable with TLS and `durability=POSTGRESQL`; `trading=DISABLED`. At the observed window, persisted counters advanced to 797 snapshots, 628 decisions and 13 outcomes, with 2 research runs. The gate itself was enabled in the running process. A full same-day behavioral dedup ratio still requires observing the session through its market-state transitions; it must not be inferred from counters alone.
 
 ## Remaining verification
-1. Deploy and verify the decision-event gate in production.
-2. Confirm a stable repeated live state produces many snapshots but only one persisted decision event until the actionable signature changes.
-3. Confirm direction/approval/strategy/session transitions create exactly one new decision event.
-4. Reconcile approved decisions with paper-position lifecycle and closed outcomes/P&L.
-5. Verify automatic Sep-9 after-market research completion/persistence from stored live data only.
-6. Verify persistence across service restart/deploy.
-7. Resolve Render operational uptime/Free-plan risk separately; do not claim it complete until verified.
+1. Observe a full live session and verify repeated identical actionable states produce many snapshots but only one persisted decision event.
+2. Verify direction/approval/strategy/sub-strategy/session transitions each create exactly one new decision event.
+3. Reconcile approved decisions with paper-position lifecycle and closed outcomes/P&L, including the 1-lot validation scenario.
+4. Verify automatic same-day after-market research completion/persistence after the live session.
+5. Verify restart/deploy during an active trading day does not duplicate the latest same-day decision signature.
+6. Resolve Render operational uptime/Free-plan risk separately; do not claim it complete until verified.
 
 ## Non-negotiable rules
 - Never commit API tokens/secrets or `data_Review.txt`.

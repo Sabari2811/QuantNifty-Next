@@ -7,6 +7,9 @@
 **Backtest:** https://quantnifty-api.onrender.com/backtest  
 **Execution:** READ-ONLY; no real orders; `trading=DISABLED`.
 
+## UI status update — 2026-09-10
+The requested operator-facing trade/decision visibility is now a tracked UI requirement: expose today's Brain decision summary, actual paper trades, open positions, entry/exit evidence, scenario/rationale, exit reason, realized/unrealized/total P&L, and trade outcomes from the read-only paper ledger. This must use the canonical ledger/decision data and must never present counterfactual research decisions as actual trades.
+
 ## Product plan
 QuantNifty-Next is a **Live Adaptive Brain + After-Market Research Lab**.
 
@@ -72,6 +75,20 @@ A startup recovery pass now reconciles any unresolved prior-day OPEN paper trade
 - The ledger exposes the same-day Brain decision summary and `stale_open_positions` diagnostic.
 - `overnight_carry` is explicitly `False`.
 
+## UI trade/decision visibility requirement
+The production UI must present a **Today / Paper Trading & Brain Decisions** view backed by the ledger API. At minimum it should provide:
+
+- Session status: trading disabled/read-only, current market/session phase, selected IST day.
+- KPI cards: Brain decisions, approved decisions, blocked decisions, actual paper trades, open positions, winners, losers, win rate, realized P&L, unrealized P&L, total/net P&L.
+- Trade table: trade ID, entry time, direction, strategy/sub-strategy, option symbol/strike/side, quantity, entry price, exit price, exit time, exit reason, result and P&L.
+- Open-position section: live mark, mark source/timestamp, unrealized P&L and percentage.
+- Trade detail: full entry Brain rationale/evidence, signal/confidence, Adaptive regime/readiness/selection reason, risk gates/approval, entry source, MFE/MAE, exit Brain/risk context, exit reason and P&L basis.
+- Decision timeline: actionable Brain decision events with time, direction, strategy, selected sub-strategy, risk approval and session phase; clearly label decisions that did not become trades.
+- Clear separation between **actual paper trades** and counterfactual/after-market research results.
+- Refresh/read-only behavior with no order-placement controls.
+
+This UI is a presentation layer over already-implemented ledger/decision APIs; it must not create a second trading/decision engine.
+
 ## Decision-event model — finalized
 Snapshots and decision events are separate. Every live provider refresh continues to be processed/stored, while the durable decisions ledger emits only when the actionable state changes. `decision_event_gate.py` owns the signature across market direction, strategy, risk approval, selected sub-strategy and session phase. Restart-safe same-day seeding prevents duplicate latest signatures.
 
@@ -97,40 +114,15 @@ After close, research runs on completed same-day stored live data only, persists
 - Dynamic realized + unrealized + total P&L aggregation.
 - Prior-day stale OPEN reconciliation at the prior session's last stored live snapshot.
 
-## Key implementation commits
-- `f7a536ab33a86eb72516d5e8800a8dfa38e8cef7` — legacy ledger rows recoverable by event timestamp fallback; deployed to production.
-- `349ef05509d8c7390ff0a999edc8f5530d2badbb` — stale-lifecycle P&L diagnostic fix.
-- `00880f50c5184a8118316bc8414ca350c5108b1b` — market-session liveness wake/verification workflow.
-- `569b6322fc5d231a35841c2cfa0b951399c35df0` — push-triggered liveness verification.
-- `574990b0dd06604a42263e40cace5cb36355cde0` — production liveness state documentation.
-- `49e966a20e12393d3d63f2ca03c9fded7b9abe6e` — stale paper-position reconciliation at prior session close.
-
 ## Validation checklist
 1. Full live-session repeated-state decision dedup — **pending tomorrow's full-session evidence**.
 2. Direction/approval/strategy/sub-strategy/session transitions — **pending tomorrow's full-session evidence**.
-3. **Paper trade lifecycle and P&L:** implementation complete; CI passed; production deployment is live; final post-recovery ledger response still needs a fresh production query during/after the next live session.
+3. Paper trade lifecycle/P&L — implementation complete; final post-recovery production ledger evidence pending next live session.
 4. Automatic same-day after-market research completion/persistence — **pending next post-session evidence**.
-5. Restart/deploy during active trading day does not duplicate latest same-day decision signature — implementation/evidence present; tomorrow's active-session observation will be the final gate.
-6. **Liveness workflow:** previously verified successful in GitHub Actions run `34463616621`.
-7. **Dynamic P&L contract:** CI and production contract evidence passed previously; post-`f7` production reconciliation remains an explicit next-session evidence gate.
-
-## Production evidence
-Before the stale-recovery redeploy, the 2026-09-10 production paper ledger returned 38 closed paper trades, realized P&L **-₹13.90**, unrealized P&L **₹0.00**, total/net P&L **-₹13.90**, 38 option-premium P&L trades, 87 same-day decision events (47 approved, 40 blocked), spot 23,477.8, trading disabled, and 1 unresolved prior-day OPEN lifecycle row. That result is retained as historical evidence only; it is not claimed as the post-`f7` reconciliation.
-
-## Current production state
-The `f7a536ab` Render deployment is **LIVE**. Post-deploy runtime logs confirm PostgreSQL reachable, `LIVE_PROVIDER` cached with 82 rows, snapshots continuing to increase, decision-event gate enabled, and `trading=DISABLED`. No post-deploy paper-ledger request has yet been observed, so no post-`f7` ledger numbers are claimed.
-
-## Tomorrow live-validation plan — 2026-09-11
-Use the live market session strictly as **paper/read-only validation**:
-
-- 09:15–09:20 IST: verify service wake, provider connectivity, DB durability and trading-disabled state.
-- 09:20–15:15 IST: observe Brain decisions, validation gates, strategy/direction/sub-strategy transitions, decision-event deduplication, paper entries, exits and dynamic P&L.
-- 15:15–15:30 IST: verify CAS-only re-entry policy.
-- 15:30 IST: verify all paper positions are closed with no overnight carry.
-- After close: verify same-day after-market research, scenario persistence and future-safe policy candidate persistence.
-- Capture production ledger/P&L evidence and compare actual paper outcomes with Brain decision events; never treat counterfactual/research decisions as trades.
-
-No real-money execution will be enabled during this validation.
+5. Restart/deploy during active trading day does not duplicate latest same-day decision signature — implementation/evidence present; tomorrow's active-session observation is final gate.
+6. Liveness workflow previously verified successful.
+7. Dynamic P&L contract — CI and production contract evidence passed previously; post-recovery production reconciliation remains next-session gate.
+8. **Operator UI trade/decision/P&L visibility — implementation requested; must be verified against the production UI after deployment.**
 
 ## Non-negotiable rules
 - Never commit API tokens/secrets or `data_Review.txt`.

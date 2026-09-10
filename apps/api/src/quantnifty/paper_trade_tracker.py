@@ -47,9 +47,20 @@ def _timestamp(value: str | None) -> datetime | None:
         return None
 
 
+def trading_day(timestamp: str | None) -> str | None:
+    dt = _timestamp(timestamp)
+    return dt.date().isoformat() if dt else None
+
+
 def session_close_required(timestamp: str | None) -> bool:
     dt = _timestamp(timestamp)
-    return bool(dt and dt.time().hour == 15 and dt.time().minute >= 30)
+    return bool(dt and (dt.time().hour, dt.time().minute) >= (15, 30))
+
+
+def same_trading_day(entry_timestamp: str | None, timestamp: str | None) -> bool:
+    entry_day = trading_day(entry_timestamp)
+    current_day = trading_day(timestamp)
+    return bool(entry_day and current_day and entry_day == current_day)
 
 
 def make_trade_id(timestamp: str, sequence: int) -> str:

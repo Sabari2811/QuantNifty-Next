@@ -104,7 +104,11 @@ def _pg_events(kind: str, day: str | None = None) -> list[dict[str, Any]] | None
 
 
 def _append(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
-    event = {"schema_version": SCHEMA_VERSION, "event_id": f"{kind}:{payload.get('timestamp') or _utc_now()}", "kind": kind, "stored_at": _utc_now(), **payload}
+    timestamp = payload.get("timestamp") or _utc_now()
+    identity = payload.get("trade_id") or payload.get("decision_id") or payload.get("snapshot_id") or ""
+    lifecycle = payload.get("lifecycle") or payload.get("status") or ""
+    event_id = f"{kind}:{identity}:{lifecycle}:{timestamp}" if identity else f"{kind}:{timestamp}"
+    event = {"schema_version": SCHEMA_VERSION, "event_id": event_id, "kind": kind, "stored_at": _utc_now(), **payload}
     if _pg_append(event) is not None:
         return event
     root = _root(); root.mkdir(parents=True, exist_ok=True)
@@ -115,15 +119,19 @@ def _append(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def record_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
-    return _append("snapshots", {"timestamp": snapshot.get("timestamp"), "day": str(snapshot.get("timestamp") or "")[:10], "snapshot": snapshot})
+    timestamp = snapshot.get("timestamp")
+    return _append("snapshots", {"timestamp": timestamp, "day": trading_day(timestamp), "snapshot": snapshot})
 
 
 def record_decision(snapshot: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
-    return _append("decisions", {"timestamp": snapshot.get("timestamp"), "day": str(snapshot.get("timestamp") or "")[:10], "strategy": decision.get("strategy"), "decision": decision})
+    timestamp = snapshot.get("timestamp")
+    return _append("decisions", {"timestamp": timestamp, "day": trading_day(timestamp), "strategy": decision.get("strategy"), "decision": decision})
 
 
 def record_outcome(outcome: dict[str, Any]) -> dict[str, Any]:
-    return _append("outcomes", {"timestamp": outcome.get("timestamp"), "day": outcome.get("day"), "outcome": outcome})
+    timestamp = outcome.get("timestamp") or outcome.get("exit_timestamp") or outcome.get("entry_timestamp")
+    day = outcome.get("day") or trading_day(outcome.get("entry_timestamp") or timestamp)
+    return _append("outcomes", {**outcome, "timestamp": timestamp, "day": day, "outcome": outcome})
 
 
 def record_research(research: dict[str, Any]) -> dict[str, Any]:

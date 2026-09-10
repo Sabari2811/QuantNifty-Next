@@ -66,6 +66,6 @@ def test_same_day_closed_outcome_becomes_runtime_memory_and_prevents_stale_polic
             }
         ],
     )
-    selected = strategy_selector({**snap(), "_adaptive_policy": {"policy": {"created_day": "2026-09-10", "status": "VALIDATED", "strategy": "gamma_blast", "version": 3}, "future_safe": True}})
+    selected = strategy_selector({**snap(), "_learning_runtime": True, "_adaptive_policy": {"policy": {"created_day": "2026-09-10", "status": "VALIDATED", "strategy": "gamma_blast", "version": 3}, "future_safe": True}})
     assert selected["selected_strategy"] == "directional"
     assert selected["learning"]["same_day_trades"] == 1

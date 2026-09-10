@@ -102,6 +102,80 @@ def _validated_result(snapshots: list[dict[str, Any]], strategy: str, config: Ba
 @router.get("/backtest.html", include_in_schema=False)
 def backtest_html_compat(): return RedirectResponse(url="/backtest", status_code=307)
 
+
+def _paper_leg(snapshot: dict[str, Any], instrument: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(instrument, dict): return None
+    sid = str(instrument.get("security_id") or ""); symbol = str(instrument.get("trading_symbol") or ""); strike = float(instrument.get("strike") or 0); side = str(instrument.get("side") or instrument.get("option_type") or "").upper()
+    for row in snapshot.get("option_chain") or []:
+        if sid and str(row.get("security_id") or "") == sid: return row
+        if symbol and str(row.get("trading_symbol") or "") == symbol: return row
+        if strike and abs(float(row.get("strike") or 0) - strike) < .001 and (not side or str(row.get("side") or "").upper() == side): return row
+    return None
+
+
+def _paper_mark(row: dict[str, Any] | None) -> tuple[float, str]:
+    if not row: return 0.0, "UNAVAILABLE"
+    for key, source in (("bid", "BID"), ("last_price", "LAST"), ("ask", "ASK")):
+        try:
+            value = float(row.get(key) or 0)
+        except (TypeError, ValueError): value = 0.0
+        if value > 0: return value, source
+    return 0.0, "UNAVAILABLE"
+
+
+@router.get("/api/v1/paper/signal")
+async def paper_signal():
+    """Read-only live paper-trade telemetry for the Market Brain UI."""
+    try:
+        from quantnifty.main import cache, live_paper, snapshot
+        data = cache.get("snapshot")
+        if not isinstance(data, dict): data = await snapshot()
+        today = data.get("timestamp")
+        active = live_paper.active
+        trade = None
+        if active is not None:
+            instrument = live_paper.instrument if isinstance(live_paper.instrument, dict) else None
+            row = _paper_leg(data, instrument)
+            mark, mark_source = _paper_mark(row)
+            entry = float(live_paper.entry_price or 0)
+            quantity = int(live_paper.entry_quantity or 1)
+            direction = str(active.direction or "NEUTRAL")
+            pnl = (mark - entry) * quantity if entry > 0 and mark > 0 else 0.0
+            move_pct = (mark - entry) / entry * 100.0 if entry > 0 and mark > 0 else 0.0
+            favorable = move_pct if direction == "BULLISH" else -move_pct if direction == "BEARISH" else 0.0
+            decision = live_paper.entry_decision if isinstance(live_paper.entry_decision, dict) else {}
+            plan = decision.get("execution_plan") or {}
+            stop_points = float(plan.get("stop_points") or 0)
+            target_points = float(plan.get("target_points") or 0)
+            entry_spot = float(active.entry_spot or 0)
+            sl_spot = entry_spot - stop_points if direction == "BULLISH" else entry_spot + stop_points if direction == "BEARISH" else 0.0
+            target_spot = entry_spot + target_points if direction == "BULLISH" else entry_spot - target_points if direction == "BEARISH" else 0.0
+            lot_size = int(float((instrument or {}).get("lot_size") or (instrument or {}).get("lotSize") or 0))
+            lots = round(quantity / lot_size, 2) if lot_size > 0 else None
+            trade = {"trade_id": active.trade_id, "trade_number": None, "status": active.status, "strategy": active.strategy, "direction": direction, "entry_timestamp": active.entry_timestamp, "entry_spot": entry_spot, "strike": (instrument or {}).get("strike"), "option_side": (instrument or {}).get("side") or (instrument or {}).get("option_type"), "symbol": (instrument or {}).get("trading_symbol"), "entry_price": round(entry, 6), "current_price": round(mark, 6), "mark_source": mark_source, "mark_timestamp": today, "quantity": quantity, "lot_size": lot_size or None, "lots": lots, "invested_amount": round(entry * quantity, 2), "pnl": round(pnl, 2), "pnl_pct": round(move_pct, 2), "favorable_move_pct": round(favorable, 2), "movement": "UP" if favorable > 0.01 else "DOWN" if favorable < -0.01 else "FLAT", "mfe_pct": round(active.peak_favorable_pct, 2), "mae_pct": round(active.worst_adverse_pct, 2), "sl_spot": round(sl_spot, 2) if sl_spot else None, "target_spot": round(target_spot, 2) if target_spot else None, "stop_points": round(stop_points, 2) if stop_points else None, "target_points": round(target_points, 2) if target_points else None, "read_only": True, "execution": "NONE"}
+        events = []
+        try:
+            from quantnifty.learning_store import load_events, trading_day
+            day = trading_day(today)
+            seen = set()
+            for event in load_events("outcomes"):
+                outcome = event.get("outcome") if isinstance(event, dict) else None
+                if not isinstance(outcome, dict) or trading_day(outcome.get("entry_timestamp")) != day: continue
+                tid = str(outcome.get("trade_id") or "")
+                if tid and tid not in seen: seen.add(tid); events.append(outcome)
+            events.sort(key=lambda x: str(x.get("entry_timestamp") or ""))
+        except Exception: pass
+        if trade is not None:
+            trade["trade_number"] = next((i + 1 for i, item in enumerate(events) if str(item.get("trade_id")) == trade["trade_id"]), len(events) + 1)
+        realized = 0.0; closed = 0; winners = 0; losers = 0
+        for item in events:
+            if str(item.get("status") or item.get("lifecycle") or "").upper() == "CLOSED":
+                closed += 1; value = float(item.get("realized_pnl") or item.get("gross_pnl_proxy") or 0); realized += value; winners += value > 0; losers += value < 0
+        return {"timestamp": today, "day": today and str(today)[:10], "status": "OPEN" if trade else "IDLE", "trading": "DISABLED", "trade": trade, "trades_today": len(events), "closed_trades": closed, "realized_pnl": round(realized, 2), "winners": winners, "losers": losers}
+    except Exception as exc:
+        raise HTTPException(503, f"paper signal unavailable: {exc}") from exc
+
+
 @router.get("/api/v1/recording/status")
 def recording_status():
     root = _root()

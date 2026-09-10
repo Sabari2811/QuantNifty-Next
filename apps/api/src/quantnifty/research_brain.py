@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from quantnifty.learning_store import load_events, trading_day
+
 
 def _f(v: Any) -> float:
     try:
@@ -107,19 +109,42 @@ def adaptive_day_policy(snapshot: dict[str, Any], previous: dict[str, Any] | Non
     if regime == "COMPRESSION": chosen = "breakout_watch"; reason = "compression: wait for release rather than chase"
     direction = base["preferred_direction"]
     if chosen in {"gamma_blast", "transition"} and direction not in {"BULLISH", "BEARISH"}: direction = str((memory.get("last_direction") or "NEUTRAL")).upper()
-    recent = memory.get("recent_days") or []; loss_days = sum(_f(d.get("net_pnl")) < 0 for d in recent[-2:]); risk_profile = "DEFENSIVE" if loss_days >= 2 or _f((recent[-1] if recent else {}).get("net_pnl")) <= -1000 else "NORMAL"; readiness = _f(base.get("confidence")) - (10 if risk_profile == "DEFENSIVE" else 0)
-    return {**base, "selected_strategy": chosen, "preferred_direction": direction, "confidence": round(max(0.0, readiness), 1), "risk_profile": risk_profile, "reason": reason, "learning": {"regime": regime, "candidate_scores": {s: round(sc, 4) for sc, s, *_ in candidates}, "regime_samples": {s: int((stats.get(s) or {}).get("trades", 0)) for s in strategies}, "global_samples": {s: int((global_stats.get(s) or {}).get("trades", 0)) for s in strategies}}}
+    recent = memory.get("recent_days") or []; loss_days = sum(_f(d.get("net_pnl")) < 0 for d in recent[-2:]); risk_profile = "DEFENSIVE" if loss_days >= 2 or _f((recent[-1] if recent else {}).get("net_pnl")) <= -1000 else "NORMAL"; readiness = _f(base.get("confidence")) - (10 if risk_profile == "DEFENSIVE" else 0); same_day_trades = int(memory.get("same_day_trades") or 0)
+    return {**base, "selected_strategy": chosen, "preferred_direction": direction, "confidence": round(max(0.0, readiness), 1), "risk_profile": risk_profile, "reason": reason, "learning": {"regime": regime, "candidate_scores": {s: round(sc, 4) for sc, s, *_ in candidates}, "regime_samples": {s: int((stats.get(s) or {}).get("trades", 0)) for s in strategies}, "global_samples": {s: int((global_stats.get(s) or {}).get("trades", 0)) for s in strategies}, "same_day_trades": same_day_trades}}
 
 
 def update_adaptive_memory(memory: dict[str, Any], trade: dict[str, Any], day: str, regime: str, selected_strategy: str) -> dict[str, Any]:
-    state = {"by_regime": dict(memory.get("by_regime") or {}), "global": dict(memory.get("global") or {}), "recent_days": list(memory.get("recent_days") or []), "last_direction": memory.get("last_direction")}; pnl = _f(trade.get("net_pnl")); won = pnl > 0
+    state = {"by_regime": dict(memory.get("by_regime") or {}), "global": dict(memory.get("global") or {}), "recent_days": list(memory.get("recent_days") or []), "last_direction": memory.get("last_direction"), "same_day_trades": int(memory.get("same_day_trades") or 0)}; pnl = _f(trade.get("net_pnl")); won = pnl > 0
     for bucket in (state["global"], state["by_regime"].setdefault(regime, {})):
         s = bucket.setdefault(selected_strategy, {"trades": 0, "wins": 0, "losses": 0, "net_pnl": 0.0}); s["trades"] = int(s.get("trades", 0)) + 1; s["wins"] = int(s.get("wins", 0)) + int(won); s["losses"] = int(s.get("losses", 0)) + int(not won); s["net_pnl"] = round(_f(s.get("net_pnl")) + pnl, 4)
-    state["last_direction"] = str(trade.get("direction") or state.get("last_direction") or "NEUTRAL").upper(); days = {str(d.get("day")): dict(d) for d in state["recent_days"] if isinstance(d, dict) and d.get("day")}; entry = days.setdefault(day, {"day": day, "net_pnl": 0.0, "trades": 0}); entry["net_pnl"] = round(_f(entry.get("net_pnl")) + pnl, 4); entry["trades"] = int(entry.get("trades", 0)) + 1; state["recent_days"] = list(days.values())[-20:]
+    state["same_day_trades"] += 1; state["last_direction"] = str(trade.get("direction") or state.get("last_direction") or "NEUTRAL").upper(); days = {str(d.get("day")): dict(d) for d in state["recent_days"] if isinstance(d, dict) and d.get("day")}; entry = days.setdefault(day, {"day": day, "net_pnl": 0.0, "trades": 0}); entry["net_pnl"] = round(_f(entry.get("net_pnl")) + pnl, 4); entry["trades"] = int(entry.get("trades", 0)) + 1; state["recent_days"] = list(days.values())[-20:]
     return state
 
 
+def _same_day_memory(snapshot: dict[str, Any]) -> dict[str, Any]:
+    day = trading_day(snapshot.get("timestamp"))
+    if not day:
+        return {}
+    memory: dict[str, Any] = {"same_day_trades": 0}
+    for event in load_events("outcomes", day):
+        outcome = event.get("outcome") if isinstance(event, dict) else None
+        if not isinstance(outcome, dict) or str(outcome.get("status") or outcome.get("lifecycle") or "").upper() != "CLOSED":
+            continue
+        reasons = outcome.get("entry_reasons") if isinstance(outcome.get("entry_reasons"), dict) else {}
+        regime = str(reasons.get("adaptive_regime") or outcome.get("regime") or "UNKNOWN").upper()
+        strategy = str(outcome.get("strategy") or reasons.get("adaptive_selected_strategy") or "").strip().lower()
+        if not strategy or strategy == "standby":
+            continue
+        trade = {"net_pnl": outcome.get("realized_pnl", outcome.get("net_pnl", 0.0)), "direction": outcome.get("direction")}
+        memory = update_adaptive_memory(memory, trade, day, regime, strategy)
+    return memory
+
+
 def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    runtime_memory = _same_day_memory(snapshot)
+    if runtime_memory.get("same_day_trades"):
+        snapshot = dict(snapshot)
+        snapshot["_adaptive_memory"] = runtime_memory
     memory = snapshot.get("_adaptive_memory"); selected = adaptive_day_policy(snapshot, previous, memory) if isinstance(memory, dict) else _base_strategy_selection(snapshot, previous)
     research_strategy = str(snapshot.get("_research_strategy") or "").strip().lower()
     if research_strategy in {"directional", "gamma_blast", "early_accumulation", "transition", "range", "breakout_watch", "standby"}:
@@ -127,11 +152,12 @@ def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None 
         if research_strategy in {"directional", "gamma_blast", "transition", "early_accumulation"} and selected["preferred_direction"] == "NEUTRAL": selected["preferred_direction"] = str((snapshot.get("recorded_bias") or snapshot.get("bias") or "NEUTRAL")).upper()
         if research_strategy == "standby": selected["preferred_direction"] = "NEUTRAL"
     policy = snapshot.get("_adaptive_policy")
-    if isinstance(policy, dict):
+    same_day_trades = int((runtime_memory or {}).get("same_day_trades") or 0)
+    if isinstance(policy, dict) and same_day_trades == 0:
         p = policy.get("policy") or {}
         strategy = str(p.get("strategy") or "").lower()
         if p.get("created_day") and str(p.get("created_day")) < str(snapshot.get("policy_target_day") or "9999-99-99") and p.get("status") in {"VALIDATED", "FALLBACK"} and strategy in {"directional", "gamma_blast", "early_accumulation", "transition", "range", "breakout_watch", "standby", "adaptive"}:
-            selected = {**selected, "selected_strategy": strategy if strategy != "adaptive" else selected.get("selected_strategy", "standby"), "reason": f"validated future-safe policy v{p.get('version')}", "policy_version": p.get("version")}
+            selected = {**selected, "selected_strategy": strategy if strategy != "adaptive" else selected.get("selected_strategy", "standby"), "reason": f"validated future-safe policy v{p.get('version')}; same-day learning not yet available", "policy_version": p.get("version")}
     return selected
 
 

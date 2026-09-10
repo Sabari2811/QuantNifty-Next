@@ -21,7 +21,9 @@ QuantNifty-Next is a **Live Adaptive Brain + After-Market Research Lab**.
 - After close, replay the stored live day only, test the research universe, extract scenarios and persist a future-safe policy candidate.
 
 ## UI status — 2026-09-10
-The requested operator-facing Today/Paper Trading & Brain Decisions UI is a required implementation item. It must consume the existing canonical read-only ledger and decision-event APIs and show today's decisions, actual paper trades, positions, scenarios/rationale, entry/exit evidence, results and realized/unrealized/total P&L. This documentation commit records the requirement; it does not claim the UI implementation is complete until the UI code is changed, tested, deployed and verified.
+The Market Intelligence page now includes a **Live Trading Signal · Paper Monitor** section. It is read-only and shows the actual active Brain paper trade when one exists: trade number for the day, direction, strategy, strike/option side, quantity/lots, entry premium, current live mark and source, invested amount, live premium P&L/P&L%, movement direction and favorable movement, Brain spot-level SL/target, MFE/MAE, and read-only execution status. When no paper position is active, it shows today's paper-trade count plus the current Brain direction/strategy/risk-gate state.
+
+The telemetry is served by `/api/v1/paper/signal` and refreshes every 5 seconds in the UI. P&L is based on the same option-premium mark hierarchy used by the paper lifecycle (BID -> LAST -> ASK); invested amount is entry premium × quantity. The monitor does not create or modify trades.
 
 ### Market Intelligence live-stream fix — 2026-09-10
 The existing Market Intelligence page was blank because its browser WebSocket client connected to `/ws`, while the backend exposes the live market WebSocket at `/ws/market`. `apps/api/src/quantnifty/web/intelligence.html` was corrected to use `/ws/market`, display live-stream errors, reconnect after disconnects, and retry the initial `/api/v1/market` fetch so transient startup/cache timing does not leave the page blank. This is a UI transport/reliability fix only; no trading or Brain decision logic was changed.
@@ -39,12 +41,13 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - KPI cards: Brain decisions, approved, blocked, actual paper trades, open positions, winners, losers, win rate, realized P&L, unrealized P&L, total/net P&L.
 - Trade table with trade ID, entry/exit time, direction, strategy/sub-strategy, option symbol/strike/side, quantity, entry/exit price, exit reason, result and P&L.
 - Open positions with live mark, mark source/timestamp, unrealized P&L/%.
+- **Live Trading Signal · Paper Monitor:** active trade number, direction, strategy, strike/option side, quantity/lots, entry/current mark, invested amount, movement, premium P&L, P&L%, spot SL/target, MFE/MAE and mark timestamp.
 - Expandable trade detail with scenario, Brain rationale/evidence, confidence, Adaptive regime/readiness/reason, risk gates/approval, MFE/MAE, exit context/reason and P&L basis.
 - Decision timeline that clearly distinguishes actual trades from non-trade decisions and never presents counterfactual research as trades.
 - No order-placement controls.
 
 ## Validation
-Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain pending the 2026-09-11 live session. UI transport fix must be verified after deployment by loading `/intelligence` and confirming the live stream populates data and reconnects if interrupted. Real-money execution remains disabled.
+Latest code changes add the paper telemetry API/UI and a trading-day helper used for daily trade numbering. CI/deployment validation is pending for the latest commit. After deployment, verify `/api/v1/paper/signal` returns successfully, the monitor renders on `/intelligence`, values update without page refresh, and active paper trades show correct live mark/P&L. Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain pending the 2026-09-11 live session. Real-money execution remains disabled.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

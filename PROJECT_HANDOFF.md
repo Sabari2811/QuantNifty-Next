@@ -31,7 +31,7 @@ The Market Intelligence page uses a compact **Execution Plan · Read Only** card
 The alignment change is presentation-only: no decision, risk, execution, paper-trade, learning or data-source logic was changed, and no monitor content was removed.
 
 ### Market Intelligence live transport + UI recovery — 2026-09-11
-The production Market Intelligence page was observed remaining on `Connecting…` with all intelligence cards at their placeholders, and its navigation drawer toggle did not have a click handler. The UI was hardened without changing Brain/trading logic: the navigation drawer now opens/closes and routes to Raw Data and Backtest; live rendering now normalizes expected array fields before rendering, surfaces client render errors instead of silently swallowing them, retries `/api/v1/market` periodically, and keeps the `/ws/market` stream as a live transport. The backend live-market transport was already hardened to prefer the cached snapshot. Real trading remains disabled/read-only.
+The production Market Intelligence page was observed remaining on `Connecting…` with all intelligence cards at their placeholders, and its navigation drawer toggle did not have a click handler. The UI was hardened without changing Brain/trading logic: the navigation drawer now opens/closes and routes to Raw Data and Backtest; the current screen is marked active; live rendering normalizes expected array fields before rendering, surfaces client render errors instead of silently swallowing them, retries `/api/v1/market` periodically, and keeps the `/ws/market` stream as a live transport. The backend live-market transport was already hardened to prefer the cached snapshot. Real trading remains disabled/read-only.
 
 ### Market Intelligence live-stream fix — 2026-09-10
 The existing Market Intelligence page was blank because its browser WebSocket client connected to `/ws`, while the backend exposes the live market WebSocket at `/ws/market`. `apps/api/src/quantnifty/web/intelligence.html` was corrected to use `/ws/market`, display live-stream errors, reconnect after disconnects, and retry the initial `/api/v1/market` fetch so transient startup/cache timing does not leave the page blank. This is a UI transport/reliability fix only; no trading or Brain decision logic was changed.
@@ -71,20 +71,25 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - Decision timeline that clearly distinguishes actual trades from non-trade decisions and never presents counterfactual research as trades.
 - No order-placement controls.
 
-## Validation
-Unit coverage for same-day Adaptive learning, IST session boundaries, non-LIVE learning isolation, and explicit Intelligence mode propagation is committed in `test_adaptive_brain.py`. Temporary live-transport repair automation has been removed after the source-level fix, and Python bytecode artifacts are no longer tracked; `.gitignore` now excludes local Python caches and environment files.
+## Validation — completed for current deployment
+The final source head deployed to Render is commit `866b39c7295d01bd9895dff2237a3d961be61c4d` via deployment `dep-dahing6q1p3s73dnu3e0`, which reached `live` successfully.
 
-Required production validation after deployment:
-- `/api/v1/market` remains live and cached.
-- `/api/v1/paper/signal` succeeds and monitor remains read-only.
-- `/api/v1/status` reports learning durability and `trading=DISABLED`.
-- A closed same-day paper outcome appears in durable `outcomes` storage with the correct IST `day`.
-- The next LIVE decision exposes Adaptive learning telemetry and `same_day_trades` without using historical data.
-- A prior-day future-safe policy is not allowed to override same-day learned evidence.
-- Replay/backtest decisions do not load same-day live Adaptive memory.
-- `decision_intelligence(..., mode="REPLAY")` propagates REPLAY into its adaptive stack.
-- No counterfactual/replay outcome enters live Adaptive memory.
-- Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain part of the live validation gate.
+GitHub CI run `34536375379` completed successfully: compile passed and the complete `apps/api/tests` suite passed (**108 passed**). The same source head also passed the production evidence workflow, backtest-gate evidence, live-validation harness, paper-ledger evidence, and liveness wake workflows. The production evidence run included authenticated live-market/historical-replay checks and a browser E2E against production.
+
+Render runtime evidence after deployment confirms PostgreSQL learning durability, `LIVE_PROVIDER` snapshot integrity, `/api/v1/paper/signal` availability, and `trading=DISABLED`. The service started cleanly and reported the primary production URL. The live WebSocket `/ws/market` was accepted in production evidence; older `/ws` 403 entries belong to stale clients before the current client fix and are not the current frontend transport.
+
+Validation now covers:
+- `/api/v1/market` live/cached transport.
+- `/api/v1/paper/signal` read-only paper telemetry.
+- `/api/v1/status` learning durability and `trading=DISABLED`.
+- Same-day Adaptive learning, IST session boundaries, duplicate lifecycle identity, non-LIVE isolation, and explicit Intelligence mode propagation.
+- Production browser E2E for the Intelligence and Backtest surfaces.
+- Replay/backtest protection from same-day live Adaptive memory.
+- No counterfactual/replay outcome entering live Adaptive memory.
+- Temporary live-transport repair automation removed after the source-level fix.
+- Python bytecode artifacts removed from tracking and ignored through `.gitignore`.
+
+Remaining live-session validation is **operational rather than code-pending**: a real same-day paper trade must close during an actual IST session so the durable outcome and subsequent same-day adaptive update can be observed end-to-end. This is not a reason to enable real trading; broker execution remains disabled.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

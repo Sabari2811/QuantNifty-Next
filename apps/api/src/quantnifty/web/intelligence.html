@@ -58,8 +58,22 @@ $('riskStack').innerHTML='<div class="big">'+(fd.status||'NO_TRADE')+'</div><div
 $('executionStack').innerHTML='<div class="metric"><span>Direction</span><b>'+(plan.direction||'—')+'</b></div><div class="metric"><span>Instrument</span><b>'+((plan.instrument&&plan.instrument.strike)||'WAIT')+'</b></div><div class="metric"><span>Entry</span><b>'+(plan.entry||'BLOCKED')+'</b></div><div class="metric"><span>Stop / Target</span><b>'+(plan.stop_points==null?'—':n(plan.stop_points,2)+' / '+n(plan.target_points,2))+'</b></div><div class="metric"><span>R:R</span><b>'+(plan.risk_reward==null?'—':n(plan.risk_reward,1)+'R')+'</b></div><div class="muted">'+(plan.note||'Read-only')+'</div>';
 $('pressure').innerHTML=p.map(r=>'<tr><td>'+n(r.strike,0)+'</td><td>'+n(r.distance,0)+'</td><td>'+n(r.pressure,0)+'</td><td>'+r.dominant_side+'</td><td>'+n(r.ce_oi,0)+'</td><td>'+n(r.pe_oi,0)+'</td><td>'+n(r.ce_doi,0)+'</td><td>'+n(r.pe_doi,0)+'</td><td>'+n(r.gamma,4)+'</td><td>'+n(r.volume,0)+'</td></tr>').join('');
 }
-function connect(){const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws'); ws.onopen=()=>$('status').textContent='LIVE STREAM CONNECTED'; ws.onmessage=e=>{try{render(JSON.parse(e.data))}catch(_){}}; ws.onclose=()=>setTimeout(connect,3000); ws.onerror=()=>ws.close()}
-async function initial(){try{const r=await fetch('/api/v1/market');render(r)}catch(e){$('status').textContent='Provider unavailable: '+e.message}} initial();connect();
+let reconnectTimer=null;
+function connect(){
+  if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null}
+  const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/market');
+  ws.onopen=()=>$('status').textContent='LIVE STREAM CONNECTED';
+  ws.onmessage=e=>{try{const data=JSON.parse(e.data); if(data.error){$('status').textContent='Live stream error: '+data.error; return} render(data)}catch(_){}};
+  ws.onclose=()=>{ $('status').textContent='Live stream reconnecting…'; reconnectTimer=setTimeout(connect,3000) };
+  ws.onerror=()=>ws.close();
+}
+async function initial(){
+  for(let attempt=1;attempt<=5;attempt++){
+    try{const r=await fetch('/api/v1/market',{cache:'no-store'}); if(!r.ok) throw new Error('HTTP '+r.status); render(await r.json()); return}
+    catch(e){if(attempt===5){$('status').textContent='Provider unavailable: '+e.message; return} await new Promise(resolve=>setTimeout(resolve,2000))}
+  }
+}
+initial();connect();
 </script>
 <script>
 (function(){

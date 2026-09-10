@@ -41,7 +41,8 @@ The existing Adaptive Brain has now been connected to **same-day closed paper ou
 
 - `learning_store.py` now assigns event days using the **Asia/Kolkata trading day**, preventing UTC-date rollover from mixing two IST sessions.
 - Learning event IDs now include trade/lifecycle identity when available, preventing an OPEN and CLOSED outcome at the same timestamp from colliding in durable storage.
-- `research_brain.strategy_selector()` now rebuilds a lightweight runtime Adaptive memory from only the current IST day's durable `CLOSED` paper outcomes.
+- `research_brain.strategy_selector()` can rebuild a lightweight runtime Adaptive memory from only the current IST day's durable `CLOSED` paper outcomes.
+- The runtime memory is enabled only when the final decision is running in **LIVE mode**. Replay/backtest/research modes explicitly do not enable this runtime memory path, preventing historical/replay outcomes from leaking into live Adaptive learning.
 - The runtime memory feeds `adaptive_day_policy()` on subsequent live decisions, so completed same-day outcomes can influence later decisions incrementally.
 - A validated prior-day future-safe policy remains the starting policy until same-day outcome evidence exists; once same-day evidence exists, the live selector uses the current-day adaptive memory rather than blindly overriding it with the stale prior-day policy.
 - The Intelligence page's institutional/risk/execution stack now uses the **adaptive** decision path rather than a separate hard-coded directional path, keeping the visible decision stack aligned with the actual Adaptive Brain.
@@ -70,15 +71,16 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - No order-placement controls.
 
 ## Validation
-The same-day incremental learning change is committed on `main` with unit coverage added to `test_adaptive_brain.py`. Push-triggered GitHub validation workflows are running for the new commit, including backtest-gate, production-evidence, paper-ledger and liveness evidence. Render production deployment for the new code is still required before this AI-engine change is considered live-verified.
+Unit coverage for same-day Adaptive learning and IST session boundaries is committed in `test_adaptive_brain.py`. Push-triggered GitHub validation workflows are running for the implementation commits, including backtest-gate, production-evidence, paper-ledger and liveness evidence. Render production deployment for the new AI-engine code is still required before this change is considered live-verified.
 
 Required production validation after deployment:
 - `/api/v1/market` remains live and cached.
 - `/api/v1/paper/signal` succeeds and monitor remains read-only.
 - `/api/v1/status` reports learning durability and `trading=DISABLED`.
 - A closed same-day paper outcome appears in durable `outcomes` storage with the correct IST `day`.
-- The next live decision exposes Adaptive learning telemetry and `same_day_trades` without using historical data.
+- The next LIVE decision exposes Adaptive learning telemetry and `same_day_trades` without using historical data.
 - A prior-day future-safe policy is not allowed to override same-day learned evidence.
+- Replay/backtest decisions do not load same-day live Adaptive memory.
 - No counterfactual/replay outcome enters live Adaptive memory.
 - Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain part of the live validation gate.
 

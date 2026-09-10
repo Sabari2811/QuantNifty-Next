@@ -22,4 +22,4 @@ def test_intelligence_marks_current_screen_without_hiding_backtest():
     assert 'data-qn-nav="intelligence"' in text
     assert 'data-qn-nav="raw"' in text
     assert 'data-qn-nav="backtest"' in text
-    assert "path==='/intelligence'" in text
+    assert "path === '/intelligence'" in text or "path==='/intelligence'" in text

@@ -141,7 +141,7 @@ def _same_day_memory(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    runtime_memory = _same_day_memory(snapshot)
+    runtime_memory = _same_day_memory(snapshot) if snapshot.get("_learning_runtime") is True else {}
     if runtime_memory.get("same_day_trades"):
         snapshot = dict(snapshot)
         snapshot["_adaptive_memory"] = runtime_memory

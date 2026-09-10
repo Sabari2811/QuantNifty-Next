@@ -60,11 +60,11 @@ def signal_dna(data: dict[str, Any], state: dict[str, Any], attribution: dict[st
     components=[("Direction",confidence,"bias is directional" if bias!="NEUTRAL" else "bias is neutral"),("Gamma",min(100.0,50.0+abs(gamma)/(abs(gamma)+1.0)*50.0),"gamma regime"),("OI Flow",min(100.0,50.0+doi_diff/doi_total*50.0),"OI imbalance"),("Volatility",min(100.0,50.0+abs(iv)*2.0),"ATM IV context"),("Liquidity",liquidity,"execution quality"),("Move Attribution",75.0 if attribution.get("quality")=="HIGH" else 55.0,attribution.get("primary_driver","unknown"))]
     return [{"name":name,"score":round(max(0.0,min(100.0,score)),1),"reason":reason} for name,score,reason in components]
 
-def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None = None, mode: str = "LIVE") -> dict[str, Any]:
     state=classify_market_state(data,previous); attribution=move_attribution(data,previous); events=detect_events(data,previous,state); dna=signal_dna(data,state,attribution); pressure=pressure_map(data); confidence=_num(data.get("confidence")); liquidity=_num(data.get("liquidity_score")); bias=str(data.get("bias") or "NEUTRAL")
     gates={"direction":bias in {"BULLISH","BEARISH"},"confidence":confidence>=60,"liquidity":liquidity>=50,"state":state["state"] not in {"LIQUIDITY_RISK","COMPRESSION"}}; trade_ready=all(gates.values())
     base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressure,"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"}}
-    stack=final_decision({**data,"intelligence":{"market_state":state}},previous,"adaptive")
+    stack=final_decision({**data,"intelligence":{"market_state":state}},previous,"adaptive",mode)
     base["institutional_signal"]=stack["signal"]
     base["risk_engine"]=stack["risk"]
     base["execution_plan"]=stack["execution_plan"]

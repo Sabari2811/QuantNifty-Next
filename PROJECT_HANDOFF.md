@@ -23,6 +23,9 @@ QuantNifty-Next is a **Live Adaptive Brain + After-Market Research Lab**.
 ## UI status — 2026-09-10
 The requested operator-facing Today/Paper Trading & Brain Decisions UI is a required implementation item. It must consume the existing canonical read-only ledger and decision-event APIs and show today's decisions, actual paper trades, positions, scenarios/rationale, entry/exit evidence, results and realized/unrealized/total P&L. This documentation commit records the requirement; it does not claim the UI implementation is complete until the UI code is changed, tested, deployed and verified.
 
+### Market Intelligence live-stream fix — 2026-09-10
+The existing Market Intelligence page was blank because its browser WebSocket client connected to `/ws`, while the backend exposes the live market WebSocket at `/ws/market`. `apps/api/src/quantnifty/web/intelligence.html` was corrected to use `/ws/market`, display live-stream errors, reconnect after disconnects, and retry the initial `/api/v1/market` fetch so transient startup/cache timing does not leave the page blank. This is a UI transport/reliability fix only; no trading or Brain decision logic was changed.
+
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Learning Store`
 
@@ -41,7 +44,7 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - No order-placement controls.
 
 ## Validation
-Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain pending the 2026-09-11 live session. UI must be verified after deployment. Real-money execution remains disabled.
+Full-session deduplication, state transitions, post-recovery ledger reconciliation, after-market research persistence and restart behavior remain pending the 2026-09-11 live session. UI transport fix must be verified after deployment by loading `/intelligence` and confirming the live stream populates data and reconnects if interrupted. Real-money execution remains disabled.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

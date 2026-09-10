@@ -31,6 +31,11 @@
 <main>
 <div class="top"><div><h1>🧠 QuantNifty Market Brain</h1><div class="sub">Explainable market state · event detection · move attribution · signal DNA · read-only</div></div><div id="fresh" class="pill">Waiting for live intelligence</div></div>
 <div id="status" class="panel" style="margin-top:14px">Connecting…</div>
+
+<!-- Priority decision view: kept above the market-detail sections as requested. -->
+<div id="institutional" class="two" style="margin-top:12px"><div class="panel"><div class="title">Institutional Signal Engine</div><div id="signalStack" class="muted">Waiting for signal stack</div></div><div class="panel"><div class="title">Risk &amp; Final Decision</div><div id="riskStack" class="muted">Waiting for risk decision</div></div></div>
+<div class="panel" style="margin-top:12px"><div class="title">Execution Plan · Read Only</div><div id="executionStack" class="muted">No plan yet</div></div>
+
 <div class="grid">
 <div id="state" class="panel hero"><div class="title">Market State</div><div class="big">—</div><div class="muted">Waiting for provider</div></div>
 <div id="decision" class="panel hero"><div class="title">Decision Intelligence</div><div class="decision">—</div><div class="muted">—</div></div>
@@ -40,7 +45,7 @@
 <div id="tradingSignal" class="panel" style="margin-top:12px"><div class="tradehero"><div><div class="title" style="margin-bottom:4px">Trading Signal · Live Paper Monitor</div><div class="muted">Brain-authorized signal and actual read-only paper position. No broker execution.</div></div><div id="tradeBadge" class="tradebadge"><span class="live-dot"></span>WAITING</div></div><div id="tradeBody" class="tradeempty"><span class="muted">Waiting for live Brain signal…</span></div><div class="tradefoot">P&amp;L uses live option premium mark (BID → LAST → ASK). Invested amount = entry premium × quantity. SL/target are Brain spot-level risk controls.</div></div>
 <div class="two"><div class="panel"><div class="title">Signal DNA</div><div id="dna">—</div></div><div class="panel"><div class="title">Live Market Events</div><div id="events"><span class="muted">No new events</span></div></div></div>
 <div class="section panel" style="margin-top:12px"><div class="title">Market Pressure Map</div><div class="muted" style="margin-bottom:10px">Composite structural pressure from OI, OI flow, gamma and volume. Sorted by distance from spot.</div><div class="tablewrap"><table class="table"><thead><tr><th>Strike</th><th>Distance</th><th>Pressure</th><th>Dominant</th><th>CE OI</th><th>PE OI</th><th>CE OI Δ</th><th>PE OI Δ</th><th>Gamma</th><th>Volume</th></tr></thead><tbody id="pressure"></tbody></table></div></div>
-<div id="institutional" class="two" style="margin-top:12px"><div class="panel"><div class="title">Institutional Signal Engine</div><div id="signalStack" class="muted">Waiting for signal stack</div></div><div class="panel"><div class="title">Risk &amp; Final Decision</div><div id="riskStack" class="muted">Waiting for risk decision</div></div></div><div class="panel" style="margin-top:12px"><div class="title">Execution Plan · Read Only</div><div id="executionStack" class="muted">No plan yet</div></div><div class="footer">Provider-derived intelligence only. QuantNifty remains read-only; no orders are placed, modified or cancelled. Refresh cadence follows the server configuration.</div>
+<div class="footer">Provider-derived intelligence only. QuantNifty remains read-only; no orders are placed, modified or cancelled. Refresh cadence follows the server configuration.</div>
 </main><script>
 const $=id=>document.getElementById(id); const n=(v,d=0)=>v==null||Number.isNaN(Number(v))?'—':Number(v).toLocaleString('en-IN',{maximumFractionDigits:d});
 function renderTradeSignal(signal){
@@ -72,7 +77,7 @@ function connect(){
   if(reconnectTimer){clearTimeout(reconnectTimer);reconnectTimer=null}
   const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws/market');
   ws.onopen=()=>$('status').textContent='LIVE STREAM CONNECTED';
-  ws.onmessage=e=>{try{const data=JSON.parse(e.data); if(data.error){$('status').textContent='Live stream error: '+data.error; return} render(data)}catch(_){}};
+  ws.onmessage=e=>{try{const data=JSON.parse(e.data); if(data.error){$('status').textContent='Live stream error: '+data.error; return} render(data)}catch(_){} };
   ws.onclose=()=>{ $('status').textContent='Live stream reconnecting…'; reconnectTimer=setTimeout(connect,3000) };
   ws.onerror=()=>ws.close();
 }

@@ -1,0 +1,52 @@
+name: QuantNifty Paper Ledger Evidence
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  paper-ledger-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Wait for dynamic paper ledger contract
+        run: |
+          python - <<'PY'
+          import json
+          import time
+          import requests
+
+          base='https://quantnifty-api.onrender.com'
+          last=None
+          for attempt in range(1, 61):
+              try:
+                  response=requests.get(base+'/api/v1/paper/ledger', timeout=30)
+                  if response.ok:
+                      payload=response.json()
+                      last=payload
+                      contract=payload.get('session_policy') or {}
+                      summary=payload.get('summary') or {}
+                      if contract.get('overnight_carry') is False and 'open_positions' in payload and 'unrealized_pnl' in summary and 'total_pnl' in summary:
+                          print(json.dumps(payload, indent=2, sort_keys=True))
+                          print('PAPER_LEDGER_CONTRACT=PASS')
+                          break
+                      print(f'attempt {attempt}: old ledger contract still serving')
+                  else:
+                      print(f'attempt {attempt}: HTTP {response.status_code}')
+              except Exception as exc:
+                  print(f'attempt {attempt}: {exc!r}')
+              time.sleep(5)
+          else:
+              raise SystemExit('dynamic paper ledger contract did not become available')
+
+          assert last.get('mode') == 'READ_ONLY_PAPER'
+          assert last.get('trading') == 'DISABLED'
+          assert (last.get('session_policy') or {}).get('overnight_carry') is False
+          summary=last['summary']
+          for key in ['closed_trades','open_positions','realized_pnl','unrealized_pnl','total_pnl','net_pnl']:
+              assert key in summary, key
+          for position in last.get('open_positions') or []:
+              assert position.get('day') or position.get('entry_timestamp'), position
+              assert position.get('unrealized_pnl') is not None or position.get('mark_price') is None
+          PY

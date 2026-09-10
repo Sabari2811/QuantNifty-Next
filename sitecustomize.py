@@ -41,6 +41,11 @@ def _safe_db_diagnostic() -> dict[str, object]:
         return {"configured": True, "reachable": False, "error": message[:500], "sslmode": "require"}
 
 
+def _ist_day() -> str:
+    from zoneinfo import ZoneInfo
+    return datetime.now(timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date().isoformat()
+
+
 if FastAPI is not None:
     _original_init = FastAPI.__init__
 
@@ -62,6 +67,7 @@ if FastAPI is not None:
                     from quantnifty.main import cache, live_paper
 
                     snapshot = cache.get("snapshot")
+                    gate = getattr(self.state, "quantnifty_decision_event_gate", None)
                     evidence = {
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "trading": "DISABLED",
@@ -75,6 +81,11 @@ if FastAPI is not None:
                         "learning": learning_status(),
                         "database_diagnostic": _safe_db_diagnostic(),
                         "paper_trade_status": "OPEN" if live_paper.active is not None else "IDLE",
+                        "decision_event_gate": {
+                            "enabled": gate is not None,
+                            "emitted": getattr(gate, "emitted", None),
+                            "suppressed": getattr(gate, "suppressed", None),
+                        },
                     }
                     print("QUANTNIFTY_RUNTIME_EVIDENCE " + json.dumps(evidence, separators=(",", ":"), sort_keys=True, default=str), flush=True)
                 except Exception as exc:
@@ -89,7 +100,14 @@ if FastAPI is not None:
             try:
                 from quantnifty.decision_event_gate import DecisionEventGate
                 from quantnifty import main as quantnifty_main
+                from quantnifty.learning_store import load_events
                 gate = DecisionEventGate()
+                today_events = load_events("decisions", day=_ist_day())
+                if today_events:
+                    latest = today_events[-1]
+                    previous_decision = latest.get("decision") if isinstance(latest, dict) else None
+                    if isinstance(previous_decision, dict):
+                        gate.seed(previous_decision)
                 original_record_decision = quantnifty_main.record_decision
 
                 def _record_decision_if_changed(snapshot, decision):
@@ -100,6 +118,7 @@ if FastAPI is not None:
                 quantnifty_main.record_decision = _record_decision_if_changed
                 self.state.quantnifty_decision_event_gate = gate
                 print("QUANTNIFTY_DECISION_EVENT_GATE enabled", flush=True)
+                print(f"QUANTNIFTY_DECISION_EVENT_GATE seeded_today={len(today_events)}", flush=True)
             except Exception as exc:
                 print(f"QUANTNIFTY_DECISION_EVENT_GATE_ERROR {exc}", flush=True)
             self.state.quantnifty_runtime_evidence_task = asyncio.create_task(_emit_runtime_evidence())

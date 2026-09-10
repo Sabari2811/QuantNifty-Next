@@ -64,7 +64,7 @@ def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None 
     state=classify_market_state(data,previous); attribution=move_attribution(data,previous); events=detect_events(data,previous,state); dna=signal_dna(data,state,attribution); pressure=pressure_map(data); confidence=_num(data.get("confidence")); liquidity=_num(data.get("liquidity_score")); bias=str(data.get("bias") or "NEUTRAL")
     gates={"direction":bias in {"BULLISH","BEARISH"},"confidence":confidence>=60,"liquidity":liquidity>=50,"state":state["state"] not in {"LIQUIDITY_RISK","COMPRESSION"}}; trade_ready=all(gates.values())
     base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressure,"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"}}
-    stack=final_decision({**data,"intelligence":{"market_state":state}},previous,"directional")
+    stack=final_decision({**data,"intelligence":{"market_state":state}},previous,"adaptive")
     base["institutional_signal"]=stack["signal"]
     base["risk_engine"]=stack["risk"]
     base["execution_plan"]=stack["execution_plan"]

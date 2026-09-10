@@ -66,9 +66,9 @@ A startup recovery pass now reconciles any unresolved prior-day OPEN paper trade
 - `summary.realized_pnl` = closed-trade P&L.
 - `summary.unrealized_pnl` = current open-position mark-to-market P&L.
 - `summary.total_pnl` / `net_pnl` = realized + unrealized.
-- Closed-trade option P&L is `(exit_price - entry_price) * quantity` when both option prices are available; otherwise the directional spot proxy is used.
+- Closed-trade option P&L is `(exit_price-entry_price)*quantity` when both option prices are available; otherwise the directional spot proxy is used.
 - Broker charges are not fabricated.
-- Legacy same-day outcome rows without the new explicit `day` field remain recoverable by entry/exit timestamps.
+- Legacy same-day outcome rows without the new explicit `day` field remain recoverable by entry/exit timestamps or event timestamp fallback.
 - The ledger exposes the same-day Brain decision summary and `stale_open_positions` diagnostic.
 - `overnight_carry` is explicitly `False`.
 
@@ -98,36 +98,39 @@ After close, research runs on completed same-day stored live data only, persists
 - Prior-day stale OPEN reconciliation at the prior session's last stored live snapshot.
 
 ## Key implementation commits
+- `f7a536ab33a86eb72516d5e8800a8dfa38e8cef7` — legacy ledger rows recoverable by event timestamp fallback; deployed to production.
+- `349ef05509d8c7390ff0a999edc8f5530d2badbb` — stale-lifecycle P&L diagnostic fix.
 - `00880f50c5184a8118316bc8414ca350c5108b1b` — market-session liveness wake/verification workflow.
 - `569b6322fc5d231a35841c2cfa0b951399c35df0` — push-triggered liveness verification.
 - `574990b0dd06604a42263e40cace5cb36355cde0` — production liveness state documentation.
 - `49e966a20e12393d3d63f2ca03c9fded7b9abe6e` — stale paper-position reconciliation at prior session close.
-- `349ef05509d8c7390ff0a999edc8f5530d2badbb` — stale-lifecycle P&L diagnostic fix.
 
 ## Validation checklist
-1. Full live-session repeated-state decision dedup — pending full-session evidence.
-2. Direction/approval/strategy/sub-strategy/session transitions — pending full-session evidence.
-3. **Paper trade lifecycle and P&L:** implementation complete; production ledger contract passed and returned today's persisted ledger; final post-recovery production reconciliation is pending deployment of `349ef055...`.
-4. Automatic same-day after-market research completion/persistence — pending final post-session evidence.
-5. Restart/deploy during active trading day does not duplicate latest same-day decision signature — implementation/evidence present; final active-day observation remains part of the gate.
+1. Full live-session repeated-state decision dedup — **pending tomorrow's full-session evidence**.
+2. Direction/approval/strategy/sub-strategy/session transitions — **pending tomorrow's full-session evidence**.
+3. **Paper trade lifecycle and P&L:** implementation complete; CI passed; production deployment is live; final post-recovery ledger response still needs a fresh production query during/after the next live session.
+4. Automatic same-day after-market research completion/persistence — **pending next post-session evidence**.
+5. Restart/deploy during active trading day does not duplicate latest same-day decision signature — implementation/evidence present; tomorrow's active-session observation will be the final gate.
 6. **Liveness workflow:** previously verified successful in GitHub Actions run `34463616621`.
-7. **Dynamic P&L contract:** production evidence run `34490929098` passed on commit `884bccca...`; a new run `34491160141` is validating the stale-recovery update.
+7. **Dynamic P&L contract:** CI and production contract evidence passed previously; post-`f7` production reconciliation remains an explicit next-session evidence gate.
 
-## Production P&L evidence captured before stale-recovery redeploy
-The production paper ledger evidence run for 2026-09-10 returned:
-- 38 closed paper trades.
-- Realized P&L: **-₹13.90**.
-- Unrealized P&L: **₹0.00**; no current open position at the time of the report.
-- Total/net P&L: **-₹13.90**.
-- 38 trades had option-premium P&L available.
-- Charges modeled: ₹0.00 (not fabricated).
-- 87 same-day decision events: 47 approved, 40 blocked.
-- Production spot at ledger snapshot: 23,477.8.
-- Trading remained disabled.
-- The report detected 1 unresolved prior-day OPEN lifecycle row; the new recovery implementation is specifically intended to reconcile that row at its own prior-day final live snapshot and remove the overnight carry condition.
+## Production evidence
+Before the stale-recovery redeploy, the 2026-09-10 production paper ledger returned 38 closed paper trades, realized P&L **-₹13.90**, unrealized P&L **₹0.00**, total/net P&L **-₹13.90**, 38 option-premium P&L trades, 87 same-day decision events (47 approved, 40 blocked), spot 23,477.8, trading disabled, and 1 unresolved prior-day OPEN lifecycle row. That result is retained as historical evidence only; it is not claimed as the post-`f7` reconciliation.
 
-## Operational state
-Production has shown `LIVE_PROVIDER`, 82 option-chain rows, PostgreSQL durability, decision-event gate activity and `trading=DISABLED`. The Render free service had an idle shutdown at 07:33:18Z; the liveness workflow was added and verified.
+## Current production state
+The `f7a536ab` Render deployment is **LIVE**. Post-deploy runtime logs confirm PostgreSQL reachable, `LIVE_PROVIDER` cached with 82 rows, snapshots continuing to increase, decision-event gate enabled, and `trading=DISABLED`. No post-deploy paper-ledger request has yet been observed, so no post-`f7` ledger numbers are claimed.
+
+## Tomorrow live-validation plan — 2026-09-11
+Use the live market session strictly as **paper/read-only validation**:
+
+- 09:15–09:20 IST: verify service wake, provider connectivity, DB durability and trading-disabled state.
+- 09:20–15:15 IST: observe Brain decisions, validation gates, strategy/direction/sub-strategy transitions, decision-event deduplication, paper entries, exits and dynamic P&L.
+- 15:15–15:30 IST: verify CAS-only re-entry policy.
+- 15:30 IST: verify all paper positions are closed with no overnight carry.
+- After close: verify same-day after-market research, scenario persistence and future-safe policy candidate persistence.
+- Capture production ledger/P&L evidence and compare actual paper outcomes with Brain decision events; never treat counterfactual/research decisions as trades.
+
+No real-money execution will be enabled during this validation.
 
 ## Non-negotiable rules
 - Never commit API tokens/secrets or `data_Review.txt`.

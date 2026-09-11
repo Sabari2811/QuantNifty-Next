@@ -145,14 +145,14 @@ async def paper_signal():
             favorable = move_pct if direction == "BULLISH" else -move_pct if direction == "BEARISH" else 0.0
             decision = live_paper.entry_decision if isinstance(live_paper.entry_decision, dict) else {}
             plan = decision.get("execution_plan") or {}
-            stop_points = float(plan.get("stop_points") or 0)
-            target_points = float(plan.get("target_points") or 0)
+            stop_points = float((live_paper.entry_risk or {}).get("stop_points") or plan.get("stop_points") or 0)
+            target_points = float((live_paper.entry_risk or {}).get("target_points") or plan.get("target_points") or 0)
             entry_spot = float(active.entry_spot or 0)
-            sl_spot = entry_spot - stop_points if direction == "BULLISH" else entry_spot + stop_points if direction == "BEARISH" else 0.0
-            target_spot = entry_spot + target_points if direction == "BULLISH" else entry_spot - target_points if direction == "BEARISH" else 0.0
+            sl_spot = float((live_paper.entry_risk or {}).get("stop_spot") or (entry_spot - stop_points if direction == "BULLISH" else entry_spot + stop_points if direction == "BEARISH" else 0.0))
+            target_spot = float((live_paper.entry_risk or {}).get("target_spot") or (entry_spot + target_points if direction == "BULLISH" else entry_spot - target_points if direction == "BEARISH" else 0.0))
             lot_size = int(float((instrument or {}).get("lot_size") or (instrument or {}).get("lotSize") or 0))
-            lots = round(quantity / lot_size, 2) if lot_size > 0 else None
-            trade = {"trade_id": active.trade_id, "trade_number": None, "status": active.status, "strategy": active.strategy, "direction": direction, "entry_timestamp": active.entry_timestamp, "entry_spot": entry_spot, "strike": (instrument or {}).get("strike"), "option_side": (instrument or {}).get("side") or (instrument or {}).get("option_type"), "symbol": (instrument or {}).get("trading_symbol"), "entry_price": round(entry, 6), "current_price": round(mark, 6), "mark_source": mark_source, "mark_timestamp": today, "quantity": quantity, "lot_size": lot_size or None, "lots": lots, "invested_amount": round(entry * quantity, 2), "pnl": round(pnl, 2), "pnl_pct": round(move_pct, 2), "favorable_move_pct": round(favorable, 2), "movement": "UP" if favorable > 0.01 else "DOWN" if favorable < -0.01 else "FLAT", "mfe_pct": round(active.peak_favorable_pct, 2), "mae_pct": round(active.worst_adverse_pct, 2), "sl_spot": round(sl_spot, 2) if sl_spot else None, "target_spot": round(target_spot, 2) if target_spot else None, "stop_points": round(stop_points, 2) if stop_points else None, "target_points": round(target_points, 2) if target_points else None, "read_only": True, "execution": "NONE"}
+            lots = round(quantity / lot_size, 2) if lot_size > 0 else round(quantity / 65.0, 2)
+            trade = {"trade_id": active.trade_id, "trade_number": None, "status": active.status, "strategy": active.strategy, "direction": direction, "entry_timestamp": active.entry_timestamp, "entry_spot": entry_spot, "strike": (instrument or {}).get("strike"), "option_side": (instrument or {}).get("side") or (instrument or {}).get("option_type"), "symbol": (instrument or {}).get("trading_symbol"), "entry_price": round(entry, 6), "current_price": round(mark, 6), "mark_source": mark_source, "mark_timestamp": today, "quantity": quantity, "lot_size": lot_size or 65, "lots": lots, "invested_amount": round(entry * quantity, 2), "pnl": round(pnl, 2), "pnl_pct": round(move_pct, 2), "favorable_move_pct": round(favorable, 2), "movement": "UP" if move_pct > 0.01 else "DOWN" if move_pct < -0.01 else "FLAT", "mfe_pct": round(active.peak_favorable_pct, 2), "mae_pct": round(active.worst_adverse_pct, 2), "sl_spot": round(sl_spot, 2) if sl_spot else None, "target_spot": round(target_spot, 2) if target_spot else None, "stop_points": round(stop_points, 2) if stop_points else None, "target_points": round(target_points, 2) if target_points else None, "risk_reward": (live_paper.entry_risk or {}).get("risk_reward"), "risk_anchor": "ENTRY_SPOT_IMMUTABLE", "read_only": True, "execution": "NONE"}
         events = []
         try:
             from quantnifty.learning_store import load_events, trading_day
@@ -219,7 +219,7 @@ async def recording_upload_validation(file: UploadFile = File(...), strategy: st
     if Path(file.filename or "").name.lower() != "data_review.txt": raise HTTPException(400, "only data_Review.txt recorder exports are accepted")
     try:
         import json
-        raw_config = json.loads(config or "{}");
+        raw_config = json.loads(config or "{}")
         if not isinstance(raw_config, dict): raise ValueError("config must be a JSON object")
         selected_strategy = _strategy({"strategy": strategy}); cfg = _cfg(raw_config)
     except (json.JSONDecodeError, TypeError, ValueError) as exc: raise HTTPException(400, f"invalid upload configuration: {exc}") from exc
@@ -259,3 +259,102 @@ async def unified_final_decision(strategy: str = "adaptive"):
 async def unified_decision(strategy: str = "adaptive"):
     """Compatibility route for dashboard clients; adaptive is now a first-class strategy."""
     return await unified_final_decision(strategy)
+
+
+def _paper_outcomes() -> list[dict[str, Any]]:
+    from quantnifty.learning_store import load_events
+    rows: list[dict[str, Any]] = []
+    for event in load_events("outcomes"):
+        outcome = event.get("outcome") if isinstance(event, dict) else None
+        if not isinstance(outcome, dict):
+            continue
+        if str(outcome.get("trade_id") or "") and str(outcome.get("read_only", True)).lower() == "true":
+            rows.append(dict(outcome))
+    return rows
+
+
+def _event_snapshot_map() -> dict[str, dict[str, Any]]:
+    from quantnifty.learning_store import load_events
+    rows: dict[str, dict[str, Any]] = {}
+    for event in load_events("snapshots"):
+        if not isinstance(event, dict):
+            continue
+        timestamp = str(event.get("timestamp") or "")
+        snapshot = event.get("snapshot")
+        if timestamp and isinstance(snapshot, dict):
+            rows[timestamp] = snapshot
+    return rows
+
+
+def _event_decision_map() -> dict[str, dict[str, Any]]:
+    from quantnifty.learning_store import load_events
+    rows: dict[str, dict[str, Any]] = {}
+    for event in load_events("decisions"):
+        if not isinstance(event, dict):
+            continue
+        timestamp = str(event.get("timestamp") or "")
+        decision = event.get("decision")
+        if timestamp and isinstance(decision, dict):
+            rows[timestamp] = decision
+    return rows
+
+
+def _checklist(decision: dict[str, Any], outcome: dict[str, Any]) -> dict[str, Any]:
+    signal = decision.get("signal") or {}; risk = decision.get("risk") or {}; plan = decision.get("execution_plan") or {}; direction = str(signal.get("direction") or outcome.get("direction") or "NEUTRAL").upper()
+    gates = risk.get("gates") or {}
+    checklist: dict[str, Any] = {}
+    for key, value in gates.items():
+        checklist[str(key)] = {"passed": bool(value), "value": value}
+    checklist["directional_signal"] = {"passed": direction in {"BULLISH", "BEARISH"}, "value": direction}
+    try:
+        confidence = float(signal.get("confidence"))
+        checklist["confidence_threshold"] = {"passed": confidence >= 60.0, "value": confidence, "threshold": 60.0}
+    except (TypeError, ValueError):
+        checklist["confidence_threshold"] = {"passed": False, "value": None, "unavailable": True}
+    checklist["risk_approved"] = {"passed": bool(risk.get("approved")), "value": risk.get("approved")}
+    checklist["execution_enabled"] = {"passed": False, "value": False, "read_only": True}
+    checklist["instrument_selected"] = {"passed": isinstance(plan.get("instrument"), dict), "value": plan.get("instrument")}
+    return checklist
+
+
+def _trade_audit(outcome: dict[str, Any], snapshots: dict[str, dict[str, Any]], decisions: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    entry_ts = str(outcome.get("entry_timestamp") or "")
+    snapshot = snapshots.get(entry_ts)
+    decision = outcome.get("entry_decision") if isinstance(outcome.get("entry_decision"), dict) else decisions.get(entry_ts)
+    decision = decision if isinstance(decision, dict) else {}
+    plan = decision.get("execution_plan") or {}
+    signal = decision.get("signal") or {}
+    risk = decision.get("risk") or {}
+    instrument = outcome.get("instrument") if isinstance(outcome.get("instrument"), dict) else plan.get("instrument")
+    market = {}
+    if isinstance(snapshot, dict):
+        for key in ("spot", "expiry", "pcr", "call_oi", "put_oi", "call_oi_change", "put_oi_change", "gex", "dex", "vanna_proxy", "iv_skew", "atm_iv", "gamma_flip", "gamma_walls", "max_pain", "expected_move", "support", "resistance", "structure", "dealer_flow", "liquidity_score", "bullish_score", "bearish_score", "bias", "confidence", "rationale", "data_integrity", "rows", "timestamp"):
+            if key in snapshot: market[key] = snapshot[key]
+        market["option_chain"] = snapshot.get("option_chain") or []
+        market["strike_selection"] = snapshot.get("strike_selection") or []
+    missing = []
+    if snapshot is None: missing.append("decision_time_snapshot")
+    if not decision: missing.append("decision_record")
+    if not instrument: missing.append("selected_instrument")
+    if not outcome.get("entry_price"): missing.append("entry_price")
+    return {"trade_id": outcome.get("trade_id"), "status": outcome.get("status"), "audit_version": "trade-audit-v1", "read_only": True, "execution": "NONE", "entry": {"timestamp": entry_ts, "spot": outcome.get("entry_spot"), "premium": outcome.get("entry_price"), "premium_source": outcome.get("entry_price_source"), "direction": outcome.get("direction"), "strategy": outcome.get("strategy"), "trigger": outcome.get("entry_trigger"), "mode": outcome.get("entry_mode"), "instrument": instrument, "quantity": outcome.get("quantity"), "risk": outcome.get("entry_risk") or {}, "risk_anchor": outcome.get("risk_anchor") or "ENTRY_SPOT_IMMUTABLE", "exit_policy": outcome.get("exit_policy") or {}}, "decision": {"timestamp": entry_ts, "strategy": decision.get("strategy"), "mode": decision.get("mode"), "signal": signal, "risk": risk, "execution_plan": plan, "entry_reasons": outcome.get("entry_reasons") or {}, "checklist": _checklist(decision, outcome)}, "market_evidence": market, "exit": {"timestamp": outcome.get("exit_timestamp"), "spot": outcome.get("exit_spot"), "premium": outcome.get("exit_price"), "premium_source": outcome.get("exit_price_source"), "reason": outcome.get("exit_reason"), "reasons": outcome.get("exit_reasons") or {}, "decision": outcome.get("exit_decision") or {}, "realized_pnl": outcome.get("realized_pnl"), "pnl_basis": outcome.get("pnl_basis")}, "learning": {"same_day_learning_eligible": str(outcome.get("status") or "").upper() == "CLOSED", "historical_learning_used_for_entry": False, "source": "LIVE_PROVIDER_DECISION_TIME_SNAPSHOT" if snapshot is not None else "UNAVAILABLE"}, "completeness": {"complete": not missing, "missing": missing, "note": "Audit values are joined to the exact durable decision/snapshot timestamp. Missing legacy fields are reported as unavailable; later snapshots are never substituted."}}
+
+
+@router.get("/trade-audit", include_in_schema=False)
+def trade_audit_page():
+    path = Path(__file__).resolve().parent / "web" / "trade_audit.html"
+    return HTMLResponse(content=path.read_text(encoding="utf-8"), headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache"})
+
+
+@router.get("/api/v1/paper/trade-audit")
+def paper_trade_audit(day: str | None = None, trade_id: str | None = None):
+    from quantnifty.learning_store import trading_day
+    snapshots = _event_snapshot_map(); decisions = _event_decision_map(); rows = []
+    for outcome in _paper_outcomes():
+        if day and trading_day(outcome.get("entry_timestamp")) != day:
+            continue
+        if trade_id and str(outcome.get("trade_id")) != trade_id:
+            continue
+        rows.append(_trade_audit(outcome, snapshots, decisions))
+    rows.sort(key=lambda item: str((item.get("entry") or {}).get("timestamp") or ""))
+    return {"status": "OK", "mode": "READ_ONLY_PAPER_AUDIT", "day": day, "trading": "DISABLED", "count": len(rows), "audits": rows}

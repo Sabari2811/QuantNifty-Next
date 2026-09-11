@@ -86,8 +86,22 @@ Production runtime was validated against Render application evidence after the l
 
 This validates that the implementation is connected to the live market feed and that the read-only paper lifecycle is actually executing on live observations. It does **not** constitute a claim of profitable live trading or real-money execution.
 
+## Astra AI decision layer — 2026-09-11
+GPT-6 Astra is integrated as a **LIVE-only review/veto layer** after the deterministic institutional signal and risk gate. The quantitative engine remains authoritative for direction, risk and execution safety.
+
+- Model: `gpt-6-astra` through the OpenAI Responses API.
+- Astra receives only the current supplied market/institutional/risk evidence; it is instructed not to invent data, future outcomes or external news.
+- Astra returns strict structured output: `APPROVE`, `HOLD` or `REJECT`, confidence, direction, regime, setup quality, conflicts, invalidation and reason codes.
+- Astra can only veto an already risk-approved live candidate; it cannot change the deterministic risk limits or submit broker orders.
+- `BACKTEST`, `REPLAY` and research modes do not call Astra.
+- Missing `OPENAI_API_KEY` or an Astra request failure fails open to the existing deterministic decision path and is explicitly exposed as `astra_review.status=UNAVAILABLE`.
+- Repeated unchanged live states are fingerprint-cached so Astra is not called on every market poll. The cache refreshes when decision-relevant direction, strategy/regime, gamma/OI/volatility state, spot bucket, IV or risk approval changes.
+- The integration is read-only and real trading remains disabled.
+
+The Astra implementation is currently in PR `#1` from `feature/astra-decision-layer`. The CI workflow's baseline `main` run was already failing at the Tests step before this PR; the Astra-specific unit tests pass independently in the local validation harness, and the PR compile step also passed. Production deployment is intentionally held until the code is merged and the required `OPENAI_API_KEY` secret is configured.
+
 ## Architecture / ownership
-`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
+`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> Astra Decision Review -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
 
 Research lifecycle: `Stored-day snapshots -> canonical decision -> OPEN THESIS -> HOLD/MONITOR -> volatility point stop/target or invalidation/session exit -> research P&L -> policy candidate`.
 
@@ -96,6 +110,8 @@ Research lifecycle: `Stored-day snapshots -> canonical decision -> OPEN THESIS -
 - Point-based volatility risk implementation: `fb6a9e72ccfd4918817967c706fa787865bf563c`.
 - Research persistence/legacy refresh fixes: `a7affa0343151c69b6e6dd02ea4ed8ba7385ac61` plus the research API refresh commit immediately before this handoff update.
 - Decision event gate has dedicated regression coverage in `apps/api/tests/test_decision_event_gate.py`.
+- Astra decision layer implementation: `8781e9c52124f6c2858a96b6ea3734870b59743a` plus live-decision integration `361dde08046bbcc714b1e33ffac756a21d1fac9e`; throttle `afa99add2c35f39c692035aa0f4c7e0225f5e531`.
+- Astra unit coverage: `f8ddb38b04694be06b6ebc13633b9f814c40e438`.
 - Production live-market validation completed 2026-09-11 using Render runtime evidence: LIVE_PROVIDER snapshots, live option-chain rows, live paper OPEN -> IDLE lifecycle, durable learning counters, and trading disabled.
 - Production P&L must still be checked from the research endpoint after deployment and must show the current thesis-hold/point-risk metadata.
 - Production service remains `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).

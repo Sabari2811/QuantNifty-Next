@@ -20,12 +20,25 @@ def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict
     for strategy in RESEARCH_STRATEGIES:
         try:
             result = run_research_strategy(snapshots, strategy, cfg)
-            results[strategy] = {"status": "TESTED", "metrics": result.get("metrics") or result.get("overall") or {}, "trades": result.get("trades") or [], "split": result.get("split") or {}, "strategy": strategy, "canonical_engine_strategy": result.get("canonical_engine_strategy", strategy), "research_only": True}
+            results[strategy] = {
+                "status": "TESTED",
+                "metrics": result.get("metrics") or result.get("overall") or {},
+                "trades": result.get("trades") or [],
+                "split": result.get("split") or {},
+                "strategy": strategy,
+                "canonical_engine_strategy": result.get("canonical_engine_strategy", strategy),
+                "position_lifecycle": result.get("position_lifecycle"),
+                "risk_model": result.get("risk_model"),
+                "risk_model_detail": result.get("risk_model_detail"),
+                "entry_rule": result.get("entry_rule"),
+                "exit_rule": result.get("exit_rule"),
+                "research_only": True,
+            }
         except (TypeError, ValueError, RuntimeError) as exc:
             results[strategy] = {"status": "ERROR", "error": str(exc), "research_only": True}
     tested_metrics = {name: value.get("metrics") or {} for name, value in results.items() if value.get("status") == "TESTED"}
     ranked = sorted(((float((metric.get("net_pnl") or 0.0)), name) for name, metric in tested_metrics.items()), reverse=True)
-    research = {"type": "after_market", "training_type": "DAILY_AFTER_MARKET", "training_source": "STORED_DAY", "status": "COMPLETED", "day": day, "observations": len(snapshots), "strategies": results, "strategy_coverage": {"tested": list(RESEARCH_STRATEGIES), "pending": []}, "ranking_by_net_pnl": [{"strategy": name, "net_pnl": round(pnl, 2)} for pnl, name in ranked], "orders_placed": 0, "mode": "READ_ONLY_AFTER_MARKET", "counterfactual": True}
+    research = {"type": "after_market", "training_type": "DAILY_AFTER_MARKET", "training_source": "STORED_DAY", "status": "COMPLETED", "day": day, "observations": len(snapshots), "strategies": results, "strategy_coverage": {"tested": list(RESEARCH_STRATEGIES), "pending": []}, "ranking_by_net_pnl": [{"strategy": name, "net_pnl": round(pnl, 2)} for pnl, name in ranked], "orders_placed": 0, "mode": "READ_ONLY_AFTER_MARKET", "counterfactual": False}
     research["scenarios"] = extract_scenarios(research)
     anchor_metrics = results.get(ANCHOR_STRATEGY, {}).get("metrics") or {}
     candidate_metrics = {name: value.get("metrics") or {} for name, value in results.items() if name != ANCHOR_STRATEGY and value.get("status") == "TESTED"}

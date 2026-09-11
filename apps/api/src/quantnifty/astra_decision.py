@@ -9,6 +9,8 @@ import httpx
 
 ASTRA_MODEL = "gpt-6-astra"
 ASTRA_URL = "https://api.openai.com/v1/responses"
+_last_fingerprint: tuple[Any, ...] | None = None
+_last_review: dict[str, Any] | None = None
 
 _SCHEMA = {
     "type": "object",
@@ -44,7 +46,24 @@ def _output_text(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _fingerprint(data: dict[str, Any], signal: dict[str, Any], risk: dict[str, Any]) -> tuple[Any, ...]:
+    adaptive = signal.get("adaptive") or {}
+    return (
+        signal.get("direction"),
+        round(float(signal.get("confidence") or 0) / 5) * 5,
+        adaptive.get("selected_strategy"),
+        adaptive.get("regime"),
+        (signal.get("gamma") or {}).get("regime"),
+        (signal.get("oi_flow") or {}).get("bias"),
+        (signal.get("volatility") or {}).get("regime"),
+        round(float(data.get("spot") or 0) / 25) * 25,
+        round(float(data.get("atm_iv") or 0)),
+        bool(risk.get("approved")),
+    )
+
+
 def review_decision(data: dict[str, Any], signal: dict[str, Any], risk: dict[str, Any], mode: str) -> dict[str, Any]:
+    global _last_fingerprint, _last_review
     if str(mode).upper() != "LIVE":
         return _disabled("live_only")
     if not bool(risk.get("approved")):
@@ -52,6 +71,12 @@ def review_decision(data: dict[str, Any], signal: dict[str, Any], risk: dict[str
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         return _disabled("OPENAI_API_KEY_not_configured")
+
+    fingerprint = _fingerprint(data, signal, risk)
+    if _last_fingerprint == fingerprint and _last_review is not None:
+        cached = dict(_last_review)
+        cached["cached"] = True
+        return cached
 
     evidence = {
         "market": {
@@ -92,6 +117,9 @@ def review_decision(data: dict[str, Any], signal: dict[str, Any], risk: dict[str
             response = client.post(ASTRA_URL, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json=body)
         response.raise_for_status()
         parsed = json.loads(_output_text(response.json()))
-        return {"status": "AVAILABLE", "provider": "OPENAI", "model": ASTRA_MODEL, **parsed}
+        result = {"status": "AVAILABLE", "provider": "OPENAI", "model": ASTRA_MODEL, "cached": False, **parsed}
+        _last_fingerprint = fingerprint
+        _last_review = result
+        return result
     except Exception as exc:
         return _disabled(f"request_failed:{type(exc).__name__}")

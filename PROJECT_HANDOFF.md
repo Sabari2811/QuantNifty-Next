@@ -61,22 +61,29 @@ The audit deliberately uses the already durable `snapshots`, `decisions` and `ou
 
 ## Risk / paper lifecycle
 - At entry, the manager freezes entry spot, entry premium, selected instrument, trigger/mode, stop/target points, R:R and exit policy.
-- Spot SL/target remain anchored to entry spot for the lifetime of the paper trade.
+- **Option SL/target are now delta-driven:** the selected option's live Greek delta converts the NIFTY-point risk budget into option-premium distances using `abs(delta) × NIFTY points`.
+- New entries require a valid option delta; if the selected option has no usable Greek delta, the paper entry is not opened rather than falling back to a spot-only or arbitrary premium risk model.
+- The premium SL/target are anchored to the entry option premium but are recalculated on every live snapshot from the **current option delta**, so changing Greeks dynamically change the premium risk levels.
+- The delta-driven levels are used by the paper lifecycle for `DELTA_PREMIUM_STOP` and `DELTA_PREMIUM_TARGET` exits when crossed; session-close and overnight protections remain in force.
+- Entry audit evidence stores `entry_delta` and the delta-derived premium SL/target calculation. Closed evidence stores exit delta and the delta-derived levels at exit.
+- The underlying NIFTY spot risk budget remains available as the source distance for conversion, but the active option risk decision is expressed in the selected contract's premium using its live delta.
+- Spot SL/target remain available as reference boundaries and are not used as the primary option-premium SL/target.
+- Existing OPEN trades that predate this delta evidence are not retroactively rewritten or fabricated; if their historical delta is unavailable, the audit marks that delta evidence unavailable.
 - Existing OPEN trades are recovered from durable evidence; no synthetic re-entry is created.
 - Exit uses BID -> LAST -> ASK when an option mark is available; real orders are never submitted.
 - No overnight paper positions.
 
 ## Architecture / ownership
-`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
+`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
 
 Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, and `web/*`.
 
 ## Validation state
-The audit UI risk-unit clarification is now on `main` as commit `04e903ad3e771cc35583794d4c9cd60b587d80f7`, followed by this handoff documentation update.
+Delta-driven paper-risk implementation is on `main` as commits `ce37f1cff29259e88e2c7d492221a03920d25876` and `e925776bf64ed2e1afe41c02772dedaace8a183b`. The first CI run exposed one existing unit test fixture that did not provide option delta; the fixture was corrected to reflect the new mandatory delta-driven entry contract.
 
-The preceding audit implementation CI passed successfully for compile, full tests and Intelligence UI telemetry validation. The new UI-only change should be promoted only after the normal CI and Render production-evidence workflows pass.
+Latest full CI run `34579477102` on commit `1394f895ea402d6f668b73d4c9c33b1bcd0a2a94` reached compile successfully and ran **115 passed / 1 failed**. The single failure was `test_open_close_persists_complete_trade_evidence` because its synthetic option-chain fixture had no delta, so the new fail-safe correctly refused to open the trade. The test fixture was then updated. A fresh CI result is required before claiming this change fully validated.
 
-The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`). The last confirmed production deployment before this UI clarification remains `dep-dahpgrrm8hqs73crmkcg` on commit `bb1605fe4e18fcc2f714c3a1bb8c5cd924ec8a7b`. Do not claim this clarification is production-live until a Render deployment for the new source and production evidence are observed.
+The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`). Do not claim the delta-risk change is production-live until a Render deployment for the final validated source and production evidence are observed.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Do not create temporary workflow hacks to mutate production source; use normal repository changes and existing validation workflows.

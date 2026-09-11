@@ -1,53 +1,14 @@
 name: Apply Trade Audit
-
 on:
   push:
     branches: [main]
-
 permissions:
   contents: write
-
 jobs:
   apply:
     if: startsWith(github.event.head_commit.message, 'feat: add auditable trade decision records')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch audit persistence and UI
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p=Path('apps/api/src/quantnifty/live_paper_manager.py')
-          s=p.read_text()
-          marker='def _risk_levels(entry_spot: float, direction: str, plan: dict[str, Any]) -> dict[str, Any]:\n'
-          helper='''def _decision_audit(snapshot: dict[str, Any], decision: dict[str, Any], instrument: dict[str, Any] | None) -> dict[str, Any]:\n    signal = decision.get("signal") or {}; risk = decision.get("risk") or {}; plan = decision.get("execution_plan") or {}; adaptive = signal.get("adaptive") or {}; leg = _leg(snapshot, instrument)\n    return {"captured_at": snapshot.get("timestamp"), "spot": _f(snapshot.get("spot")), "expiry": snapshot.get("expiry"), "market": {k: snapshot.get(k) for k in ("pcr","call_oi","put_oi","call_oi_change","put_oi_change","gex","dex","vanna_proxy","iv_skew","atm_iv","gamma_flip","max_pain","support","resistance","structure","dealer_flow","liquidity_score","bullish_score","bearish_score","bias","confidence")}, "expected_move": snapshot.get("expected_move"), "gamma_walls": snapshot.get("gamma_walls") or [], "selected_option": dict(leg) if isinstance(leg, dict) else dict(instrument or {}), "signal": {k: signal.get(k) for k in ("direction","confidence","scores","evidence","rationale","oi_flow","gamma","dealer","volatility","historical_evidence")}, "adaptive": {k: adaptive.get(k) for k in ("regime","selected_strategy","preferred_direction","readiness_pct","reason","risk_profile","learning")}, "risk": {"approved": bool(risk.get("approved")), "gates": risk.get("gates") or {}, "reasons": risk.get("reasons") or [], "max_risk_pct": risk.get("max_risk_pct")}, "execution_plan": dict(plan), "checklist": {k: bool(v) for k,v in (risk.get("gates") or {}).items()}, "all_required_gates_passed": bool(risk.get("approved"))}\n\n\n'''
-          if '_decision_audit(' not in s:
-              assert marker in s; s=s.replace(marker,helper+marker,1)
-          s=s.replace('self.entry_risk: dict[str, Any] = {}; self.entry_trigger', 'self.entry_risk: dict[str, Any] = {}; self.entry_audit: dict[str, Any] = {}; self.entry_trigger',1)
-          s=s.replace('self.entry_risk = outcome.get("entry_risk")', 'self.entry_audit = outcome.get("entry_audit") if isinstance(outcome.get("entry_audit"), dict) else {}\n        self.entry_risk = outcome.get("entry_risk")',1)
-          s=s.replace('self.entry_risk = _risk_levels(spot, direction, plan); self.entry_trigger', 'self.entry_risk = _risk_levels(spot, direction, plan); self.entry_audit = _decision_audit(snapshot, decision, instrument); self.entry_trigger',1)
-          s=s.replace('"entry_risk": self.entry_risk, "entry_trigger"', '"entry_risk": self.entry_risk, "entry_audit": self.entry_audit, "entry_trigger"')
-          s=s.replace('self.entry_risk = {}; self.entry_trigger = None;', 'self.entry_risk = {}; self.entry_audit = {}; self.entry_trigger = None;',1)
-          s=s.replace('"entry_reasons": self.entry_reasons, "entry_trigger": self.entry_trigger', '"entry_reasons": self.entry_reasons, "entry_audit": self.entry_audit, "entry_trigger": self.entry_trigger',1)
-          p.write_text(s)
-
-          p=Path('apps/api/src/quantnifty/main.py'); s=p.read_text()
-          if 'trade_audit_page' not in s:
-              anchor='@app.get("/backtest")\ndef backtest_page():'
-              insertion='''@app.get("/trade-audit")\ndef trade_audit_page():\n    path=os.path.join(os.path.dirname(__file__),"web","trade_audit.html"); return FileResponse(path)\n\n'''
-              assert anchor in s; s=s.replace(anchor,insertion+anchor,1)
-          if 'def trade_audit_api' not in s:
-              anchor='@app.get("/api/v1/learning/status")\ndef learning_status_api(): return learning_status()\n'
-              insertion='''@app.get("/api/v1/trade-audit")\ndef trade_audit_api(day: str | None = None):\n    from quantnifty.learning_store import load_events\n    selected=str(day or datetime.now(IST).date().isoformat()); rows=[]\n    for event in load_events("outcomes", selected):\n        outcome=event.get("outcome") if isinstance(event,dict) else None\n        if not isinstance(outcome,dict) or not outcome.get("trade_id"): continue\n        audit=outcome.get("entry_audit") or {}\n        rows.append({"trade": outcome, "audit": audit})\n    return {"mode":"READ_ONLY_PAPER_AUDIT","day":selected,"trading":"DISABLED","trades":rows,"note":"Decision-time evidence is captured at entry and remains immutable. No research/counterfactual data is presented as a trade."}\n\n'''
-              assert anchor in s; s=s.replace(anchor,anchor+'\n'+insertion,1)
-          p.write_text(s)
-          PY
-          cat > apps/api/src/quantnifty/web/trade_audit.html <<'HTML'
-          <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QuantNifty Trade Audit</title><style>body{margin:0;background:#080d19;color:#e8edf7;font:14px Inter,system-ui,sans-serif}main{max-width:1500px;margin:auto;padding:24px}.panel{background:#11182b;border:1px solid #263250;border-radius:14px;padding:16px;margin:12px 0}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.card{background:#0d1425;border:1px solid #263250;border-radius:10px;padding:10px}.label{color:#7d89a4;font-size:10px;text-transform:uppercase}.v{font-weight:800;margin-top:4px}.pass{color:#62e3bc}.fail{color:#ff7180}.muted{color:#7d89a4}details{margin-top:12px}summary{cursor:pointer;font-weight:800;padding:10px;border:1px solid #263250;border-radius:8px}pre{white-space:pre-wrap;word-break:break-word;color:#b9c5dc}.kv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}@media(max-width:900px){.grid,.kv{grid-template-columns:1fr 1fr}}@media(max-width:600px){.grid,.kv{grid-template-columns:1fr}}</style></head><body><main><h1>🧠 QuantNifty Trade Audit</h1><div class="muted">Immutable decision-time evidence · paper only · no broker execution</div><div id="app" class="panel">Loading…</div></main><script>const app=document.getElementById('app'),n=v=>v==null?'—':typeof v==='number'?v.toLocaleString('en-IN',{maximumFractionDigits:4}):String(v);function card(k,v,cls=''){return `<div class="card"><div class="label">${k}</div><div class="v ${cls}">${n(v)}</div></div>`}function obj(o){return Object.entries(o||{}).map(([k,v])=>card(k,typeof v==='object'?JSON.stringify(v):v)).join('')}function render(d){if(!d.trades.length){app.innerHTML='<div class="muted">No paper trades recorded for '+d.day+'.</div>';return}app.innerHTML=d.trades.map((x,i)=>{const t=x.trade,a=x.audit||{},m=a.market||{},r=a.risk||{},p=a.execution_plan||{},c=a.checklist||{};return `<div class="panel"><h2>Trade #${i+1} · ${n(t.instrument&&t.instrument.trading_symbol)} · ${n(t.status)}</h2><div class="grid">${card('Entry time',t.entry_timestamp)}${card('Entry spot',t.entry_spot)}${card('Entry premium',t.entry_price)}${card('Exit time',t.exit_timestamp)}${card('Exit spot',t.exit_spot)}${card('Exit premium',t.exit_price)}${card('SL',a.entry_risk&&a.entry_risk.stop_spot)}${card('Target',a.entry_risk&&a.entry_risk.target_spot)}${card('Realized P&L',t.realized_pnl)}${card('Direction',t.direction)}${card('Strategy',a.adaptive&&a.adaptive.selected_strategy)}${card('Trigger',t.entry_trigger)}${card('R:R',a.entry_risk&&a.entry_risk.risk_reward)}</div><h3>Validation checklist</h3><div class="grid">${Object.entries(c).map(([k,v])=>card(k,v?'PASS':'FAIL',v?'pass':'fail')).join('')}</div><h3>Decision-time market parameters</h3><div class="kv">${obj(m)}</div><h3>Selected option / Greeks</h3><div class="kv">${obj(a.selected_option)}</div><h3>Brain / Institutional evidence</h3><pre>${JSON.stringify({signal:a.signal,adaptive:a.adaptive},null,2)}</pre><h3>Risk & execution</h3><pre>${JSON.stringify({risk:r,execution_plan:p,entry_risk:a.entry_risk,exit_reasons:t.exit_reasons||null},null,2)}</pre></div>`}).join('')}fetch('/api/v1/trade-audit?day='+new Date().toISOString().slice(0,10)).then(r=>r.json()).then(render).catch(e=>app.textContent='Audit unavailable: '+e)</script></body></html>
-          HTML
-          python -m py_compile apps/api/src/quantnifty/live_paper_manager.py apps/api/src/quantnifty/main.py
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add apps/api/src/quantnifty/live_paper_manager.py apps/api/src/quantnifty/main.py apps/api/src/quantnifty/web/trade_audit.html
-          git commit -m 'feat: persist and expose trade decision audit'
-          git push
+      - name: Apply trade audit
+        run: bash .github/scripts/apply_trade_audit.sh

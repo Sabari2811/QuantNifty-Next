@@ -48,39 +48,41 @@ A complete read-only paper-trade audit surface is implemented at `/trade-audit` 
 The live Adaptive entry layer exposes 5 entry-capable pathways: `EARLY_ACCUMULATION`, `DIRECTIONAL`, `NEGATIVE_GAMMA_EXPANSION`, `GAMMA_TRANSITION`, and `CAS_REENTRY`. Liquidity-risk, positive-gamma range, compression and standby states are explicit NO_ENTRY states.
 
 ## After-market stored-day P&L results
-A read-only API exposes `/api/v1/research/results?day=YYYY-MM-DD`, sourced from `STORED_DAY` research events and durable live-day snapshots. It remains research-only and places zero orders.
+A read-only API exposes `/api/v1/research/results?day=YYYY-MM-DD`, sourced from `STORED_DAY` research events and durable live-day snapshots. It remains research-only and places zero orders. Legacy fixed-TIME/counterfactual reports are not returned as the current report; when the latest stored research event is from the old engine, the endpoint regenerates the report from the durable stored-day snapshots through the current thesis-hold engine.
+
+### Current thesis-hold P&L model — 2026-09-11
+The research lifecycle now matches the requested position behavior:
+
+`ENTRY CONFIRMED -> BUY ACTUAL STORED OPTION -> OPEN POSITION -> HOLD/MONITOR -> EXIT -> ONLY THEN ALLOW NEXT ENTRY`
+
+- The first approved signal becomes the first research trade; same-direction signals while it is open are not additional entries.
+- The option entry and exit prices are taken from the stored option-chain quotes at the actual entry/exit snapshots.
+- Stop/target are **NIFTY spot points**, not percentages.
+- Because stored snapshots are not candles, the engine uses a clearly labeled **20-snapshot close-to-close spot ATR proxy** as the volatility unit.
+- Stop = `max(50, min(150, ATR_proxy × 4 × IV_multiplier))` NIFTY points.
+- ATM IV multiplier: `0.90` below 12, `1.00` from 12 to <20, `1.20` at >=20.
+- Target = `2R` (twice the stop distance).
+- The stop/target are applied to the NIFTY spot while P&L is calculated from the actual CE/PE premium movement and 65-unit research lot.
+- Other exits remain: Adaptive exhaustion/trail, thesis/risk invalidation, expiry and same-day session close.
+- Every trade report now carries entry/exit timestamp, option premium entry/exit, spot entry/exit, stop/target points, ATR proxy, IV multiplier, exit reason and net P&L.
+
+This is research-only and does not change live paper risk or submit orders.
 
 ## After-market research tuning — 2026-09-11
 The first stored-day run exposed excessive repeated entries: 44 directional trades and 41 adaptive/early-accumulation trades were generated, with most exits classified as `TIME`. That result was counterfactual/read-only, not actual paper trading.
 
-V2 tuned the research profile to one full NIFTY lot (65), 8-bar maximum hold, 0.75% spot stop, 1.5% spot target, 5 bps slippage and ₹40 fixed cost per leg. Scenario streams were filtered to their actual regimes.
-
-### V3 thesis-hold lifecycle
-The research engine now models the user's intended position lifecycle:
-
-`ENTRY CONFIRMED -> OPEN POSITION -> HOLD/MONITOR -> EXIT -> ONLY THEN ALLOW NEXT ENTRY`
-
-Implemented in `apps/api/src/quantnifty/position_hold_backtest.py` and selected by `research_strategy_runner.py`.
-
-Rules:
-- Same-direction signals while a position is open are **not new trades**.
-- The position remains open until stop, target, adaptive exhaustion/trail, thesis/risk invalidation, expiry or session close.
-- The old short fixed maximum-hold exit is no longer the primary exit mechanism in V3.
-- A position is explicitly closed before moving to another entry decision.
-- Same-day boundary is enforced so the research lifecycle cannot carry a position into the next IST trading day.
-- The implementation is research-only; live Brain, paper execution and delta-driven live risk are unchanged.
-
-**Validation limitation:** the supplied 2026-09-11 JSON is an aggregate/counterfactual research result and does not contain the complete underlying option-chain/premium snapshots. It is therefore impossible to truthfully calculate the new V3 P&L from that JSON alone. The exact V3 result must come from the durable stored-day snapshot stream through the after-market research endpoint.
+V3 thesis-hold lifecycle replaced that fixed-time behavior. The old aggregate/counterfactual JSON remains historical audit evidence and is not the current stored-day P&L.
 
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
 
-Research lifecycle: `Stored-day snapshots -> canonical decision -> OPEN THESIS -> HOLD/MONITOR -> risk/target/invalidation/session exit -> research P&L -> policy candidate`.
+Research lifecycle: `Stored-day snapshots -> canonical decision -> OPEN THESIS -> HOLD/MONITOR -> volatility point stop/target or invalidation/session exit -> research P&L -> policy candidate`.
 
 ## Validation state
-- Thesis-hold implementation: `823351703dd4e9360ce5171271e41f4dd20041b1`, `313f25ba0aa78032fcf6dcb036290d380d818d9e`, and same-day safeguard `c234df4f92def0e212a9b94058c265e47dab28ee`.
-- Regression tests: `fca885dc6e6c407d797e536821c0d55f30ae86cb`.
-- GitHub status for the final handoff commit has not yet exposed CI checks, so V3 is not claimed production-validated yet.
+- Thesis-hold implementation base: `823351703dd4e9360ce5171271e41f4dd20041b1`, `313f25ba0aa78032fcf6dcb036290d380d818d9e`, same-day safeguard `c234df4f92def0e212a9b94058c265e47dab28ee`.
+- Point-based volatility risk implementation: `fb6a9e72ccfd4918817967c706fa787865bf563c`.
+- Research persistence/legacy refresh fixes: `a7affa0343151c69b6e6dd02ea4ed8ba7385ac61` plus the research API refresh commit immediately before this handoff update.
+- Regression tests remain required before production validation; production P&L must be checked from the endpoint after deployment and must show the current thesis-hold/point-risk metadata.
 - Production service remains `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).
 
 ## Non-negotiable rules

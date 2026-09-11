@@ -48,7 +48,7 @@ The audit UI exposes expandable sections for:
 - Learning provenance: same-day learning eligibility, explicit historical-learning exclusion and evidence source.
 - Completeness status. Legacy trades whose original decision-time snapshot is not durably available are marked **INCOMPLETE**; later snapshots are never substituted and missing values are not fabricated.
 
-Implementation is in `apps/api/src/quantnifty/recording_api.py` and `apps/api/src/quantnifty/web/trade_audit.html`. Regression coverage is in `apps/api/tests/test_trade_audit.py`.
+Implementation is in `apps/api/src/quantnifty/recording_api.py` and `web/trade_audit.html`. Regression coverage is in `apps/api/tests/test_trade_audit.py`.
 
 The audit deliberately uses the already durable `snapshots`, `decisions` and `outcomes` stores rather than reconstructing an old trade from later market state. Historical/replay evidence is never used to manufacture live audit evidence or live Adaptive learning.
 
@@ -86,10 +86,22 @@ The application now exposes one explicit scenario contract for the live Adaptive
 
 The scenario contract is implemented in `apps/api/src/quantnifty/entry_scenarios.py` and surfaced by `decision_intelligence()` as `entry_scenario` plus the supported `entry_scenarios` registry. Regression coverage is in `apps/api/tests/test_entry_scenarios.py`.
 
+## After-market stored-day P&L results
+A read-only API has been added to expose the exact daily research run from stored live-day snapshots and stored research events:
+
+- API: `/api/v1/research/results?day=YYYY-MM-DD`
+- Defaults to the current Asia/Kolkata trading day.
+- Source is `STORED_DAY`; no historical recording or `data_Review.txt` data is used.
+- Research universe: `directional`, `gamma_blast`, `adaptive`, `early_accumulation`, `transition`, `range`, `breakout_watch`.
+- The response reports trades, wins, losses, win rate, net P&L, gross P&L, profit factor and max drawdown where present, plus ranking, scenarios and policy metadata.
+- If today's research event is absent, the endpoint can run the after-market lab once against today's durable stored snapshots; it remains `READ_ONLY_AFTER_MARKET` and places zero orders.
+- Implementation: `apps/api/src/quantnifty/research_api.py`, registered from `main.py`.
+- Production deployment for commit `82fbfd47ea39995ca0e58d4684e6dfec8fa48ae3` was triggered manually after the auto-deploy webhook had not started a deployment. Build reached `Build successful`; Render was still in `update_in_progress` at the last validation check.
+
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
 
-Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `entry_scenarios.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, and `web/*`.
+Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `entry_scenarios.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, `research_api.py`, and `web/*`.
 
 ## Validation state
 Delta-driven paper-risk implementation is on `main` as commits `ce37f1cff29259e88e2c7d492221a03920d25876` and `e925776bf64ed2e1afe41c02772dedaace8a183b`. The first CI run exposed one existing unit test fixture that did not provide option delta; the fixture was corrected to reflect the new mandatory delta-driven entry contract.

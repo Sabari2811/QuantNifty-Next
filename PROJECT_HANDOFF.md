@@ -96,7 +96,22 @@ A read-only API has been added to expose the exact daily research run from store
 - The response reports trades, wins, losses, win rate, net P&L, gross P&L, profit factor and max drawdown where present, plus ranking, scenarios and policy metadata.
 - If today's research event is absent, the endpoint can run the after-market lab once against today's durable stored snapshots; it remains `READ_ONLY_AFTER_MARKET` and places zero orders.
 - Implementation: `apps/api/src/quantnifty/research_api.py`, registered from `main.py`.
-- Production deployment for commit `82fbfd47ea39995ca0e58d4684e6dfec8fa48ae3` was triggered manually after the auto-deploy webhook had not started a deployment. Build reached `Build successful`; Render was still in `update_in_progress` at the last validation check.
+
+## After-market research tuning — 2026-09-11
+The first stored-day run exposed a research-harness defect: `early_accumulation`, `transition`, `range`, and `breakout_watch` were being relabeled Adaptive runs rather than scenario-specific research streams, and the one-unit backtest cost model made fixed charges dominate P&L.
+
+The research harness was tuned without changing the live Brain or live paper execution:
+
+- `apps/api/src/quantnifty/research_strategy_runner.py` now uses an explicit `INTRADAY_OPTION_RESEARCH_V2` profile.
+- Research defaults to one full NIFTY lot (`65`), 8-bar maximum hold, 0.75% spot stop, 1.5% spot target, 5 bps slippage and ₹40 fixed cost per leg.
+- Scenario strategies are filtered to their actual stored-day market regime before being replayed through the canonical Adaptive decision/risk pipeline; they are no longer simply relabeled copies of the full Adaptive stream.
+- `range` and `breakout_watch` remain represented as research scenarios even when their canonical risk gates correctly produce no-entry results.
+- The tuning is research-only. Live `final_decision`, live Adaptive learning, delta-driven paper risk, broker execution and trading-disabled safeguards are unchanged.
+- Regression coverage was added in `apps/api/tests/test_research_strategy_runner.py`.
+
+The tuned research code is on `main` at commits `1c88fdf0f3e2eb20b2f02b2dcc923deb87f884c1` and `87b0f75fe231a45a29316ebf323e02b5e11946d0`, with test coverage commit `544270934b2d83418094ef2ca5bd9eff66b945c1`.
+
+The production service deploy for the tuned research head was triggered as `dep-dai0t07qj5pc73asqsjg`; validation must wait for that deployment to reach `live` before claiming the tuned endpoint is production-active.
 
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
@@ -106,9 +121,11 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 ## Validation state
 Delta-driven paper-risk implementation is on `main` as commits `ce37f1cff29259e88e2c7d492221a03920d25876` and `e925776bf64ed2e1afe41c02772dedaace8a183b`. The first CI run exposed one existing unit test fixture that did not provide option delta; the fixture was corrected to reflect the new mandatory delta-driven entry contract.
 
-The explicit entry-scenario implementation is on `main` at the scenario-registry, market-brain integration, and regression-test commits immediately preceding this handoff update. Push-triggered live-validation run `34592415236` for the scenario test commit completed successfully. A full CI/production validation for the final handoff head is still required before claiming the complete application change is production-live.
+The explicit entry-scenario implementation is on `main` at the scenario-registry, market-brain integration, and regression-test commits immediately preceding this handoff update. Push-triggered live-validation run `34592415236` for the scenario test commit completed successfully.
 
-The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`). Do not claim the entry-scenario change is production-live until a Render deployment for the final validated source and production evidence are observed.
+The tuned research profile has its own regression coverage. A GitHub Actions run for the newest commit was not yet exposed by the GitHub connector at the time of this handoff update; production deployment was observed in `update_in_progress` and must reach `live` before the tuned stored-day endpoint can be treated as validated production evidence.
+
+The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Do not create temporary workflow hacks to mutate production source; use normal repository changes and existing validation workflows.

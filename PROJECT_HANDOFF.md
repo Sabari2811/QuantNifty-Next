@@ -23,6 +23,8 @@ QuantNifty-Next is a **Live Adaptive Brain + After-Market Research Lab**.
 ## Current UI / paper telemetry
 The Market Intelligence page is read-only and separates **Current Brain Plan** from the actual **Active Paper Trade**. The paper monitor derives premium movement from entry premium to current mark, preserves the original entry quantity, and anchors spot SL/target to the immutable entry spot. New NIFTY paper trades default to one full lot (65 units) when the provider does not expose quantity. Real trading remains disabled.
 
+The Current Brain Plan risk display explicitly labels **Stop / Target as NIFTY spot-point distances**, not option-premium prices, and also displays the derived **Spot SL** and **Spot Target**. The active paper monitor separately displays the actual option premium `Entry → Current`. This prevents a spot-risk distance such as `164.31` from being mistaken for an option target premium of ₹164.31.
+
 ## Trade Audit — 2026-09-11
 A complete read-only paper-trade audit surface is now implemented at:
 
@@ -70,16 +72,11 @@ The audit deliberately uses the already durable `snapshots`, `decisions` and `ou
 Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, and `web/*`.
 
 ## Validation state
-Commit `cdcc7339fa8f3f37f5ff47dd3dd0f96d57da6217` is the current `main` head after the audit implementation and tests.
+The audit UI risk-unit clarification is now on `main` as commit `04e903ad3e771cc35583794d4c9cd60b587d80f7`, followed by this handoff documentation update.
 
-- QuantNifty CI run `34577711726`: **success** on the audit commit.
-- QuantNifty Backtest Gate Evidence run `34577711746`: **success**.
-- QuantNifty Paper Ledger Evidence run `34577711708`: **success**.
-- Live Liveness Wake run `34577711642`: **success**.
-- Live Validation Harness run `34577711625`: active/continuing live-session validation.
-- Production Evidence run `34577711671`: active/awaiting production deployment evidence.
+The preceding audit implementation CI passed successfully for compile, full tests and Intelligence UI telemetry validation. The new UI-only change should be promoted only after the normal CI and Render production-evidence workflows pass.
 
-The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`). Its last confirmed live deployment before the audit commits is `dep-dahpgrrm8hqs73crmkcg` on commit `bb1605fe4e18fcc2f714c3a1bb8c5cd924ec8a7b`. The audit source is on GitHub `main`; do not claim the audit UI/API is production-live until a Render deployment for the audit commit is observed and production evidence passes.
+The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`). The last confirmed production deployment before this UI clarification remains `dep-dahpgrrm8hqs73crmkcg` on commit `bb1605fe4e18fcc2f714c3a1bb8c5cd924ec8a7b`. Do not claim this clarification is production-live until a Render deployment for the new source and production evidence are observed.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Do not create temporary workflow hacks to mutate production source; use normal repository changes and existing validation workflows.

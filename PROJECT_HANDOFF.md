@@ -73,6 +73,19 @@ The first stored-day run exposed excessive repeated entries: 44 directional trad
 
 V3 thesis-hold lifecycle replaced that fixed-time behavior. The old aggregate/counterfactual JSON remains historical audit evidence and is not the current stored-day P&L.
 
+## Live-market validation — 2026-09-11
+Production runtime was validated against Render application evidence after the live session:
+
+- The production service received `LIVE_PROVIDER` snapshots with **82 option-chain rows** and live NIFTY spot values.
+- Snapshots advanced continuously during the session; the observed durable snapshot counter advanced through the live session.
+- The live decision event gate emitted distinct decision events and suppressed repeated unchanged states, confirming that the gate is active rather than generating duplicate decision events every poll.
+- A paper trade reached `OPEN` during the live session and later returned to `IDLE` after the market session; this confirms the live paper lifecycle was exercised by live-provider data.
+- PostgreSQL learning storage was configured/reachable with `sslmode=require` and durable decision/outcome records increased during the session.
+- Real execution remained `trading=DISABLED` throughout the observed runtime evidence.
+- After the session, live-provider cache remained populated while paper status was `IDLE`, with no overnight paper position carried forward.
+
+This validates that the implementation is connected to the live market feed and that the read-only paper lifecycle is actually executing on live observations. It does **not** constitute a claim of profitable live trading or real-money execution.
+
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
 
@@ -82,7 +95,9 @@ Research lifecycle: `Stored-day snapshots -> canonical decision -> OPEN THESIS -
 - Thesis-hold implementation base: `823351703dd4e9360ce5171271e41f4dd20041b1`, `313f25ba0aa78032fcf6dcb036290d380d818d9e`, same-day safeguard `c234df4f92def0e212a9b94058c265e47dab28ee`.
 - Point-based volatility risk implementation: `fb6a9e72ccfd4918817967c706fa787865bf563c`.
 - Research persistence/legacy refresh fixes: `a7affa0343151c69b6e6dd02ea4ed8ba7385ac61` plus the research API refresh commit immediately before this handoff update.
-- Regression tests remain required before production validation; production P&L must be checked from the endpoint after deployment and must show the current thesis-hold/point-risk metadata.
+- Decision event gate has dedicated regression coverage in `apps/api/tests/test_decision_event_gate.py`.
+- Production live-market validation completed 2026-09-11 using Render runtime evidence: LIVE_PROVIDER snapshots, live option-chain rows, live paper OPEN -> IDLE lifecycle, durable learning counters, and trading disabled.
+- Production P&L must still be checked from the research endpoint after deployment and must show the current thesis-hold/point-risk metadata.
 - Production service remains `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).
 
 ## Non-negotiable rules

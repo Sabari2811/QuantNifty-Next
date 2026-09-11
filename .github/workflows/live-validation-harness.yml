@@ -67,6 +67,7 @@ jobs:
             test "$status_code" = "200"
             python - <<'PY'
           import json
+          import os
           from datetime import datetime, timezone
           from pathlib import Path
           data=json.loads(Path('/tmp/status.json').read_text())
@@ -75,7 +76,8 @@ jobs:
           assert updated, data
           ts=datetime.fromtimestamp(float(updated), tz=timezone.utc)
           age=(datetime.now(timezone.utc)-ts).total_seconds()
-          assert age <= 90, f'stale live snapshot: age={age:.1f}s status={data}'
+          max_age=float(os.environ.get('MAX_SNAPSHOT_AGE_SECONDS','90'))
+          assert age <= max_age, f'stale live snapshot: age={age:.1f}s max={max_age:.1f}s status={data}'
           learning=data.get('learning') or {}
           assert learning.get('configured') is True, learning
           assert learning.get('durability') == 'POSTGRESQL', learning
@@ -90,7 +92,7 @@ jobs:
           print('LEARNING_SNAPSHOTS=', snapshots)
           print('LEARNING_DECISIONS=', decisions)
           print('LIVE_PAPER_STATUS=', data.get('live_paper_status'))
-          Path('/tmp/counts').write_text(f'{snapshots} {decisions}')
+          Path('/tmp/counts').write_text(f'{snapshots} {decisions}\n')
           PY
 
             read -r snapshots decisions < /tmp/counts

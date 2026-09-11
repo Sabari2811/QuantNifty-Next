@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from quantnifty.astra_decision import review_decision
 from quantnifty.decision_validation import validate_decision, validate_snapshot
 from quantnifty.research_brain import adaptive_exit_state, strategy_selector
 from quantnifty.session_policy import session_decision_policy
@@ -82,15 +83,14 @@ def institutional_signal(data: dict[str, Any], previous: dict[str, Any] | None =
     elif ev["vwap_position"] == "BELOW": raw["BEARISH"] += 5
     if ev["pcr_bias"] in {"BULLISH", "BEARISH"}: raw[ev["pcr_bias"]] += 5; evidence.append(f"PCR {ev['pcr_bias']}")
     if ev["iv_bias"] in {"BULLISH", "BEARISH"}: raw[ev["iv_bias"]] += 5
-    if gamma["regime"] == "NEGATIVE" and base in {"BULLISH", "BEARISH"}: raw[base] += 5
+    if gamma["regime"] == "NEGATIVE" and base in {"BULLISH","BEARISH"}: raw[base] += 5
     winner = max((k for k in raw if k != "NEUTRAL"), key=lambda k: raw[k]); edge = raw[winner] - raw["NEUTRAL"]; confidence = min(99, max(0, 50 + edge * .55)); direction = winner if raw[winner] >= 50 and edge >= 15 else "NEUTRAL"
     if ev["probability_confidence"] >= 70 and abs(ev["bullish_probability"] - ev["bearish_probability"]) >= 35: direction = "BULLISH" if ev["bullish_probability"] > ev["bearish_probability"] else "BEARISH"; confidence = max(confidence, ev["probability_confidence"])
     return {"direction": direction, "confidence": round(confidence, 1), "scores": {k: round(v, 1) for k, v in raw.items()}, "evidence": evidence, "gamma": gamma, "oi_flow": oi, "volatility": vol, "dealer": dealer, "historical_evidence": ev}
 
 
 def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, signal: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:
-    runtime_data = dict(data)
-    runtime_data["_learning_runtime"] = mode.upper() == "LIVE"
+    runtime_data = dict(data); runtime_data["_learning_runtime"] = mode.upper() == "LIVE"
     selection = strategy_selector(runtime_data, previous); preferred = str(selection.get("preferred_direction") or "NEUTRAL").upper(); direction = str(signal.get("direction") or "NEUTRAL").upper(); confidence = _f(signal.get("confidence"))
     if preferred in {"BULLISH", "BEARISH"}:
         if direction == "NEUTRAL": direction = preferred; confidence = max(confidence, _f(selection.get("confidence")))
@@ -100,7 +100,7 @@ def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, sign
 
 
 def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
-    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; replay = mode.upper() in {"BACKTEST", "REPLAY"}; input_validation = validate_snapshot(data, mode); gates = {"direction": signal.get("direction") in {"BULLISH","BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK","COMPRESSION"}, "data_integrity": input_validation["valid"]}
+    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; input_validation = validate_snapshot(data, mode); gates = {"direction": signal.get("direction") in {"BULLISH","BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK","COMPRESSION"}, "data_integrity": input_validation["valid"]}
     selected = None
     if strategy == "gamma_blast": gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE"; gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
     elif strategy == "adaptive":
@@ -150,6 +150,13 @@ def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None,
         result["status"] = "NO_TRADE"
         result["risk"] = dict(risk, approved=False, reasons=list(dict.fromkeys([*risk.get("reasons", []), "decision_validation"])))
         result["execution_plan"] = execution_plan(data, result["signal"], result["risk"])
+    astra = review_decision(data, result["signal"], result["risk"], mode)
+    result["astra_review"] = astra
+    if astra.get("status") == "AVAILABLE" and astra.get("decision") != "APPROVE" and result["risk"].get("approved"):
+        result["status"] = "NO_TRADE"
+        result["risk"] = dict(result["risk"], approved=False, reasons=list(dict.fromkeys([*result["risk"].get("reasons", []), "astra_veto"])))
+        result["execution_plan"] = execution_plan(data, result["signal"], result["risk"])
+        result["validation"] = validate_decision(data, result, mode)
     return result
 
 

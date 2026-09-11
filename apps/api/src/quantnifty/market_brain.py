@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
 
+from quantnifty.entry_scenarios import scenario_contract
 from quantnifty.institutional_engine import final_decision
 
 def _num(value: Any) -> float:
@@ -68,5 +69,8 @@ def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None 
     base["institutional_signal"]=stack["signal"]
     base["risk_engine"]=stack["risk"]
     base["execution_plan"]=stack["execution_plan"]
+    adaptive=stack["signal"].get("adaptive") or {}
+    base["entry_scenario"]=scenario_contract(adaptive.get("regime"),adaptive.get("selected_strategy"),stack["signal"].get("direction"))
+    base["entry_scenarios"]={"schema":"entry-scenarios-v1","supported":True,"count":5,"scenarios":["EARLY_ACCUMULATION","DIRECTIONAL","NEGATIVE_GAMMA_EXPANSION","GAMMA_TRANSITION","CAS_REENTRY"],"non_entry_states":["LIQUIDITY_RISK","POSITIVE_GAMMA_RANGE","COMPRESSION","TRANSITION"]}
     base["final_decision"]={"status":stack["status"],"authoritative":stack["authoritative"],"trading":stack["trading"]}
     return base

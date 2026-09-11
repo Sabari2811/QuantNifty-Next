@@ -11,12 +11,12 @@ def _decision(approved=True):
         "strategy": "adaptive",
         "signal": {"direction": "BULLISH", "confidence": 82, "evidence": ["market structure BULLISH", "OI flow BULLISH"], "rationale": ["gamma support"], "adaptive": {"regime": "TREND", "selected_strategy": "directional", "preferred_direction": "BULLISH", "readiness_pct": 82, "reason": "aligned evidence"}},
         "risk": {"approved": approved, "gates": {"direction": True, "confidence": True}, "reasons": [] if approved else ["confidence"]},
-        "execution_plan": {"instrument": {"security_id": "123", "trading_symbol": "NIFTY-23500-CE", "strike": 23500, "side": "CE", "lot_size": 65}, "quantity": 65},
+        "execution_plan": {"instrument": {"security_id": "123", "trading_symbol": "NIFTY-23500-CE", "strike": 23500, "side": "CE", "lot_size": 65}, "quantity": 65, "stop_points": 80, "target_points": 160, "risk_reward": 2.0},
     }
 
 
 def _snapshot(ts="2026-09-10T04:00:00+00:00", spot=23500, bid=110, ask=112):
-    return {"timestamp": ts, "spot": spot, "option_chain": [{"security_id": "123", "trading_symbol": "NIFTY-23500-CE", "strike": 23500, "side": "CE", "bid": bid, "ask": ask, "last_price": 111}]}
+    return {"timestamp": ts, "spot": spot, "option_chain": [{"security_id": "123", "trading_symbol": "NIFTY-23500-CE", "strike": 23500, "side": "CE", "bid": bid, "ask": ask, "last_price": 111, "delta": 0.65}]}
 
 
 def test_trading_day_and_session_close():
@@ -33,6 +33,9 @@ def test_open_close_persists_complete_trade_evidence(monkeypatch):
     manager.process(_snapshot(), _decision())
     assert recorded[0]["day"] == "2026-09-10"
     assert recorded[0]["entry_price"] == 112
+    assert recorded[0]["entry_delta"] == 0.65
+    assert recorded[0]["delta_risk_at_entry"]["premium_stop"] == 60
+    assert recorded[0]["delta_risk_at_entry"]["premium_target"] == 216
     assert recorded[0]["quantity"] == 65
     assert recorded[0]["entry_reasons"]["signal_evidence"]
     close = manager.process(_snapshot(ts="2026-09-10T10:00:00+00:00", spot=23520, bid=125, ask=127), _decision())

@@ -46,6 +46,24 @@ A complete read-only paper-trade audit surface is implemented at `/trade-audit` 
 ## Live entry scenarios
 The live Adaptive entry layer exposes 5 entry-capable pathways: `EARLY_ACCUMULATION`, `DIRECTIONAL`, `NEGATIVE_GAMMA_EXPANSION`, `GAMMA_TRANSITION`, and `CAS_REENTRY`. Liquidity-risk, positive-gamma range, compression and standby states are explicit NO_ENTRY states.
 
+## GPT-6 Astra decision intelligence — 2026-09-12
+GPT-6 Astra is now a first-class **AI Intelligence / Decision Intelligence** layer in the existing QuantNifty brain. The integration is `apps/api/src/quantnifty/astra_intelligence.py` and uses the OpenAI Responses API with model `gpt-6-astra` and structured JSON output. OpenAI documents GPT-6 Astra as available through the Responses API and supports structured outputs. It is configured through environment variables and never stores the response (`store=false`).
+
+The live reasoning path is:
+
+`LIVE_PROVIDER snapshot -> deterministic market intelligence -> GPT-6 Astra reasoning -> institutional/risk decision -> read-only paper lifecycle -> same-day learning`
+
+Astra receives a compact, decision-time-only market context including spot, expiry, bias, confidence, PCR, GEX/DEX, IV/skew, gamma flip, max pain, expected move, support/resistance, dealer flow, liquidity, market state, detected events, move attribution and signal DNA. It returns a structured `WAIT / ENTER / HOLD / EXIT` recommendation, direction, confidence, thesis, invalidation and risk flags.
+
+Safety boundary: Astra is a **precision/advisory filter**, not a broker. It cannot create an entry when the deterministic intelligence gate rejects the market. It is intentionally not invoked for backtest/replay decisions. The existing deterministic risk engine and `trading=DISABLED` execution boundary remain authoritative. Astra validation is advisory so a WAIT/timeout cannot accidentally close an already-open paper position; this boundary is covered by regression tests.
+
+Astra configuration is documented in `.env.example`:
+`OPENAI_API_KEY`, `ASTRA_ENABLED`, `ASTRA_MODEL=gpt-6-astra`, `ASTRA_REASONING_EFFORT`, `ASTRA_MIN_CONFIDENCE`, `ASTRA_TIMEOUT_SECONDS`, and `OPENAI_RESPONSES_URL`.
+
+The production Render service has the non-secret Astra configuration enabled. No API key was committed or inserted into source. If `OPENAI_API_KEY` is absent, the system reports Astra as unavailable and continues with the deterministic brain rather than failing the market loop.
+
+Regression coverage is in `apps/api/tests/test_astra_intelligence.py` and `apps/api/tests/test_astra_validation.py`, covering missing-secret fallback, structured ENTER responses, deterministic-gate protection, replay isolation, and advisory validation behavior.
+
 ## After-market stored-day P&L results
 A read-only API exposes `/api/v1/research/results?day=YYYY-MM-DD`, sourced from `STORED_DAY` research events and durable live-day snapshots. It remains research-only and places zero orders. Legacy fixed-TIME/counterfactual reports are not returned as the current report; when the latest stored research event is from the old engine, the endpoint regenerates the report from the durable stored-day snapshots through the current thesis-hold engine.
 
@@ -112,6 +130,8 @@ Historical option CSV ingestion is research-only. It does not enter the live Ada
 - Decision event gate has dedicated regression coverage in `apps/api/tests/test_decision_event_gate.py`.
 - Production live-market validation completed 2026-09-11 using Render runtime evidence: LIVE_PROVIDER snapshots, live option-chain rows, live paper OPEN -> IDLE lifecycle, durable learning counters, and trading disabled.
 - Historical option CSV adapter committed on `main` with regression tests; empirical historical P&L is **not yet claimed** because a real external dataset has not yet been decoded and replayed through V3 in this session.
+- GPT-6 Astra decision-intelligence layer is implemented on `main`, with regression tests and production deployment `dep-dai833ss728c73bljekg` live. The Render service has the non-secret Astra configuration enabled; `OPENAI_API_KEY` is intentionally not present because no secret was supplied/committed.
+- Astra is advisory for the current milestone: it informs the live decision-intelligence area and can reject a displayed trade candidate inside the AI intelligence view, while deterministic risk remains authoritative for the active paper lifecycle.
 - Production P&L must still be checked from the research endpoint after deployment and must show the current thesis-hold/point-risk metadata.
 - Production service remains `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).
 

@@ -94,26 +94,24 @@ def validate_execution_plan(plan: dict[str, Any], signal: dict[str, Any], risk: 
 
 
 def validate_astra_gate(data: dict[str, Any], result: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:
-    """Validate Astra only as a new-entry precision gate.
+    """Expose Astra's entry recommendation without mutating the authoritative risk lifecycle.
 
-    An unavailable Astra service does not disable QuantNifty; the deterministic
-    engine remains authoritative until Astra is actually available. Historical
-    and replay decisions never use this gate.
+    This is intentionally advisory until the active-paper lifecycle can explicitly
+    distinguish a new-entry evaluation from an existing-position evaluation. It
+    prevents an AI timeout or WAIT recommendation from accidentally closing a
+    valid open paper position.
     """
-    errors: list[str] = []
     if str(mode).upper() != "LIVE":
-        return {"valid": True, "stage": "astra_gate", "errors": [], "applied": False, "available": False}
+        return {"valid": True, "stage": "astra_gate", "errors": [], "applied": False, "available": False, "advisory": True}
     intelligence = data.get("intelligence") if isinstance(data, dict) else {}
     astra = intelligence.get("astra_intelligence") if isinstance(intelligence, dict) else {}
     risk = result.get("risk") if isinstance(result, dict) else {}
     if not isinstance(astra, dict) or not astra.get("available") or not bool(risk.get("approved")):
-        return {"valid": True, "stage": "astra_gate", "errors": [], "applied": False, "available": bool(isinstance(astra, dict) and astra.get("available"))}
-    decision = str(astra.get("decision") or "WAIT").upper()
-    confidence = float(astra.get("confidence") or 0)
-    minimum = float(astra.get("min_confidence") or 70)
-    if decision != "ENTER" or confidence < minimum:
-        errors.append("astra_gate_rejected")
-    return {"valid": not errors, "stage": "astra_gate", "errors": errors, "applied": True, "available": True, "decision": decision, "confidence": confidence, "min_confidence": minimum}
+        return {"valid": True, "stage": "astra_gate", "errors": [], "applied": False, "available": bool(isinstance(astra, dict) and astra.get("available")), "advisory": True}
+    decision = str(astra.get("decision") or "WAIT").upper(); confidence = float(astra.get("confidence") or 0); minimum = float(astra.get("min_confidence") or 70)
+    would_reject = decision != "ENTER" or confidence < minimum
+    return {"valid": True, "stage": "astra_gate", "errors": [], "applied": False, "available": True, "advisory": True,
+            "decision": decision, "confidence": confidence, "min_confidence": minimum, "would_reject_entry": would_reject}
 
 
 def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:

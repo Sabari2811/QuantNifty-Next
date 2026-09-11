@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
 
+from quantnifty.astra_intelligence import evaluate_astra
 from quantnifty.entry_scenarios import scenario_contract
 from quantnifty.institutional_engine import final_decision
 
@@ -65,6 +66,10 @@ def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None 
     state=classify_market_state(data,previous); attribution=move_attribution(data,previous); events=detect_events(data,previous,state); dna=signal_dna(data,state,attribution); pressure=pressure_map(data); confidence=_num(data.get("confidence")); liquidity=_num(data.get("liquidity_score")); bias=str(data.get("bias") or "NEUTRAL")
     gates={"direction":bias in {"BULLISH","BEARISH"},"confidence":confidence>=60,"liquidity":liquidity>=50,"state":state["state"] not in {"LIQUIDITY_RISK","COMPRESSION"}}; trade_ready=all(gates.values())
     base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressure,"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"}}
+    base["astra_intelligence"]=evaluate_astra(data, previous, base, mode) if mode.upper()=="LIVE" else {"provider":"GPT-6 Astra","model":"gpt-6-astra","enabled":False,"available":False,"decision_role":"LIVE_ONLY","decision":"WAIT","direction":"NEUTRAL","confidence":0.0,"thesis":"Astra is intentionally not used for historical/replay decisions.","invalidation":"N/A","reasons":[],"risk_flags":["LIVE_ONLY"]}
+    astra=base["astra_intelligence"]
+    if trade_ready and astra.get("available") and (astra.get("decision") != "ENTER" or float(astra.get("confidence",0)) < float(astra.get("min_confidence",70))):
+        trade_ready=False; base["decision"]["status"]="NO_TRADE"; base["decision"]["trade_ready"]=False; base["decision"]["reasons"].append("astra_gate")
     stack=final_decision({**data,"intelligence":{"market_state":state}},previous,"adaptive",mode)
     base["institutional_signal"]=stack["signal"]
     base["risk_engine"]=stack["risk"]

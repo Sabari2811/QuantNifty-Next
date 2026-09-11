@@ -73,17 +73,30 @@ The audit deliberately uses the already durable `snapshots`, `decisions` and `ou
 - Exit uses BID -> LAST -> ASK when an option mark is available; real orders are never submitted.
 - No overnight paper positions.
 
-## Architecture / ownership
-`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
+## Live entry scenarios
+The application now exposes one explicit scenario contract for the live Adaptive entry layer. There are **5 supported entry-capable pathways**:
 
-Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, and `web/*`.
+1. `EARLY_ACCUMULATION` → `early_accumulation` → `EARLY_ACCUMULATION_CONFIRMATION`
+2. `DIRECTIONAL` → `directional` → directional confirmation, covering breakout/trend up and breakdown/trend down.
+3. `NEGATIVE_GAMMA_EXPANSION` → `gamma_blast` → `GAMMA_BLAST_CONFIRMATION`
+4. `GAMMA_TRANSITION` → `transition` → `GAMMA_TRANSITION_CONFIRMATION`
+5. `CAS_REENTRY` → `cas_reentry` → `CAS_REENTRY_CONFIRMATION`, restricted to the late-session CAS authorization window.
+
+`LIQUIDITY_RISK`, positive-gamma range, compression and generic transition/standby states are explicitly represented as **NO_ENTRY** states rather than being mistaken for entry scenarios. VWAP, EMA, PCR, OI flow, GEX/DEX, IV, confidence and liquidity remain evidence/gates inside these scenarios, not separate entry types.
+
+The scenario contract is implemented in `apps/api/src/quantnifty/entry_scenarios.py` and surfaced by `decision_intelligence()` as `entry_scenario` plus the supported `entry_scenarios` registry. Regression coverage is in `apps/api/tests/test_entry_scenarios.py`.
+
+## Architecture / ownership
+`Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
+
+Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `session_policy.py`, `decision_validation.py`, `replay.py`, `backtest.py`, `recording_loader.py`, `recording_api.py`, `adaptive_learning.py`, `learning_store.py`, `after_market_lab.py`, `after_market_scheduler.py`, `paper_trade_tracker.py`, `live_paper_manager.py`, `scenario_engine.py`, `entry_scenarios.py`, `research_strategy_runner.py`, `adaptive_policy.py`, `policy_runtime.py`, and `web/*`.
 
 ## Validation state
 Delta-driven paper-risk implementation is on `main` as commits `ce37f1cff29259e88e2c7d492221a03920d25876` and `e925776bf64ed2e1afe41c02772dedaace8a183b`. The first CI run exposed one existing unit test fixture that did not provide option delta; the fixture was corrected to reflect the new mandatory delta-driven entry contract.
 
-Latest full CI run `34579477102` on commit `1394f895ea402d6f668b73d4c9c33b1bcd0a2a94` reached compile successfully and ran **115 passed / 1 failed**. The single failure was `test_open_close_persists_complete_trade_evidence` because its synthetic option-chain fixture had no delta, so the new fail-safe correctly refused to open the trade. The test fixture was then updated. A fresh CI result is required before claiming this change fully validated.
+The explicit entry-scenario implementation is on `main` at the scenario-registry, market-brain integration, and regression-test commits immediately preceding this handoff update. Push-triggered live-validation run `34592415236` for the scenario test commit completed successfully. A full CI/production validation for the final handoff head is still required before claiming the complete application change is production-live.
 
-The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`). Do not claim the delta-risk change is production-live until a Render deployment for the final validated source and production evidence are observed.
+The Render production service is `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`). Do not claim the entry-scenario change is production-live until a Render deployment for the final validated source and production evidence are observed.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Do not create temporary workflow hacks to mutate production source; use normal repository changes and existing validation workflows.

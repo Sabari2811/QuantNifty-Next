@@ -30,6 +30,18 @@ The Market Intelligence page uses a compact **Execution Plan · Read Only** card
 
 The alignment change is presentation-only: no decision, risk, execution, paper-trade, learning or data-source logic was changed, and no monitor content was removed.
 
+### Active paper-trade risk consistency fix — 2026-09-11
+A live screenshot exposed that the current Brain plan could be a different contract from the already-open paper position and that the displayed spot SL/target could drift from the original risk distances. The active paper lifecycle is now authoritative for an open trade's entry/risk state.
+
+- At paper entry, the manager freezes the entry spot, entry premium, selected instrument, entry trigger/mode, stop points, target points, R:R and exit policy into the durable OPEN outcome.
+- Spot SL/target are anchored to the **entry spot** and are no longer recomputed from the moving current spot for the active trade. Bearish: `SL=entry_spot+stop_points`, `Target=entry_spot-target_points`; bullish is the inverse.
+- Active telemetry exposes the immutable risk anchor plus entry spot, stop/target points, spot SL/target, entry trigger and exit policy.
+- Live premium movement is explicitly calculated from entry premium to current option mark, so a bearish PE whose premium rises is shown as `UP` and positive P&L rather than being confused with underlying direction.
+- If the provider/instrument payload does not carry NIFTY quantity, one paper trade now defaults to one full NIFTY lot (65 units) instead of silently using one unit.
+- Existing OPEN trades are recovered from their durable entry decision/risk evidence where available; no new entry is fabricated during recovery.
+- Exit price remains unavailable until the paper trade actually closes. At close, the existing BID -> LAST -> ASK exit-mark hierarchy is retained and the durable outcome records exit spot, exit premium and realized P&L basis.
+- Real trading remains disabled/read-only.
+
 ### Market Intelligence live transport + UI recovery — 2026-09-11
 The production Market Intelligence page was observed remaining on `Connecting…` with all intelligence cards at their placeholders, and its navigation drawer toggle did not have a click handler. The UI was hardened without changing Brain/trading logic: the navigation drawer now opens/closes and routes to Raw Data and Backtest; the current screen is marked active; live rendering normalizes expected array fields before rendering, surfaces client render errors instead of silently swallowing them, retries `/api/v1/market` periodically, and keeps the `/ws/market` stream as a live transport. The backend live-market transport was already hardened to prefer the cached snapshot. Real trading remains disabled/read-only.
 
@@ -72,24 +84,13 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - No order-placement controls.
 
 ## Validation — completed for current deployment
-The final source head deployed to Render is commit `866b39c7295d01bd9895dff2237a3d961be61c4d` via deployment `dep-dahing6q1p3s73dnu3e0`, which reached `live` successfully.
+The final source head deployed to Render is commit `05095e41371a0544a04b66e250686e3caea874d5` via deployment `dep-dahoasqd0e5s73887pag`, which reached `live` successfully.
 
-GitHub CI run `34536375379` completed successfully: compile passed and the complete `apps/api/tests` suite passed (**108 passed**). The same source head also passed the production evidence workflow, backtest-gate evidence, live-validation harness, paper-ledger evidence, and liveness wake workflows. The production evidence run included authenticated live-market/historical-replay checks and a browser E2E against production.
+The risk-anchor regression coverage was added in `apps/api/tests/test_live_paper_risk_anchor.py`: one-full-lot default, bearish entry-anchored SL/target, and bullish entry-anchored SL/target. The existing complete suite previously passed **108 tests**; the new tests are included in the current source head and still require the next CI evidence run before being counted as independently verified.
 
-Render runtime evidence after deployment confirms PostgreSQL learning durability, `LIVE_PROVIDER` snapshot integrity, `/api/v1/paper/signal` availability, and `trading=DISABLED`. The service started cleanly and reported the primary production URL. The live WebSocket `/ws/market` was accepted in production evidence; older `/ws` 403 entries belong to stale clients before the current client fix and are not the current frontend transport.
+Render runtime evidence after the new deployment confirms PostgreSQL learning durability, `LIVE_PROVIDER` snapshot integrity, an **OPEN** paper trade, and `trading=DISABLED`. The new instance became live successfully at 2026-09-11 04:38:37Z. Runtime evidence immediately after startup reports database reachable with `sslmode=require`, 2,888 snapshots, 81 outcomes, and live spot 23,275.9. No real broker execution is enabled.
 
-Validation now covers:
-- `/api/v1/market` live/cached transport.
-- `/api/v1/paper/signal` read-only paper telemetry.
-- `/api/v1/status` learning durability and `trading=DISABLED`.
-- Same-day Adaptive learning, IST session boundaries, duplicate lifecycle identity, non-LIVE isolation, and explicit Intelligence mode propagation.
-- Production browser E2E for the Intelligence and Backtest surfaces.
-- Replay/backtest protection from same-day live Adaptive memory.
-- No counterfactual/replay outcome entering live Adaptive memory.
-- Temporary live-transport repair automation removed after the source-level fix.
-- Python bytecode artifacts removed from tracking and ignored through `.gitignore`.
-
-Remaining live-session validation is **operational rather than code-pending**: a real same-day paper trade must close during an actual IST session so the durable outcome and subsequent same-day adaptive update can be observed end-to-end. This is not a reason to enable real trading; broker execution remains disabled.
+Remaining live-session validation is **operational rather than code-pending**: the current same-day paper trade must continue through live monitoring and eventually close during the actual IST session so the durable outcome and subsequent same-day adaptive update can be observed end-to-end. The active risk state is now entry-anchored and read-only.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

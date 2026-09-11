@@ -42,6 +42,9 @@ A live screenshot exposed that the current Brain plan could be a different contr
 - Exit price remains unavailable until the paper trade actually closes. At close, the existing BID -> LAST -> ASK exit-mark hierarchy is retained and the durable outcome records exit spot, exit premium and realized P&L basis.
 - Real trading remains disabled/read-only.
 
+### Live validation harness recovery — 2026-09-11
+The first post-fix live-validation harness run failed immediately because its shell `read` command returned EOF under `set -e` after writing `/tmp/counts` without a trailing newline. The live application checks themselves passed: health 200, live provider 200, valid `LIVE_PROVIDER` snapshot, PostgreSQL durability, fresh snapshot age 12.9 seconds, and `LIVE_PAPER_STATUS=OPEN`. The harness was corrected to write a newline and to use the configured maximum snapshot age. The replacement run is now active and is intended to continue until the configured 16:00 IST session boundary.
+
 ### Market Intelligence live transport + UI recovery — 2026-09-11
 The production Market Intelligence page was observed remaining on `Connecting…` with all intelligence cards at their placeholders, and its navigation drawer toggle did not have a click handler. The UI was hardened without changing Brain/trading logic: the navigation drawer now opens/closes and routes to Raw Data and Backtest; the current screen is marked active; live rendering normalizes expected array fields before rendering, surfaces client render errors instead of silently swallowing them, retries `/api/v1/market` periodically, and keeps the `/ws/market` stream as a live transport. The backend live-market transport was already hardened to prefer the cached snapshot. Real trading remains disabled/read-only.
 
@@ -83,14 +86,14 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - Decision timeline that clearly distinguishes actual trades from non-trade decisions and never presents counterfactual research as trades.
 - No order-placement controls.
 
-## Validation — completed for current deployment
-The final source head deployed to Render is commit `05095e41371a0544a04b66e250686e3caea874d5` via deployment `dep-dahoasqd0e5s73887pag`, which reached `live` successfully.
+## Validation — current deployment
+The active application source deployed to Render is commit `161be5f50270bbef8f4e4ddb5b3205758b4792d2` via deployment `dep-dahoc4p594qs73fsoscg`, which reached `live` successfully at 2026-09-11 04:41:07Z. The subsequent commit `f0a780a7dd289660f7c515861730aca2fba9f23f` changes only the validation workflow; it does not redeploy the application.
 
-The risk-anchor regression coverage was added in `apps/api/tests/test_live_paper_risk_anchor.py`: one-full-lot default, bearish entry-anchored SL/target, and bullish entry-anchored SL/target. The existing complete suite previously passed **108 tests**; the new tests are included in the current source head and still require the next CI evidence run before being counted as independently verified.
+CI evidence for source head `161be5f50270bbef8f4e4ddb5b3205758b4792d2` is successful across the main CI, production evidence, paper-ledger evidence, backtest-gate evidence and liveness wake workflows. The live-validation harness failure on that head was isolated to the harness shell EOF/read bug described above, not an application validation failure. The corrected harness on `f0a780a7dd289660f7c515861730aca2fba9f23f` is currently running.
 
-Render runtime evidence after the new deployment confirms PostgreSQL learning durability, `LIVE_PROVIDER` snapshot integrity, an **OPEN** paper trade, and `trading=DISABLED`. The new instance became live successfully at 2026-09-11 04:38:37Z. Runtime evidence immediately after startup reports database reachable with `sslmode=require`, 2,888 snapshots, 81 outcomes, and live spot 23,275.9. No real broker execution is enabled.
+Render runtime evidence after the current application deployment confirms PostgreSQL learning durability, `LIVE_PROVIDER` snapshot integrity, an **OPEN** paper trade, repeated `/api/v1/paper/signal` HTTP 200 responses, accepted `/ws/market`, and `trading=DISABLED`. Immediately after the restart, runtime evidence reported database reachable with `sslmode=require`, 2,898 snapshots, 82 outcomes, live provider spot 23,282.65, and `paper_trade_status=OPEN`.
 
-Remaining live-session validation is **operational rather than code-pending**: the current same-day paper trade must continue through live monitoring and eventually close during the actual IST session so the durable outcome and subsequent same-day adaptive update can be observed end-to-end. The active risk state is now entry-anchored and read-only.
+The risk-anchor regression coverage is in `apps/api/tests/test_live_paper_risk_anchor.py` and covers one-full-lot default plus bearish/bullish entry-anchored SL/target calculations. The next complete live-session gate remains operational: the current same-day paper trade must continue through live monitoring and eventually close during the actual IST session so its durable CLOSED outcome and subsequent same-day Adaptive update can be observed end-to-end.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

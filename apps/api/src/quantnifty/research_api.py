@@ -25,22 +25,43 @@ def _latest(day: str) -> dict[str, Any] | None:
     return rows[-1]
 
 
+def _is_current_hold_result(research: dict[str, Any] | None) -> bool:
+    if not isinstance(research, dict):
+        return False
+    strategies = research.get("strategies") or {}
+    if not strategies:
+        return False
+    # Older stored-day records used fixed TIME exits and counterfactual scenario
+    # reports. They are preserved for audit, but must not be returned as the
+    # current P&L report now that the thesis-hold engine is authoritative.
+    for value in strategies.values():
+        if not isinstance(value, dict) or value.get("status") != "TESTED":
+            continue
+        if value.get("position_lifecycle") == "THESIS_HOLD_UNTIL_INVALIDATION":
+            return True
+        if value.get("risk_model") == "SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT":
+            return True
+    return False
+
+
 def _pnl_row(name: str, value: dict[str, Any]) -> dict[str, Any]:
     metrics = value.get("metrics") or value.get("overall") or {}
     trades = value.get("trades") or []
     net = metrics.get("net_pnl")
     if net is None:
-        net = sum(float(t.get("pnl") or t.get("realized_pnl") or 0.0) for t in trades if isinstance(t, dict))
+        net = sum(float(t.get("pnl") or t.get("realized_pnl") or t.get("net_pnl") or 0.0) for t in trades if isinstance(t, dict))
     wins = metrics.get("wins")
     losses = metrics.get("losses")
     if wins is None:
-        wins = sum(1 for t in trades if isinstance(t, dict) and float(t.get("pnl") or t.get("realized_pnl") or 0.0) > 0)
+        wins = sum(1 for t in trades if isinstance(t, dict) and float(t.get("pnl") or t.get("realized_pnl") or t.get("net_pnl") or 0.0) > 0)
     if losses is None:
-        losses = sum(1 for t in trades if isinstance(t, dict) and float(t.get("pnl") or t.get("realized_pnl") or 0.0) < 0)
+        losses = sum(1 for t in trades if isinstance(t, dict) and float(t.get("pnl") or t.get("realized_pnl") or t.get("net_pnl") or 0.0) < 0)
     count = metrics.get("trades")
     if count is None:
         count = len(trades)
-    win_rate = metrics.get("win_rate")
+    win_rate = metrics.get("win_rate_pct")
+    if win_rate is None:
+        win_rate = metrics.get("win_rate")
     if win_rate is None:
         win_rate = (wins / count * 100.0) if count else 0.0
     return {
@@ -68,7 +89,7 @@ def research_results(day: str | None = None, run_if_missing: bool = True):
 
     research = _latest(target)
     generated = False
-    if research is None and run_if_missing:
+    if (research is None or not _is_current_hold_result(research)) and run_if_missing:
         research = run_after_market_lab(target)
         generated = True
     if research is None:

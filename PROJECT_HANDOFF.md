@@ -1,6 +1,6 @@
 # QuantNifty-Next — Persistent Project Handoff
 
-**Updated:** 2026-09-11  
+**Updated:** 2026-09-12  
 **Branch:** `main`  
 **Repository:** https://github.com/Sabari2811/QuantNifty-Next  
 **Production:** https://quantnifty-api.onrender.com  
@@ -40,7 +40,6 @@ A complete read-only paper-trade audit surface is implemented at `/trade-audit` 
 - **Option SL/target are delta-driven:** the selected option's live Greek delta converts the NIFTY-point risk budget into option-premium distances using `abs(delta) × NIFTY points`.
 - New entries require a valid option delta; unavailable delta blocks a new entry.
 - Premium SL/target are anchored to entry premium but recalculated every live snapshot from current option delta.
-- Delta-driven exits, session-close and overnight protections remain in force.
 - Existing OPEN trades without historical delta evidence are not rewritten or fabricated.
 - Real orders are never submitted and no overnight paper positions are allowed.
 
@@ -68,6 +67,19 @@ The research lifecycle now matches the requested position behavior:
 
 This is research-only and does not change live paper risk or submit orders.
 
+## Historical NIFTY options integration — 2026-09-12
+A new narrow adapter `apps/api/src/quantnifty/external_options_loader.py` now accepts generic 1-minute historical option CSVs and converts them into the **existing canonical historical snapshot contract**. No second backtesting engine was created.
+
+Required source fields: timestamp, strike, option type (CE/PE or equivalent), close/LTP, volume, open interest, NIFTY spot and expiry. Optional bid/ask and OHLC are retained when present. Missing Greeks are not invented.
+
+The integration path is:
+
+`External CSV -> external_options_loader -> historical.canonicalize_snapshots -> research_strategy_runner -> position_hold_backtest (V3 thesis-hold) -> research P&L`
+
+The adapter has focused regression coverage in `apps/api/tests/test_external_options_loader.py` for common column aliases, CE/PE row grouping, optional bid/ask preservation, and invalid-data rejection. Integration notes are documented in `docs/HISTORICAL_OPTIONS_INTEGRATION.md`.
+
+This means publicly available 1-minute NIFTY option datasets that contain contract-level premium, OI, volume, strike, expiry and CE/PE can now be evaluated against the existing V3 engine without replacing it. External historical data remains `RECORDED_HISTORICAL` research/replay only and cannot seed live Adaptive learning. Dataset licensing/usage rights, timestamp completeness, contract identity, OI semantics and quote quality still require validation before any empirical result is accepted.
+
 ## After-market research tuning — 2026-09-11
 The first stored-day run exposed excessive repeated entries: 44 directional trades and 41 adaptive/early-accumulation trades were generated, with most exits classified as `TIME`. That result was counterfactual/read-only, not actual paper trading.
 
@@ -89,7 +101,9 @@ This validates that the implementation is connected to the live market feed and 
 ## Architecture / ownership
 `Snapshot -> Analytics -> Institutional Signal -> Adaptive Selection -> Entry Scenario Contract -> Risk -> FinalDecision -> ExecutionPlan -> Delta-Driven Paper Risk -> Paper Outcome -> Same-Day Adaptive Memory -> Learning Store -> After-Market Research Policy`
 
-Research lifecycle: `Stored-day snapshots -> canonical decision -> OPEN THESIS -> HOLD/MONITOR -> volatility point stop/target or invalidation/session exit -> research P&L -> policy candidate`.
+Research lifecycle: `Stored-day snapshots OR validated RECORDED_HISTORICAL option CSV -> canonical snapshots -> canonical FinalDecision -> OPEN THESIS -> HOLD/MONITOR -> volatility point stop/target or invalidation/session exit -> research P&L -> policy candidate`.
+
+Historical option CSV ingestion is research-only. It does not enter the live Adaptive memory path.
 
 ## Validation state
 - Thesis-hold implementation base: `823351703dd4e9360ce5171271e41f4dd20041b1`, `313f25ba0aa78032fcf6dcb036290d380d818d9e`, same-day safeguard `c234df4f92def0e212a9b94058c265e47dab28ee`.
@@ -97,6 +111,7 @@ Research lifecycle: `Stored-day snapshots -> canonical decision -> OPEN THESIS -
 - Research persistence/legacy refresh fixes: `a7affa0343151c69b6e6dd02ea4ed8ba7385ac61` plus the research API refresh commit immediately before this handoff update.
 - Decision event gate has dedicated regression coverage in `apps/api/tests/test_decision_event_gate.py`.
 - Production live-market validation completed 2026-09-11 using Render runtime evidence: LIVE_PROVIDER snapshots, live option-chain rows, live paper OPEN -> IDLE lifecycle, durable learning counters, and trading disabled.
+- Historical option CSV adapter committed on `main` with regression tests; empirical historical P&L is **not yet claimed** because a real external dataset has not yet been decoded and replayed through V3 in this session.
 - Production P&L must still be checked from the research endpoint after deployment and must show the current thesis-hold/point-risk metadata.
 - Production service remains `quantnifty-api` (`srv-dad5e767bikc739oighg`) in workspace `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).
 

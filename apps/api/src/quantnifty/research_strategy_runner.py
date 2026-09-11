@@ -81,7 +81,11 @@ def run_research_strategy(
     requested = str(strategy or "").strip().lower()
     if requested not in RESEARCH_STRATEGIES:
         raise ValueError(f"unsupported research strategy: {requested}")
-    cfg = config or TUNED_CONFIG
+    # The scheduler currently supplies the legacy default BacktestConfig.
+    # Treat that exact default as "no research override" and use the tuned
+    # research profile. Explicit non-default configs remain respected.
+    legacy_default = BacktestConfig()
+    cfg = TUNED_CONFIG if config is None or config == legacy_default else config
     source_count = len(snapshots)
     research_snapshots = _scenario_filter(snapshots, requested)
     if requested in {"directional", "gamma_blast", "adaptive"}:

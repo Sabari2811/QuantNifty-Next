@@ -42,8 +42,19 @@ A live screenshot exposed that the current Brain plan could be a different contr
 - Exit price remains unavailable until the paper trade actually closes. At close, the existing BID -> LAST -> ASK exit-mark hierarchy is retained and the durable outcome records exit spot, exit premium and realized P&L basis.
 - Real trading remains disabled/read-only.
 
+### UI telemetry integrity hardening — 2026-09-11
+A production screenshot then exposed a presentation-level contradiction in the active paper monitor: the premium moved from `₹189.35` to `₹162.35` while the UI displayed `UP 14.26%`. The Intelligence UI has now been hardened so the browser derives premium movement directly from `entry_price` and `current_price` instead of trusting a potentially stale movement label.
+
+- `normalizeTradeTelemetry()` derives `UP`, `DOWN`, or `FLAT` and the signed percentage from entry premium to current premium.
+- The movement arrow, movement label, percentage and trade badge all use that normalized value, so negative premium movement cannot be shown as `UP`.
+- The active position is explicitly titled **Active Paper Trade · Live P&L** while the left panel is explicitly **Current Brain Plan · Read Only**, making current intent versus existing paper position unambiguous.
+- Quantity/lots presentation now prefers durable quantity/lots data and can derive lots when a lot size is available; existing open trade quantities are not rewritten retroactively.
+- Quick risk view explicitly shows **entry spot**, SL, target and the immutable `ENTRY_SPOT_IMMUTABLE` anchor when available.
+- The monitor footer explicitly explains that the active trade is historical entry state, the current Brain plan may differ, premium movement is entry-to-current, and risk is entry-spot anchored.
+- CI now validates these UI integrity markers and rejects the stale movement rendering path. The source-level UI fix is committed on `main` as `30699dfb03b9bbdb7773cfd3e006f904280b938f`.
+
 ### Live validation harness recovery — 2026-09-11
-The first post-fix live-validation harness run failed immediately because its shell `read` command returned EOF under `set -e` after writing `/tmp/counts` without a trailing newline. The live application checks themselves passed: health 200, live provider 200, valid `LIVE_PROVIDER` snapshot, PostgreSQL durability, fresh snapshot age 12.9 seconds, and `LIVE_PAPER_STATUS=OPEN`. The harness was corrected to write a newline and to use the configured maximum snapshot age. The replacement run is now active and is intended to continue until the configured 16:00 IST session boundary.
+The first post-fix live-validation harness run failed immediately because its shell `read` command returned EOF under `set -e` after writing `/tmp/counts` without a trailing newline. The live application checks themselves passed: health 200, live provider 200, valid `LIVE_PROVIDER` snapshot, PostgreSQL durability, fresh snapshot age 12.9 seconds, and `LIVE_PAPER_STATUS=OPEN`. The harness was corrected to write a newline and to use the configured maximum snapshot age. The replacement run is active and is intended to continue until the configured 16:00 IST session boundary.
 
 ### Market Intelligence live transport + UI recovery — 2026-09-11
 The production Market Intelligence page was observed remaining on `Connecting…` with all intelligence cards at their placeholders, and its navigation drawer toggle did not have a click handler. The UI was hardened without changing Brain/trading logic: the navigation drawer now opens/closes and routes to Raw Data and Backtest; the current screen is marked active; live rendering normalizes expected array fields before rendering, surfaces client render errors instead of silently swallowing them, retries `/api/v1/market` periodically, and keeps the `/ws/market` stream as a live transport. The backend live-market transport was already hardened to prefer the cached snapshot. Real trading remains disabled/read-only.
@@ -80,20 +91,21 @@ Core ownership: `main.py`, `institutional_engine.py`, `research_brain.py`, `sess
 - Trade table with trade ID, entry/exit time, direction, strategy/sub-strategy, option symbol/strike/side, quantity, entry/exit price, exit reason, result and P&L.
 - Open positions with live mark, mark source/timestamp, unrealized P&L/%.
 - **Live Trading Signal · Paper Monitor:** active trade number, direction, strategy, strike/option side, quantity/lots, entry/current mark, invested amount, movement, premium P&L, P&L%, spot SL/target, MFE/MAE and mark timestamp.
-- **Decision-first layout:** Execution Plan is compact on the left of the priority row and Live P&L Monitor is directly on its right; Institutional Signal Engine and Risk & Final Decision form a second side-by-side row, with Institutional Signal Engine on the left and Risk & Final Decision on the right.
+- **Decision-first layout:** Current Brain Plan is compact on the left of the priority row and Active Paper Trade · Live P&L is directly on its right; Institutional Signal Engine and Risk & Final Decision form a second side-by-side row, with Institutional Signal Engine on the left and Risk & Final Decision on the right.
 - **Color-coded option side:** PE is red, CE is green/teal wherever an option side is shown in the execution/P&L views.
+- **Telemetry integrity:** premium movement must be derived from entry premium to current premium; risk levels must expose their entry-spot anchor; existing paper quantity must remain immutable after entry.
 - Expandable trade detail with scenario, Brain rationale/evidence, confidence, Adaptive regime/readiness/reason, risk gates/approval, MFE/MAE, exit context/reason and P&L basis.
 - Decision timeline that clearly distinguishes actual trades from non-trade decisions and never presents counterfactual research as trades.
 - No order-placement controls.
 
-## Validation — current deployment
-The active application source deployed to Render is commit `161be5f50270bbef8f4e4ddb5b3205758b4792d2` via deployment `dep-dahoc4p594qs73fsoscg`, which reached `live` successfully at 2026-09-11 04:41:07Z. The subsequent commit `f0a780a7dd289660f7c515861730aca2fba9f23f` changes only the validation workflow; it does not redeploy the application.
+## Validation — current source and deployment state
+The last successful application deployment is commit `161be5f50270bbef8f4e4ddb5b3205758b4792d2` via deployment `dep-dahoc4p594qs73fsoscg`, which reached `live` at 2026-09-11 04:41:07Z. The active UI integrity fix is now on `main` as commit `30699dfb03b9bbdb7773cfd3e006f904280b938f`; Render has not yet produced a newer deployment for that source commit.
 
-CI evidence for source head `161be5f50270bbef8f4e4ddb5b3205758b4792d2` is successful across the main CI, production evidence, paper-ledger evidence, backtest-gate evidence and liveness wake workflows. The live-validation harness failure on that head was isolated to the harness shell EOF/read bug described above, not an application validation failure. The corrected harness on `f0a780a7dd289660f7c515861730aca2fba9f23f` is currently running.
+The main CI source on `main` was updated to validate the UI integrity non-mutating. The first validation attempt on commit `11b72a6e9d7c24acb0ffb23954fcfe3bdf3a38ed` executed the full suite successfully (**111 passed**) and the UI integrity validation passed, but its optional auto-commit step lost a race with the UI patch commit and failed only on a non-fast-forward push. That mutating CI step has been removed. A new non-mutating CI run is active on commit `134120aea8ccd4a8144f013ce561411805852283`.
 
-Render runtime evidence after the current application deployment confirms PostgreSQL learning durability, `LIVE_PROVIDER` snapshot integrity, an **OPEN** paper trade, repeated `/api/v1/paper/signal` HTTP 200 responses, accepted `/ws/market`, and `trading=DISABLED`. Immediately after the restart, runtime evidence reported database reachable with `sslmode=require`, 2,898 snapshots, 82 outcomes, live provider spot 23,282.65, and `paper_trade_status=OPEN`.
+Production runtime evidence before the UI-only change confirms PostgreSQL learning durability, `LIVE_PROVIDER` snapshot integrity, an **OPEN** paper trade, repeated `/api/v1/paper/signal` HTTP 200 responses, accepted `/ws/market`, and `trading=DISABLED`. The current operational live-session gate remains the same-day paper trade closing during the actual IST session and producing a durable CLOSED outcome followed by same-day Adaptive update evidence.
 
-The risk-anchor regression coverage is in `apps/api/tests/test_live_paper_risk_anchor.py` and covers one-full-lot default plus bearish/bullish entry-anchored SL/target calculations. The next complete live-session gate remains operational: the current same-day paper trade must continue through live monitoring and eventually close during the actual IST session so its durable CLOSED outcome and subsequent same-day Adaptive update can be observed end-to-end.
+The risk-anchor regression coverage is in `apps/api/tests/test_live_paper_risk_anchor.py` and covers one-full-lot default plus bearish/bullish entry-anchored SL/target calculations.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts.

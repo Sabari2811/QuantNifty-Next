@@ -36,7 +36,7 @@ def test_v3_thesis_hold_lifecycle_produces_real_option_pnl(monkeypatch):
     assert result["orders_placed"] == 0
     assert result["trading_enabled"] is False
     assert result["position_lifecycle_metrics"]["positions_opened"] == 1
-    assert result["trades"][0]["reason"] == "POINT_TARGET"
+    assert result["trades"][0]["exit_reason"] == "POINT_TARGET"
     assert result["trades"][0]["entry_price"] == 105
     assert result["trades"][0]["exit_price"] == 180
     assert result["trades"][0]["net_pnl"] == 75 * 65

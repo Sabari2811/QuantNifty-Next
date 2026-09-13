@@ -61,6 +61,9 @@ jobs:
           assert health['status']=='ok'
           assert health['provider']=='INDstocks'
           assert health['provider_configured'] is True
+          market_session=health.get('market_session') or {}
+          live_session_open=bool(market_session.get('open'))
+          print('MARKET_SESSION=',market_session)
 
           status=get_json('/api/v1/status', timeout=45, attempts=8)
           learning=status.get('learning') or {}
@@ -70,13 +73,20 @@ jobs:
           print('POSTGRES_LEARNING_EVIDENCE=PASS')
           print('learning=',learning)
 
-          market=get_json('/api/v1/market', timeout=45, attempts=8)
-          assert market['data_integrity']=='LIVE_PROVIDER', market
-          assert float(market['spot'])>0
-          assert len(market['option_chain'])>=2
-          assert market['rows']==len(market['option_chain'])
-          print('LIVE_MARKET_EVIDENCE=PASS')
-          print('spot=',market['spot'],'rows=',market['rows'],'expiry=',market.get('expiry'))
+          if live_session_open:
+              market=get_json('/api/v1/market', timeout=45, attempts=8)
+              assert market['data_integrity']=='LIVE_PROVIDER', market
+              assert float(market['spot'])>0
+              assert len(market['option_chain'])>=2
+              assert market['rows']==len(market['option_chain'])
+              print('LIVE_MARKET_EVIDENCE=PASS')
+              print('spot=',market['spot'],'rows=',market['rows'],'expiry=',market.get('expiry'))
+          else:
+              closed=get_json('/api/v1/market', timeout=30, attempts=3)
+              assert closed['data_integrity']=='MARKET_CLOSED', closed
+              assert closed['live_provider_connected'] is False, closed
+              print('LIVE_MARKET_EVIDENCE=SKIPPED_NON_MARKET_SESSION')
+              print('closed=',closed)
 
           end=int(datetime.now(timezone.utc).timestamp()*1000)
           start=int((datetime.now(timezone.utc)-timedelta(days=3)).timestamp()*1000)
@@ -126,8 +136,11 @@ jobs:
       - name: Browser E2E against production
         run: |
           python - <<'PY'
+          import requests
           from playwright.sync_api import sync_playwright
           base='https://quantnifty-api.onrender.com/'
+          health=requests.get(base+'health',timeout=30).json()
+          live_session_open=bool((health.get('market_session') or {}).get('open'))
           with sync_playwright() as p:
               browser=p.chromium.launch(headless=True)
               page=browser.new_page()
@@ -152,29 +165,34 @@ jobs:
               print('INTELLIGENCE_BACKTEST_NAV_E2E=PASS')
 
               page.goto(base, wait_until='networkidle', timeout=60000)
-              page.wait_for_function("document.body.innerText.includes('LIVE_PROVIDER')", timeout=60000)
-              text=page.locator('body').inner_text()
-              for label in ['QuantNifty Next','Market Snapshot','Key Market Levels','Market Level Map','Gamma Walls','Expected Move Range','Market Structure','Dealer Flow','Directional Score','Positioning & Volatility','Reference Levels & Feed','Market Intelligence Data','Live Option Chain','Data Integrity','Security ID','Theta','Vega','CE Gamma Contribution','PE Gamma Contribution','CE IV %','PE IV %','CE OI Δ','PE OI Δ']:
-                  assert label in text, f'missing UI label: {label}'
-              assert 'Market Intelligence Charts' not in text
-              assert 'OI Distribution' not in text
-              assert 'Gamma Profile' not in text
-              assert 'IV Smile' not in text
-              assert 'Dealer Positioning' not in text
-              assert 'LIVE_PROVIDER' in text
-              assert 'No mock values are rendered' in text
-              assert page.locator('#intelligenceBody tr').count() >= 2
-              assert page.locator('#intelligenceBody td').count() >= 18
-              assert page.locator('#chainBody tr').count() >= 2
-              page.locator('#callsBtn').click()
-              page.wait_for_timeout(500)
-              assert page.locator('#chainBody tr').count() >= 1
-              page.locator('#putsBtn').click()
-              page.wait_for_timeout(500)
-              assert page.locator('#chainBody tr').count() >= 1
-              page.locator('#allBtn').click()
-              page.wait_for_timeout(500)
-              assert page.locator('#chainBody tr').count() >= 2
-              print('BROWSER_E2E_EVIDENCE=PASS')
+              if live_session_open:
+                  page.wait_for_function("document.body.innerText.includes('LIVE_PROVIDER')", timeout=60000)
+                  text=page.locator('body').inner_text()
+                  for label in ['QuantNifty Next','Market Snapshot','Key Market Levels','Market Level Map','Gamma Walls','Expected Move Range','Market Structure','Dealer Flow','Directional Score','Positioning & Volatility','Reference Levels & Feed','Market Intelligence Data','Live Option Chain','Data Integrity','Security ID','Theta','Vega','CE Gamma Contribution','PE Gamma Contribution','CE IV %','PE IV %','CE OI Δ','PE OI Δ']:
+                      assert label in text, f'missing UI label: {label}'
+                  assert 'Market Intelligence Charts' not in text
+                  assert 'OI Distribution' not in text
+                  assert 'Gamma Profile' not in text
+                  assert 'IV Smile' not in text
+                  assert 'Dealer Positioning' not in text
+                  assert 'LIVE_PROVIDER' in text
+                  assert 'No mock values are rendered' in text
+                  assert page.locator('#intelligenceBody tr').count() >= 2
+                  assert page.locator('#intelligenceBody td').count() >= 18
+                  assert page.locator('#chainBody tr').count() >= 2
+                  page.locator('#callsBtn').click()
+                  page.wait_for_timeout(500)
+                  assert page.locator('#chainBody tr').count() >= 1
+                  page.locator('#putsBtn').click()
+                  page.wait_for_timeout(500)
+                  assert page.locator('#chainBody tr').count() >= 1
+                  page.locator('#allBtn').click()
+                  page.wait_for_timeout(500)
+                  assert page.locator('#chainBody tr').count() >= 2
+                  print('BROWSER_E2E_EVIDENCE=PASS')
+              else:
+                  text=page.locator('body').inner_text()
+                  assert 'Market session closed' in text or 'MARKET_CLOSED' in text or 'Live market session is closed' in text
+                  print('BROWSER_E2E_CLOSED_SESSION=PASS')
               browser.close()
           PY

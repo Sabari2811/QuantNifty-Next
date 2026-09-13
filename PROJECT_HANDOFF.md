@@ -59,6 +59,8 @@ On 2026-09-11 Render evidence established LIVE_PROVIDER option-chain snapshots, 
 
 The production evidence workflow checks the stored-day V3 research endpoint and asserts `source=STORED_DAY`, `research_only=true`, `orders_placed=0`, `mode=READ_ONLY_AFTER_MARKET`, `position_lifecycle=THESIS_HOLD_UNTIL_INVALIDATION`, `risk_model=SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT`, and `tuning_profile=INTRADAY_OPTION_RESEARCH_V3_THESIS_HOLD` for tested strategies. It separately requires `/api/v1/market` to remain `LIVE_PROVIDER` and `/api/v1/replay` to remain `READ_ONLY_REPLAY`, preserving live/replay isolation.
 
+The live validation harness now treats NSE weekends as an intentional no-market condition and does not falsely fail on expected provider unavailability outside market days. Weekday live-provider validation remains strict and retries transient provider failures instead of treating one 503 as a code regression.
+
 A real third-party historical option archive has not yet been accepted as empirical backtest evidence. Public candidates identified for qualification include the Zenodo NIFTY one-minute 2017-2020 option archive and newer Hugging Face NIFTY/BANKNIFTY/SENSEX 1-minute option archives; these remain candidates until decoded and quality/licensing checks pass.
 
 ## Validation state
@@ -67,6 +69,7 @@ A real third-party historical option archive has not yet been accepted as empiri
 - Historical options adapter and regression tests are on `main`.
 - Research robustness layer: `2e6de6537d68c026e271bba4fd904574065113b2`, `220840211a365e0237a45201ad6dd494317a3b5b`, `fc21d8d14398aa798f6fe4e489c84fccfe894f79`, `6f34a0b88582ef59c041fdefd9bb6fbf4f82c50f`.
 - CI-follow-up fixes: `bcd94132499db139068f06142ba68d75a618b50e`, `009f4a710b25b02989b6b2c62913b086d7844ad8`.
+- Validation harness hardening: `ff61a70f7d20fa00a356cc41d9dc474bd617e98c`.
 - The temporary GPT-6 Astra experiment has been removed from the production decision path, source tree, tests and environment template. Deterministic QuantNifty intelligence is now the sole decision layer.
 - The latest fixes have been pushed to `main`; their CI/production-evidence runs must complete before validation is declared green.
 - Full empirical historical V3 P&L remains pending a qualified external option dataset with exact expiry identity.

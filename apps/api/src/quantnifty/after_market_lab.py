@@ -7,14 +7,19 @@ from quantnifty.policy_runtime import validate_and_persist
 from quantnifty.research_strategy_runner import RESEARCH_STRATEGIES, run_research_strategy
 from quantnifty.scenario_engine import extract_scenarios
 
-# Backward-compatible name retained for existing tests/UI integrations.
 STRATEGIES = ("directional", "gamma_blast", "adaptive")
 
 
 def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict[str, object]:
+    """Run an independent counterfactual test on today's raw market dataset.
+
+    This function intentionally loads only raw snapshots. It does not load,
+    inspect, score, or rewrite live decisions, paper trades, or live outcomes.
+    The resulting P&L is a separate post-market learning track.
+    """
     snapshots = load_snapshots(day)
     if not snapshots:
-        return {"status": "NO_DATA", "day": day, "strategies": {}, "orders_placed": 0}
+        return {"status": "NO_DATA", "day": day, "strategies": {}, "orders_placed": 0, "track": "POST_MARKET", "input_dataset": "RAW_MARKET_SNAPSHOTS"}
     cfg = config or BacktestConfig()
     results: dict[str, object] = {}
     for strategy in RESEARCH_STRATEGIES:
@@ -33,19 +38,37 @@ def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict
                 "entry_rule": result.get("entry_rule"),
                 "exit_rule": result.get("exit_rule"),
                 "research_only": True,
+                "counterfactual": True,
             }
         except (TypeError, ValueError, RuntimeError) as exc:
-            results[strategy] = {"status": "ERROR", "error": str(exc), "research_only": True}
+            results[strategy] = {"status": "ERROR", "error": str(exc), "research_only": True, "counterfactual": True}
     tested_metrics = {name: value.get("metrics") or {} for name, value in results.items() if value.get("status") == "TESTED"}
     ranked = sorted(((float((metric.get("net_pnl") or 0.0)), name) for name, metric in tested_metrics.items()), reverse=True)
-    research = {"type": "after_market", "training_type": "DAILY_AFTER_MARKET", "training_source": "STORED_DAY", "status": "COMPLETED", "day": day, "observations": len(snapshots), "strategies": results, "strategy_coverage": {"tested": list(RESEARCH_STRATEGIES), "pending": []}, "ranking_by_net_pnl": [{"strategy": name, "net_pnl": round(pnl, 2)} for pnl, name in ranked], "orders_placed": 0, "mode": "READ_ONLY_AFTER_MARKET", "counterfactual": False}
+    research = {
+        "type": "after_market",
+        "training_type": "DAILY_AFTER_MARKET",
+        "training_source": "STORED_DAY",
+        "track": "POST_MARKET",
+        "input_dataset": "RAW_MARKET_SNAPSHOTS",
+        "status": "COMPLETED",
+        "day": day,
+        "observations": len(snapshots),
+        "strategies": results,
+        "strategy_coverage": {"tested": list(RESEARCH_STRATEGIES), "pending": []},
+        "ranking_by_net_pnl": [{"strategy": name, "net_pnl": round(pnl, 2)} for pnl, name in ranked],
+        "orders_placed": 0,
+        "mode": "READ_ONLY_AFTER_MARKET",
+        "research_only": True,
+        "counterfactual": True,
+        "live_trade_data_accessed": False,
+        "live_decision_data_accessed": False,
+        "live_outcome_data_accessed": False,
+    }
     research["scenarios"] = extract_scenarios(research)
     anchor_metrics = results.get(ANCHOR_STRATEGY, {}).get("metrics") or {}
     candidate_metrics = {name: value.get("metrics") or {} for name, value in results.items() if name != ANCHOR_STRATEGY and value.get("status") == "TESTED"}
     policy_event = validate_and_persist(day, "DAY_AGGREGATE", anchor_metrics, candidate_metrics)
     research["policy"] = policy_event.get("research") if isinstance(policy_event, dict) else policy_event
-    # Persist only after policy/scenario enrichment so the durable daily
-    # training event is a complete record of the post-market run.
     record_research(research)
     return research
 

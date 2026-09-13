@@ -35,12 +35,30 @@ The research lifecycle is:
 
 This is a research/replay capability only and is not a historical-learning path for the live Adaptive Brain. Stored-day research can validate the mechanics of the lifecycle using supplied/replayed snapshots, but those results never seed live Adaptive memory or policy.
 
+## Dual learning architecture
+There are now two deliberately independent daily test/learning tracks.
+
+**Track A — LIVE_MARKET:** records what the deterministic Brain actually decided during the live IST session and what its read-only paper lifecycle actually produced. Live outcomes remain the authoritative record of actual paper behavior.
+
+**Track B — POST_MARKET:** after the session, `after_market_lab.py` runs every configured research strategy against the day's raw market snapshots only. Raw inputs include the captured NIFTY/option market observations available in snapshots (prices/OHLC, OI, volume, Greeks/IV and related analytics where present). It generates counterfactual entries/exits and P&L for each strategy. It does not load, inspect, score or rewrite live decisions, paper trades or live outcomes.
+
+The post-market track is therefore a genuine independent experiment: **"What would every strategy have produced if applied to today's raw market movement?"** It is not a replay of the live paper ledger.
+
+`dual_learning.py` provides a deterministic, read-only comparison layer. It accepts already-produced LIVE_MARKET outcomes and POST_MARKET research as separate inputs, reports profitable/negative status for each strategy in each track, ranks strategies for future adaptation, and does not itself load data or mutate execution settings.
+
+Daily lifecycle:
+
+`LIVE SESSION -> LIVE_MARKET learning`  
+`MARKET CLOSE -> POST_MARKET raw-data strategy test -> POST_MARKET learning`  
+`BOTH COMPLETED -> deterministic dual-track comparison -> next-day adaptive preference`  
+`NEXT DAY LIVE SESSION -> repeat`
+
+Prior days remain retained. Learning is append-only and chronological; future outcomes never alter an earlier decision. A strategy is not considered reliable from one day alone. Any future policy/profile change must remain deterministic, auditable, risk-gated and paper-only.
+
 ## Incremental live learning model
-The authoritative learning model is **live, incremental, append-only learning from day one onward**. Each live IST session produces snapshots, decisions, paper-trade lifecycle events and CLOSED outcomes. The learning store retains prior observations and accumulates new observations across days; past learning records are not deleted as part of normal operation.
+The authoritative learning model is live, incremental, append-only learning from day one onward. Each live IST session produces snapshots, decisions, paper-trade lifecycle events and CLOSED outcomes. The learning store retains prior observations and accumulates new observations across days; past learning records are not deleted as part of normal operation.
 
-The engine should continuously compare the current session against its retained live experience, evaluate strategy/scenario performance, regime behavior, entry/exit quality, risk outcomes and decision confidence, and use those observations to improve future paper decisions. Learning is chronological and must never use information that was unavailable at the decision timestamp. The intended horizon is naturally rolling forward from day 1 to day 300 and beyond, without resetting the learned history.
-
-The system must distinguish **observation retention** from **policy mutation**: storing every day's evidence does not permit future outcomes to influence an earlier decision, and a strategy must not be declared "perfect" from a single day. Strategy-quality assessment should become more reliable as the retained live sample grows. Any future policy/profile changes must remain deterministic, auditable, risk-gated and paper-only.
+The engine should continuously compare the current session against its retained live experience, evaluate strategy/scenario performance, regime behavior, entry/exit quality, risk outcomes and decision confidence, and use those observations to improve future paper decisions. The intended horizon is naturally rolling forward from day 1 to day 300 and beyond, without resetting the learned history.
 
 Historical archives are not required for this learning model. No external historical dataset is a project dependency or acceptance criterion.
 
@@ -52,12 +70,12 @@ Historical archives are not required for this learning model. No external histor
 ## Validation boundary
 Offline validation proves deterministic code behavior, data-contract handling, safety invariants and research mechanics. It does not prove future live-market behavior.
 
-The offline-completable gate covers compilation and the full unit suite; canonical CSV loading and exact-expiry enforcement; CE/PE/OI/volume/premium normalization; deterministic market-state, event, pressure and confidence gates; V3 entry/fill lifecycle; stored-option premium P&L mechanics; bid/ask-aware fills; spot-point stop/2R target; thesis/session/expiry exits; one-position lifecycle and re-entry suppression; paper/read-only invariants; research diagnostics; chronological splitting; robustness gates; deterministic parameter-grid/ranking behavior; cost-sensitivity plumbing; decision-latency instrumentation; and UI telemetry integrity.
+The offline-completable gate covers compilation and the full unit suite; canonical CSV loading and exact-expiry enforcement; CE/PE/OI/volume/premium normalization; deterministic market-state, event, pressure and confidence gates; V3 entry/fill lifecycle; stored-option premium P&L mechanics; bid/ask-aware fills; spot-point stop/2R target; thesis/session/expiry exits; one-position lifecycle and re-entry suppression; paper/read-only invariants; research diagnostics; chronological splitting; robustness gates; deterministic parameter-grid/ranking behavior; cost-sensitivity plumbing; decision-latency instrumentation; UI telemetry integrity; and independent dual-learning track isolation.
 
 The live-only gate covers provider connectivity and current option-chain freshness; real expiry discovery; real-time timestamp monotonicity; live snapshot cadence and network latency; PostgreSQL durability in the deployed environment; append-only same-day Adaptive memory using only CLOSED live-paper outcomes; live paper OPEN/HOLD/EXIT behavior against changing quotes; real bid/ask/liquidity and delta availability; Render deployment parity; weekday live-validation harness success; and complete live sessions including after-market learning. These tests remain paper/read-only.
 
 ## Historical options adapter
-`apps/api/src/quantnifty/external_options_loader.py` remains available only as a generic research/replay adapter for supplied datasets. It is **not** an empirical validation dependency and must never seed live Adaptive memory. No historical archive is required for project completion under the incremental live-learning architecture.
+`apps/api/src/quantnifty/external_options_loader.py` remains available only as a generic research/replay adapter for supplied datasets. It is not an empirical validation dependency and must never seed live Adaptive memory. No historical archive is required for project completion under the incremental live-learning architecture.
 
 ## Decision-quality hardening
 The deterministic market brain treats both upstream input confidence and institutional-model confidence as required confidence gates. A weak provider confidence cannot be hidden by a later aggregate score. This remains a no-trade safety filter and does not enable execution.
@@ -73,17 +91,18 @@ The production evidence workflow checks the stored-day V3 research endpoint and 
 The live validation harness treats NSE weekends as an intentional no-market condition and does not falsely fail on expected provider unavailability outside market days. Weekday live-provider validation remains strict and retries transient provider failures instead of treating one 503 as a code regression.
 
 ## Validation state
-- Incremental live-learning architecture is authoritative: retained live observations accumulate from day 1 forward; no historical bootstrap or deletion of prior learning data.
-- Historical statistical validation is **removed as a project requirement**. No external historical option dataset is required for acceptance.
-- Historical options adapter remains research/replay-only and cannot enter live Adaptive memory.
+- Dual learning isolation implemented on `main`: `after_market_lab.py` is explicitly raw-snapshot-only and records `live_*_data_accessed=false`; it remains counterfactual/read-only.
+- New `dual_learning.py` comparison layer: `8cc0fb08da6f741700718859515bcc927966b3da`.
+- Post-market isolation and metadata: `023e1a31671ecc109127dfa67eb3adda445dd82a`.
+- Dual-track regression tests: `96d3cf7162f126287d04e6f31bfa73b561de7622` plus strengthened after-market isolation assertions in `ff271151cc20d07d98e02b1f75dda9b58e253424`.
+- Historical statistical validation remains removed as a project requirement.
 - Thesis-hold implementation and point-based volatility risk are on `main`.
 - Research robustness and optimizer modules remain secondary offline tooling and do not seed live learning.
 - Validation harness hardening: `ff61a70f7d20fa00a356cc41d9dc474bd617e98c`.
 - Latency instrumentation: `d7349e16f2d564cb49bf78cf0afcce7622eae7c1`, `6af1c459efcf37f2423e4e81fa234320e88772d2`, `b6e30ed7163081713fdd762e36998cced4e248a3`.
 - Offline validation gate: `5802e4dd6c148544e722bc8ca2d2478d366b4dc4`, with V3 bid/ask assertion correction `c56c63591a192fa5b61601124b03f2d4a2f7f2f8`.
 - Deterministic QuantNifty intelligence is the sole decision layer; Astra is removed.
-- Current `main` before this handoff update: `c56c63591a192fa5b61601124b03f2d4a2f7f2f8`.
-- Production evidence may still require valid INDstocks authentication during a weekday live session; this is a live-provider credential requirement, not a historical-data requirement.
+- Real trading remains permanently disabled.
 
 ## Non-negotiable rules
-Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Retain live learning history; do not silently reset or delete prior learning data. Use normal repository changes and existing validation workflows only.
+Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Retain live learning history; do not silently reset or delete prior learning data. Post-market research must remain independent of live paper decisions/outcomes. Use normal repository changes and existing validation workflows only.

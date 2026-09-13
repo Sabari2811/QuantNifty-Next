@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import time
 from statistics import mean
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from quantnifty.backtest import (
-    BacktestConfig, Trade, _canonical_backtest_input, _cost, _expiry_datetime,
+    BacktestConfig, Trade, _canonical_backtest_input, _cost, _expiry_datetime as _raw_expiry_datetime,
     _find_leg, _f, _is_market_session, _metrics, _mid_or_last, _regime, _timestamp,
 )
 from quantnifty.historical import historical_data_status
@@ -14,6 +15,13 @@ from quantnifty.institutional_engine import final_decision
 from quantnifty.research_brain import adaptive_exit_state, update_adaptive_memory
 
 IST = ZoneInfo("Asia/Kolkata")
+
+
+def _expiry_for_hold(value: Any):
+    dt = _raw_expiry_datetime(value)
+    if dt is not None and dt.timetz().replace(tzinfo=None) == time(0, 0):
+        return dt.replace(hour=15, minute=30, second=0, microsecond=0)
+    return dt
 
 
 def _thesis_direction(decision: dict[str, Any]) -> str:
@@ -49,24 +57,11 @@ def _point_risk(ordered: list[dict[str, Any]], entry_index: int, entry_spot: flo
     atr = _spot_atr_points(ordered, entry_index)
     row = ordered[entry_index]
     iv = _f(row.get("atm_iv"))
-    # Use the stored spot-volatility proxy as the base risk unit. ATM IV widens
-    # the stop modestly in a high-volatility regime; minimum/maximum point
-    # bounds prevent microscopic stops on dense snapshots or runaway risk.
     iv_multiplier = 1.20 if iv >= 20.0 else 1.0 if iv >= 12.0 else 0.90
     raw_stop = atr * 4.0 * iv_multiplier
     stop_points = min(150.0, max(50.0, raw_stop))
     target_points = stop_points * 2.0
-    return {
-        "method": "SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT",
-        "atr_proxy_points": round(atr, 2),
-        "atm_iv": round(iv, 2) if iv else None,
-        "iv_multiplier": iv_multiplier,
-        "stop_points": round(stop_points, 2),
-        "target_points": round(target_points, 2),
-        "risk_reward": 2.0,
-        "stop_spot": round(entry_spot - stop_points, 2),
-        "target_spot": round(entry_spot + target_points, 2),
-    }
+    return {"method": "SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT", "atr_proxy_points": round(atr, 2), "atm_iv": round(iv, 2) if iv else None, "iv_multiplier": iv_multiplier, "stop_points": round(stop_points, 2), "target_points": round(target_points, 2), "risk_reward": 2.0, "stop_spot": round(entry_spot - stop_points, 2), "target_spot": round(entry_spot + target_points, 2)}
 
 
 def run_position_hold_backtest(snapshots: list[dict[str, Any]], strategy: str = "adaptive", config: BacktestConfig | None = None) -> dict[str, Any]:
@@ -112,12 +107,7 @@ def run_position_hold_backtest(snapshots: list[dict[str, Any]], strategy: str = 
         if mode == "adaptive" and current_day != active_day:
             flush_day(active_day)
             active_day = current_day
-            day_open_memory = {
-                "by_regime": {k: dict(v) for k, v in (adaptive_memory.get("by_regime") or {}).items()},
-                "global": {k: dict(v) for k, v in (adaptive_memory.get("global") or {}).items()},
-                "recent_days": list(adaptive_memory.get("recent_days") or []),
-                "last_direction": adaptive_memory.get("last_direction"),
-            }
+            day_open_memory = {"by_regime": {k: dict(v) for k, v in (adaptive_memory.get("by_regime") or {}).items()}, "global": {k: dict(v) for k, v in (adaptive_memory.get("global") or {}).items()}, "recent_days": list(adaptive_memory.get("recent_days") or []), "last_direction": adaptive_memory.get("last_direction")}
 
         decision_input = dict(ordered[i])
         if mode == "adaptive":
@@ -150,7 +140,7 @@ def run_position_hold_backtest(snapshots: list[dict[str, Any]], strategy: str = 
 
         entry_dt = _timestamp(entry_snap)
         entry_day = entry_dt.astimezone(IST).date() if entry_dt else None
-        expiry = _expiry_datetime(entry_snap.get("expiry"))
+        expiry = _expiry_for_hold(entry_snap.get("expiry"))
         selected = _selected_strategy(decision)
         risk_points = _point_risk(ordered, i + 1, entry_spot)
         stop_spot = entry_spot - risk_points["stop_points"] if direction == "BULLISH" else entry_spot + risk_points["stop_points"]
@@ -220,16 +210,4 @@ def run_position_hold_backtest(snapshots: list[dict[str, Any]], strategy: str = 
     if mode == "adaptive":
         flush_day(active_day)
     metrics = _metrics(trades, cfg.initial_capital, len(ordered))
-    return {
-        "status":"OK","mode":"READ_ONLY_BACKTEST","strategy":mode,"lookahead_free":True,
-        "position_lifecycle":"THESIS_HOLD_UNTIL_INVALIDATION",
-        "entry_rule":"decision at t, fill at t+1 available quote; one position at a time",
-        "exit_rule":"volatility-derived NIFTY point stop/target, adaptive exits, thesis/risk invalidation, same-day session close or expiry",
-        "risk_model":"SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT",
-        "risk_model_detail":"stop=max(50, min(150, spot_ATR_proxy_20*4*IV_multiplier)); target=2R; IV multiplier 0.90 below 12, 1.00 from 12-<20, 1.20 at >=20",
-        "cost_model":asdict(cfg),"historical_data":data_status,
-        "session_filter":{"market_hours_only":True,"observations":len(ordered)},
-        "approved_signals":approved,"blocked_signals":blocked,
-        "position_lifecycle_metrics":{"hold_bars":hold_bars,"positions_opened":len(trades),"reentry_suppressed_while_open":True},
-        "metrics":metrics,"trades":trade_details,"orders_placed":0,"trading_enabled":False,
-    }
+    return {"status":"OK","mode":"READ_ONLY_BACKTEST","strategy":mode,"lookahead_free":True,"position_lifecycle":"THESIS_HOLD_UNTIL_INVALIDATION","entry_rule":"decision at t, fill at t+1 available quote; one position at a time","exit_rule":"volatility-derived NIFTY point stop/target, adaptive exits, thesis/risk invalidation, same-day session close or expiry","risk_model":"SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT","risk_model_detail":"stop=max(50, min(150, spot_ATR_proxy_20*4*IV_multiplier)); target=2R; IV multiplier 0.90 below 12, 1.00 from 12-<20, 1.20 at >=20","cost_model":asdict(cfg),"historical_data":data_status,"session_filter":{"market_hours_only":True,"observations":len(ordered)},"approved_signals":approved,"blocked_signals":blocked,"position_lifecycle_metrics":{"hold_bars":hold_bars,"positions_opened":len(trades),"reentry_suppressed_while_open":True},"metrics":metrics,"trades":trade_details,"orders_placed":0,"trading_enabled":False}

@@ -28,10 +28,7 @@ def test_after_market_persists_complete_training_record(monkeypatch):
         lambda snapshots, strategy, cfg: {"metrics": {"net_pnl": 10}, "trades": [], "split": {}, "canonical_engine_strategy": "adaptive"},
     )
     monkeypatch.setattr("quantnifty.after_market_lab.extract_scenarios", lambda research: {"schema_version": "adaptive-scenario-v1", "counts": {}})
-    monkeypatch.setattr(
-        "quantnifty.after_market_lab.validate_and_persist",
-        lambda *args: {"research": {"policy_id": "policy-test", "future_safe": True}},
-    )
+    monkeypatch.setattr("quantnifty.after_market_lab.validate_and_persist", lambda *args: {"research": {"policy_id": "policy-test", "future_safe": True}})
     monkeypatch.setattr("quantnifty.after_market_lab.record_research", lambda research: saved.append(research))
 
     result = run_after_market_lab("2026-09-07")
@@ -39,6 +36,12 @@ def test_after_market_persists_complete_training_record(monkeypatch):
     assert result["status"] == "COMPLETED"
     assert result["training_type"] == "DAILY_AFTER_MARKET"
     assert result["training_source"] == "STORED_DAY"
+    assert result["track"] == "POST_MARKET"
+    assert result["input_dataset"] == "RAW_MARKET_SNAPSHOTS"
+    assert result["live_trade_data_accessed"] is False
+    assert result["live_decision_data_accessed"] is False
+    assert result["live_outcome_data_accessed"] is False
+    assert result["counterfactual"] is True
     assert set(result["strategies"]) == set(RESEARCH_STRATEGIES)
     assert result["policy"]["policy_id"] == "policy-test"
     assert result["scenarios"]["schema_version"] == "adaptive-scenario-v1"

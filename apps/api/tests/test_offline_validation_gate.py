@@ -22,43 +22,16 @@ def test_external_options_fixture_is_canonical_and_expiry_safe():
 
 def test_v3_thesis_hold_lifecycle_produces_real_option_pnl(monkeypatch):
     def approved_decision(snapshot, previous=None, strategy="directional", mode="BACKTEST"):
-        return {
-            "status": "TRADE",
-            "authoritative": True,
-            "trading": False,
-            "signal": {"direction": "BULLISH", "confidence": 85, "adaptive": {"selected_strategy": "directional"}},
-            "risk": {"approved": True},
-            "execution_plan": {"instrument": {"security_id": "HIST:CE", "strike": 24500, "side": "CE"}},
-        }
+        return {"status": "TRADE", "authoritative": True, "trading": False, "signal": {"direction": "BULLISH", "confidence": 85, "adaptive": {"selected_strategy": "directional"}}, "risk": {"approved": True}, "execution_plan": {"instrument": {"security_id": "HIST:CE", "strike": 24500, "side": "CE"}}}
 
     monkeypatch.setattr("quantnifty.position_hold_backtest.final_decision", approved_decision)
     monkeypatch.setattr("quantnifty.position_hold_backtest._thesis_still_valid", lambda *args, **kwargs: True)
 
     def snapshot(ts, spot, premium):
-        return {
-            "timestamp": ts,
-            "spot": spot,
-            "expiry": "2026-08-04",
-            "atm_iv": 14,
-            "data_integrity": "RECORDED_HISTORICAL",
-            "option_chain": [
-                {"security_id": "HIST:CE", "strike": 24500, "side": "CE", "last_price": premium, "bid": premium - 0.5, "ask": premium + 0.5, "oi": 5000, "volume": 1000},
-                {"security_id": "HIST:PE", "strike": 24500, "side": "PE", "last_price": 100, "bid": 99.5, "ask": 100.5, "oi": 5000, "volume": 1000},
-            ],
-        }
+        return {"timestamp": ts, "spot": spot, "expiry": "2026-08-04", "atm_iv": 14, "data_integrity": "RECORDED_HISTORICAL", "option_chain": [{"security_id": "HIST:CE", "strike": 24500, "side": "CE", "last_price": premium, "bid": premium - 0.5, "ask": premium + 0.5, "oi": 5000, "volume": 1000}, {"security_id": "HIST:PE", "strike": 24500, "side": "PE", "last_price": 100, "bid": 99.5, "ask": 100.5, "oi": 5000, "volume": 1000}]}
 
-    snapshots = [
-        snapshot("2026-08-04T09:15:00+05:30", 25000, 100),
-        snapshot("2026-08-04T09:16:00+05:30", 25020, 105),
-        snapshot("2026-08-04T09:17:00+05:30", 25040, 120),
-        snapshot("2026-08-04T09:18:00+05:30", 25180, 180),
-    ]
-    result = run_position_hold_backtest(
-        snapshots,
-        "directional",
-        BacktestConfig(initial_capital=100000, lot_size=65, slippage_bps=0, fixed_cost=0),
-    )
-
+    snapshots = [snapshot("2026-08-04T09:15:00+05:30", 25000, 100), snapshot("2026-08-04T09:16:00+05:30", 25020, 105), snapshot("2026-08-04T09:17:00+05:30", 25040, 120), snapshot("2026-08-04T09:18:00+05:30", 25180, 180)]
+    result = run_position_hold_backtest(snapshots, "directional", BacktestConfig(initial_capital=100000, lot_size=65, slippage_bps=0, fixed_cost=0))
     assert result["status"] == "OK"
     assert result["orders_placed"] == 0
     assert result["trading_enabled"] is False
@@ -70,19 +43,13 @@ def test_v3_thesis_hold_lifecycle_produces_real_option_pnl(monkeypatch):
 
 
 def test_research_robustness_and_cost_sensitivity_are_deterministic():
-    trades = [
-        {"net_pnl": 100, "regime": "TREND_UP", "direction": "BULLISH", "timestamp": "2026-08-04T09:30:00+05:30", "exit_reason": "POINT_TARGET"},
-        {"net_pnl": -50, "regime": "TREND_UP", "direction": "BULLISH", "timestamp": "2026-08-04T10:00:00+05:30", "exit_reason": "POINT_STOP"},
-        {"net_pnl": 120, "regime": "TREND_DOWN", "direction": "BEARISH", "timestamp": "2026-08-04T11:00:00+05:30", "exit_reason": "POINT_TARGET"},
-    ]
+    trades = [{"net_pnl": 100, "regime": "TREND_UP", "direction": "BULLISH", "timestamp": "2026-08-04T09:30:00+05:30", "exit_reason": "POINT_TARGET"}, {"net_pnl": -50, "regime": "TREND_UP", "direction": "BULLISH", "timestamp": "2026-08-04T10:00:00+05:30", "exit_reason": "POINT_STOP"}, {"net_pnl": 120, "regime": "TREND_DOWN", "direction": "BEARISH", "timestamp": "2026-08-04T11:00:00+05:30", "exit_reason": "POINT_TARGET"}]
     diagnostics = trade_diagnostics(trades, [])
     assert diagnostics["overall"]["trades"] == 3
     assert diagnostics["by_direction"]["BULLISH"]["trades"] == 2
-
-    metrics = {"trades": 40, "profit_factor": 1.30, "max_drawdown_pct": 10, "expectancy": 25}
-    gate = robustness_gate(metrics)
+    gate = robustness_gate({"trades": 40, "profit_factor": 1.30, "max_drawdown_pct": 10, "expectancy": 25})
     assert gate["passed"] is True
-    sensitivity = cost_sensitivity(metrics, [{"net_pnl": 100, "profit_factor": 1.3}, {"net_pnl": 0, "profit_factor": 0.9}])
+    sensitivity = cost_sensitivity({}, [{"net_pnl": 100, "profit_factor": 1.3}, {"net_pnl": 0, "profit_factor": 0.9}])
     assert len(sensitivity) == 2
     assert sensitivity[0]["survives_base_profitability"] is True
     assert sensitivity[1]["survives_base_profitability"] is False
@@ -91,14 +58,9 @@ def test_research_robustness_and_cost_sensitivity_are_deterministic():
 def test_walk_forward_and_optimizer_are_chronological_and_oos_first():
     splits = walk_forward_splits(10, train_fraction=0.6, validation_fraction=0.2, min_train=3)
     assert splits == [{"train": (0, 6), "validation": (6, 8), "out_of_sample": (8, 10)}]
-
     grid = parameter_grid({"stop": [50, 75], "target": [100, 150]})
     assert len(grid) == 4
-    results = [
-        {"id": "weak", "oos": {"trades": 40, "profit_factor": 1.10, "expectancy": 10, "max_drawdown_pct": 5}},
-        {"id": "strong", "oos": {"trades": 40, "profit_factor": 1.30, "expectancy": 20, "max_drawdown_pct": 8}},
-    ]
-    ranked = rank_candidates(results)
-    assert ranked[0]["id"] == "strong"
-    optimized = optimize_candidates([{"id": "a"}, {"id": "b"}], lambda candidate: {"candidate": candidate, "score": 2 if candidate["id"] == "b" else 1})
-    assert optimized[0]["candidate"]["id"] == "b"
+    results = [{"id": "weak", "oos": {"trades": 40, "profit_factor": 1.10, "expectancy": 10, "max_drawdown_pct": 5}}, {"id": "strong", "oos": {"trades": 40, "profit_factor": 1.30, "expectancy": 20, "max_drawdown_pct": 8}}]
+    assert rank_candidates(results)[0]["id"] == "strong"
+    optimized = optimize_candidates([{"id": "a"}, {"id": "b"}], lambda candidate: {"candidate": candidate, "oos": {"trades": 40, "profit_factor": 1.30 if candidate["id"] == "b" else 1.10, "expectancy": 20 if candidate["id"] == "b" else 10, "max_drawdown_pct": 8}})
+    assert optimized[0]["parameters"]["id"] == "b"

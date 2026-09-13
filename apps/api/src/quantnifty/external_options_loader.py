@@ -38,12 +38,9 @@ def _timestamp(row: dict[str, Any], columns: dict[str, str]) -> str:
     else:
         text = str(raw).strip()
         formats = (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M",
-            "%d-%m-%Y %H:%M:%S",
-            "%d-%m-%Y %H:%M",
-            "%d/%m/%Y %H:%M:%S",
-            "%d/%m/%Y %H:%M",
+            "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+            "%d-%m-%Y %H:%M:%S", "%d-%m-%Y %H:%M",
+            "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M",
         )
         dt = None
         for fmt in formats:
@@ -79,11 +76,8 @@ def _columns(headers: list[str]) -> dict[str, str]:
     } | {
         key: value
         for key, aliases in {
-            "open": ("open",),
-            "high": ("high",),
-            "low": ("low",),
-            "bid": ("bid", "best_bid"),
-            "ask": ("ask", "best_ask"),
+            "open": ("open",), "high": ("high",), "low": ("low",),
+            "bid": ("bid", "best_bid"), "ask": ("ask", "best_ask"),
             "expiry": ("expiry", "expiry_date", "expiration"),
             "symbol": ("symbol", "trading_symbol", "instrument"),
             "spot": ("spot", "spot_price", "underlying", "underlying_price"),
@@ -94,13 +88,9 @@ def _columns(headers: list[str]) -> dict[str, str]:
 
 def _side(value: Any) -> str:
     text = str(value or "").strip().upper()
-    if text in {"CE", "C", "CALL", "CALLS"}:
+    if text in {"CE", "C", "CALL", "CALLS"} or text.endswith("CE"):
         return "CE"
-    if text in {"PE", "P", "PUT", "PUTS"}:
-        return "PE"
-    if text.endswith("CE"):
-        return "CE"
-    if text.endswith("PE"):
+    if text in {"PE", "P", "PUT", "PUTS"} or text.endswith("PE"):
         return "PE"
     raise ValueError(f"unsupported option side: {value!r}")
 
@@ -115,13 +105,7 @@ def _security_id(row: dict[str, Any], columns: dict[str, str], side: str, strike
 
 
 def load_option_csv(path: str | Path, provenance: str = "RECORDED_HISTORICAL") -> list[dict[str, Any]]:
-    """Load generic 1-minute NIFTY option CSV into the canonical snapshot contract.
-
-    The adapter is intentionally permissive about provider column names but strict
-    about the fields V3 needs for option P&L: timestamp, strike, CE/PE, close/LTP,
-    volume and open interest. Bid/ask, expiry and spot are retained when supplied.
-    Missing Greeks are left absent rather than fabricated.
-    """
+    """Load generic 1-minute NIFTY option CSV into the canonical snapshot contract."""
     file_path = Path(path)
     if not file_path.is_file():
         raise ValueError(f"historical options CSV does not exist: {file_path}")
@@ -139,10 +123,11 @@ def load_option_csv(path: str | Path, provenance: str = "RECORDED_HISTORICAL") -
             if strike <= 0:
                 raise ValueError(f"invalid strike for {timestamp}: {row.get(columns['strike'])!r}")
             expiry = str(row.get(columns.get("expiry", ""), "") or "").strip()
+            if not expiry:
+                raise ValueError(f"snapshot {timestamp} is missing option expiry")
             spot = _number(row.get(columns.get("spot", ""))) if columns.get("spot") else 0.0
-            if not spot:
-                symbol_text = str(row.get(columns.get("symbol", ""), "")) if columns.get("symbol") else ""
-                spot = _number(row.get("underlying_price")) if "underlying_price" in row else 0.0
+            if not spot and "underlying_price" in row:
+                spot = _number(row.get("underlying_price"))
             leg = {
                 "strike": strike,
                 "side": side,
@@ -158,12 +143,12 @@ def load_option_csv(path: str | Path, provenance: str = "RECORDED_HISTORICAL") -
                         leg[field] = value
             if columns.get("symbol"):
                 leg["trading_symbol"] = str(row.get(columns["symbol"]) or "").strip()
-            key = timestamp
-            snapshot = grouped.setdefault(key, {"timestamp": timestamp, "spot": spot, "option_chain": [], "data_integrity": provenance})
+            snapshot = grouped.setdefault(timestamp, {
+                "timestamp": timestamp, "spot": spot, "expiry": expiry,
+                "option_chain": [], "data_integrity": provenance,
+            })
             if spot > 0:
                 snapshot["spot"] = spot
-            if expiry:
-                snapshot["expiry"] = expiry
             snapshot["option_chain"].append(leg)
 
     snapshots = list(grouped.values())
@@ -172,6 +157,4 @@ def load_option_csv(path: str | Path, provenance: str = "RECORDED_HISTORICAL") -
     for snapshot in snapshots:
         if _number(snapshot.get("spot")) <= 0:
             raise ValueError(f"snapshot {snapshot['timestamp']} is missing a positive NIFTY spot")
-        if not snapshot.get("expiry"):
-            raise ValueError(f"snapshot {snapshot['timestamp']} is missing option expiry")
     return canonicalize_snapshots(snapshots, provenance)

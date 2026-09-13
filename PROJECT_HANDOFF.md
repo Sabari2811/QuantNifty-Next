@@ -86,7 +86,7 @@ The deterministic market brain treats both upstream input confidence and institu
 ## Production validation evidence
 On 2026-09-11 Render evidence established LIVE_PROVIDER option-chain snapshots, advancing durable snapshots, distinct decision-event gating, a live paper OPEN -> IDLE lifecycle, PostgreSQL learning durability and `trading=DISABLED`. This proved the live read-only loop is operating, not that it is profitable.
 
-The production evidence workflow checks the stored-day V3 research endpoint and asserts `source=STORED_DAY`, `research_only=true`, `orders_placed=0`, `mode=READ_ONLY_AFTER_MARKET`, `position_lifecycle=THESIS_HOLD_UNTIL_INVALIDATION`, `risk_model=SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT`, and `tuning_profile=INTRADAY_OPTION_RESEARCH_V3_THESIS_HOLD` for tested strategies. It separately requires `/api/v1/market` to remain `LIVE_PROVIDER` and `/api/v1/replay` to remain `READ_ONLY_REPLAY`, preserving live/replay isolation.
+The production evidence workflow checks the stored-day V3 research endpoint and asserts `source=STORED_DAY`, `research_only=true`, `orders_placed=0`, `mode=READ_ONLY_AFTER_MARKET`, `position_lifecycle=THESIS_HOLD_UNTIL_INVALIDATION`, `risk_model=SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT`, and `tuning_profile=INTRADAY_OPTION_RESEARCH_V3_THESIS_HOLD` for tested strategies. It separately requires `/api/v1/market` to remain `LIVE_PROVIDER` during an active market session and `/api/v1/replay` to remain `READ_ONLY_REPLAY`, preserving live/replay isolation.
 
 The live validation harness treats NSE weekends as an intentional no-market condition and does not falsely fail on expected provider unavailability outside market days. Weekday live-provider validation remains strict and retries transient provider failures instead of treating one 503 as a code regression.
 
@@ -96,6 +96,8 @@ The live validation harness treats NSE weekends as an intentional no-market cond
 The dashboard previously connected to `/ws` while the backend only exposed `/ws/market`, which caused the screenshot's **"Live stream disconnected · retrying…"** state. The backend now exposes both `/ws` and `/ws/market` to preserve compatibility. Outside market hours the WebSocket sends a `MARKET_CLOSED` heartbeat and does not poll the live provider.
 
 ## Validation state
+- Latest main: `1f85908cd42d60888da64d68b0a31299fb359264` (`Make production evidence weekend-safe for closed live market`).
+- Weekend-safe production evidence: `1f85908cd42d60888da64d68b0a31299fb359264`.
 - Live-provider session guard: `dc3cb1f27e27aaa62eeccfc3a048cf9db4325ee9`.
 - Live refresh/WebSocket/session-boundary implementation: `87f3755ff00368078ea4f67dbedae285111df590`.
 - NSE session boundary regression tests: `992757c575d8525819fd7e1dfd39e862a4d677ae`.

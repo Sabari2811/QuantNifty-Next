@@ -71,9 +71,9 @@ def test_v3_thesis_hold_lifecycle_produces_real_option_pnl(monkeypatch):
 
 def test_research_robustness_and_cost_sensitivity_are_deterministic():
     trades = [
-        {"net_pnl": 100, "regime": "TREND_UP", "direction": "BULLISH", "entry_timestamp": "2026-08-04T09:30:00+05:30", "exit_reason": "POINT_TARGET"},
-        {"net_pnl": -50, "regime": "TREND_UP", "direction": "BULLISH", "entry_timestamp": "2026-08-04T10:00:00+05:30", "exit_reason": "POINT_STOP"},
-        {"net_pnl": 120, "regime": "TREND_DOWN", "direction": "BEARISH", "entry_timestamp": "2026-08-04T11:00:00+05:30", "exit_reason": "POINT_TARGET"},
+        {"net_pnl": 100, "regime": "TREND_UP", "direction": "BULLISH", "timestamp": "2026-08-04T09:30:00+05:30", "exit_reason": "POINT_TARGET"},
+        {"net_pnl": -50, "regime": "TREND_UP", "direction": "BULLISH", "timestamp": "2026-08-04T10:00:00+05:30", "exit_reason": "POINT_STOP"},
+        {"net_pnl": 120, "regime": "TREND_DOWN", "direction": "BEARISH", "timestamp": "2026-08-04T11:00:00+05:30", "exit_reason": "POINT_TARGET"},
     ]
     diagnostics = trade_diagnostics(trades, [])
     assert diagnostics["overall"]["trades"] == 3
@@ -82,17 +82,15 @@ def test_research_robustness_and_cost_sensitivity_are_deterministic():
     metrics = {"trades": 40, "profit_factor": 1.30, "max_drawdown_pct": 10, "expectancy": 25}
     gate = robustness_gate(metrics)
     assert gate["passed"] is True
-    sensitivity = cost_sensitivity(metrics, [0, 5, 10])
-    assert len(sensitivity) == 3
-    assert sensitivity[0]["profit_factor"] >= sensitivity[-1]["profit_factor"]
+    sensitivity = cost_sensitivity(metrics, [{"net_pnl": 100, "profit_factor": 1.3}, {"net_pnl": 0, "profit_factor": 0.9}])
+    assert len(sensitivity) == 2
+    assert sensitivity[0]["survives_base_profitability"] is True
+    assert sensitivity[1]["survives_base_profitability"] is False
 
 
 def test_walk_forward_and_optimizer_are_chronological_and_oos_first():
-    observations = [{"timestamp": f"2026-08-04T09:{15 + i:02d}:00+05:30", "value": i} for i in range(10)]
-    splits = walk_forward_splits(observations, train_fraction=0.6, validation_fraction=0.2, min_train=3)
-    assert splits["train"][0]["value"] == 0
-    assert splits["validation"][0]["value"] == 6
-    assert splits["oos"][0]["value"] == 8
+    splits = walk_forward_splits(10, train_fraction=0.6, validation_fraction=0.2, min_train=3)
+    assert splits == [{"train": (0, 6), "validation": (6, 8), "out_of_sample": (8, 10)}]
 
     grid = parameter_grid({"stop": [50, 75], "target": [100, 150]})
     assert len(grid) == 4

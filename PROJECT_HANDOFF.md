@@ -8,7 +8,7 @@
 **Execution:** READ-ONLY; no real orders; `trading=DISABLED`.
 
 ## Product and safety contract
-QuantNifty-Next is a Live Adaptive Brain + After-Market Research Lab. Live decisions use only data available at decision time. Adaptive runtime is restricted to the live IST session; no overnight paper positions are allowed. Same-day Adaptive memory consumes only current-IST-day CLOSED outcomes in explicit LIVE mode. Historical learning/bootstrap/performance gates are removed. `data_Review.txt`, old recordings and external historical archives are replay/reference evidence only and never seed live Adaptive memory or policy. Real trading is permanently disabled.
+QuantNifty-Next is a Live Adaptive Brain + After-Market Research Lab. Live decisions use only data available at decision time. Adaptive runtime is restricted to the live IST session; no overnight paper positions are allowed. Same-day Adaptive memory consumes only current-IST-day CLOSED outcomes in explicit LIVE mode. There is no historical learning/bootstrap/performance-gate path. Past live-session data is retained and accumulated; it is not deleted or used as a historical replay substitute. `data_Review.txt`, old recordings and external historical archives are replay/reference evidence only and never seed live Adaptive memory or policy. Real trading is permanently disabled.
 
 Do not modify `QuantNifty`, `data/instruments/fno.csv`, or commit secrets.
 
@@ -28,38 +28,39 @@ The decision layer combines the existing market-structure, OI, GEX/DEX, IV, expe
 ## Trade Audit
 Read-only paper trade audit is available at `/trade-audit` with API `/api/v1/paper/trade-audit`. It joins durable outcomes to exact entry snapshots/decision timestamps without hindsight and marks incomplete legacy evidence instead of fabricating it.
 
-## V3 thesis-hold stored-day research
-The authoritative research lifecycle is:
+## V3 thesis-hold research
+The research lifecycle is:
 
 `ENTRY CONFIRMED -> BUY ACTUAL STORED OPTION -> OPEN POSITION -> HOLD/MONITOR -> EXIT -> ONLY THEN ALLOW NEXT ENTRY`
 
-The first approved signal becomes the first research trade; same-direction signals while open do not re-enter. Entry/exit use actual stored option premiums. Stop/target are NIFTY spot-point distances using a 20-snapshot close-to-close spot ATR proxy, with stop `max(50,min(150,ATR_proxy*4*IV_multiplier))`, IV multiplier 0.90/1.00/1.20 by ATM IV regime, and target 2R. Other exits include Adaptive exhaustion/trail, thesis/risk invalidation, expiry and same-day session close. Research is read-only and places zero orders.
+This is a research/replay capability only and is not a historical-learning path for the live Adaptive Brain. Stored-day research can validate the mechanics of the lifecycle using supplied/replayed snapshots, but those results never seed live Adaptive memory or policy.
 
-`/api/v1/research/results?day=YYYY-MM-DD` reads durable `STORED_DAY` research and regenerates stale legacy fixed-TIME/counterfactual reports through the current V3 engine. Research rows now expose `position_lifecycle`, `risk_model`, and `tuning_profile` so production evidence can verify the model rather than merely trusting a P&L number.
+## Incremental live learning model
+The authoritative learning model is **live, incremental, append-only learning from day one onward**. Each live IST session produces snapshots, decisions, paper-trade lifecycle events and CLOSED outcomes. The learning store retains prior observations and accumulates new observations across days; past learning records are not deleted as part of normal operation.
+
+The engine should continuously compare the current session against its retained live experience, evaluate strategy/scenario performance, regime behavior, entry/exit quality, risk outcomes and decision confidence, and use those observations to improve future paper decisions. Learning is chronological and must never use information that was unavailable at the decision timestamp. The intended horizon is naturally rolling forward from day 1 to day 300 and beyond, without resetting the learned history.
+
+The system must distinguish **observation retention** from **policy mutation**: storing every day's evidence does not permit future outcomes to influence an earlier decision, and a strategy must not be declared "perfect" from a single day. Strategy-quality assessment should become more reliable as the retained live sample grows. Any future policy/profile changes must remain deterministic, auditable, risk-gated and paper-only.
+
+Historical archives are not required for this learning model. No external historical dataset is a project dependency or acceptance criterion.
 
 ## Research robustness layer
 `apps/api/src/quantnifty/research_analytics.py` is a research-only diagnostics layer. It reports performance by regime, direction, exit reason and IST time bucket and provides a conservative robustness gate using minimum trades, expectancy, profit factor and maximum drawdown. It never changes live decisions.
 
-`apps/api/src/quantnifty/research_optimizer.py` provides deterministic offline parameter-grid generation and OOS-first candidate ranking. Ranking prioritizes robustness-gate pass, OOS profit factor, OOS expectancy and drawdown rather than raw win rate. It cannot call live trading or mutate execution configuration.
+`apps/api/src/quantnifty/research_optimizer.py` provides deterministic parameter-grid generation and candidate ranking for offline/research analysis. It cannot call live trading or mutate execution configuration. These capabilities are secondary research tooling and are not used to bootstrap or seed the live Adaptive Brain.
 
-Chronological walk-forward windows are generated by `walk_forward_splits`; there is no shuffling. The intended research sequence is now: baseline -> regime/time diagnostics -> constrained candidate grid -> walk-forward -> OOS robustness gate -> cost sensitivity -> only then consider a research profile for paper validation.
+## Validation boundary
+Offline validation proves deterministic code behavior, data-contract handling, safety invariants and research mechanics. It does not prove future live-market behavior.
 
-## Offline versus live validation boundary
-The offline-completable gate covers compilation and the full unit suite; canonical historical CSV loading and exact-expiry enforcement; CE/PE/OI/volume/premium normalization; deterministic market-state, event, pressure and confidence gates; V3 entry-at-t plus fill-at-t+1 lifecycle; actual stored-option premium P&L; bid/ask-aware entry and exit fills; spot-point stop/2R target; thesis/session/expiry exits; one-position lifecycle and re-entry suppression; paper/read-only invariants; research diagnostics by regime/direction/exit/time; chronological walk-forward splitting; robustness gates; deterministic parameter-grid/ranking behavior; cost-sensitivity plumbing; decision-latency instrumentation; and UI telemetry integrity. `apps/api/tests/test_offline_validation_gate.py` exercises canonical fixture loading, a synthetic V3 option-P&L lifecycle with realistic ask-entry/bid-exit semantics, robustness/cost sensitivity, chronological walk-forward and OOS-first optimizer behavior.
+The offline-completable gate covers compilation and the full unit suite; canonical CSV loading and exact-expiry enforcement; CE/PE/OI/volume/premium normalization; deterministic market-state, event, pressure and confidence gates; V3 entry/fill lifecycle; stored-option premium P&L mechanics; bid/ask-aware fills; spot-point stop/2R target; thesis/session/expiry exits; one-position lifecycle and re-entry suppression; paper/read-only invariants; research diagnostics; chronological splitting; robustness gates; deterministic parameter-grid/ranking behavior; cost-sensitivity plumbing; decision-latency instrumentation; and UI telemetry integrity.
 
-The live-only gate covers provider connectivity and current option-chain freshness; real expiry discovery; real-time timestamp monotonicity; live snapshot cadence and network latency; PostgreSQL durability in the deployed environment; same-day Adaptive memory using only today's CLOSED live-paper outcomes; live paper OPEN/HOLD/EXIT behavior against changing quotes; real bid/ask/liquidity and delta availability; Render deployment parity; weekday live-validation harness success; and a complete live session including after-market learning. These tests remain paper/read-only.
-
-Offline correctness cannot prove live provider/network behavior or production persistence. Live validation cannot replace a qualified multi-month/year historical replay for statistical robustness.
+The live-only gate covers provider connectivity and current option-chain freshness; real expiry discovery; real-time timestamp monotonicity; live snapshot cadence and network latency; PostgreSQL durability in the deployed environment; append-only same-day Adaptive memory using only CLOSED live-paper outcomes; live paper OPEN/HOLD/EXIT behavior against changing quotes; real bid/ask/liquidity and delta availability; Render deployment parity; weekday live-validation harness success; and complete live sessions including after-market learning. These tests remain paper/read-only.
 
 ## Historical options adapter
-`apps/api/src/quantnifty/external_options_loader.py` accepts generic 1-minute NIFTY option CSVs and maps them into the existing canonical snapshot contract. Required fields are timestamp, strike, CE/PE, close/LTP, volume, OI, positive NIFTY spot and expiry. Optional OHLC/bid/ask are retained; missing Greeks are never invented. Expiry is now validated before spot so malformed contracts fail deterministically. The path is:
-
-`External CSV -> canonical snapshots -> research_strategy_runner -> position_hold_backtest -> V3 research P&L`
-
-This is research/replay only and cannot enter live Adaptive memory. Dataset licensing, timestamp completeness, contract identity, OI semantics and quote quality must be validated before empirical results are accepted.
+`apps/api/src/quantnifty/external_options_loader.py` remains available only as a generic research/replay adapter for supplied datasets. It is **not** an empirical validation dependency and must never seed live Adaptive memory. No historical archive is required for project completion under the incremental live-learning architecture.
 
 ## Decision-quality hardening
-The deterministic market brain now treats both the upstream input confidence and institutional-model confidence as required confidence gates. A weak provider confidence cannot be hidden by a later aggregate score. This remains a no-trade safety filter and does not enable execution.
+The deterministic market brain treats both upstream input confidence and institutional-model confidence as required confidence gates. A weak provider confidence cannot be hidden by a later aggregate score. This remains a no-trade safety filter and does not enable execution.
 
 ## Decision latency instrumentation
 `decision_latency.py` instruments the deterministic decision critical path by stage and reports total/stage milliseconds. The instrumentation is observational only and does not alter decisions or enable execution. Real provider/network latency still requires live observation.
@@ -71,21 +72,18 @@ The production evidence workflow checks the stored-day V3 research endpoint and 
 
 The live validation harness treats NSE weekends as an intentional no-market condition and does not falsely fail on expected provider unavailability outside market days. Weekday live-provider validation remains strict and retries transient provider failures instead of treating one 503 as a code regression.
 
-A real third-party historical option archive has not yet been accepted as empirical backtest evidence. Public candidates identified for qualification include the Zenodo NIFTY one-minute 2017-2020 option archive and newer Hugging Face NIFTY/BANKNIFTY/SENSEX 1-minute option archives; these remain candidates until decoded and quality/licensing checks pass.
-
 ## Validation state
+- Incremental live-learning architecture is authoritative: retained live observations accumulate from day 1 forward; no historical bootstrap or deletion of prior learning data.
+- Historical statistical validation is **removed as a project requirement**. No external historical option dataset is required for acceptance.
+- Historical options adapter remains research/replay-only and cannot enter live Adaptive memory.
 - Thesis-hold implementation and point-based volatility risk are on `main`.
-- Historical options adapter and regression tests are on `main`.
-- Research robustness layer is on `main`.
+- Research robustness and optimizer modules remain secondary offline tooling and do not seed live learning.
 - Validation harness hardening: `ff61a70f7d20fa00a356cc41d9dc474bd617e98c`.
 - Latency instrumentation: `d7349e16f2d564cb49bf78cf0afcce7622eae7c1`, `6af1c459efcf37f2423e4e81fa234320e88772d2`, `b6e30ed7163081713fdd762e36998cced4e248a3`.
-- Obsolete Astra decision dependency and test removed: `55dfcc5276ddff4c112f288fd60f147d6331e30a`, `efcd7843d3611398048870d919c94cf69b24fb24`.
 - Offline validation gate: `5802e4dd6c148544e722bc8ca2d2478d366b4dc4`, with V3 bid/ask assertion correction `c56c63591a192fa5b61601124b03f2d4a2f7f2f8`.
-- The temporary GPT-6 Astra experiment is removed from the production decision path, source tree, tests and environment template. Deterministic QuantNifty intelligence is the sole decision layer.
-- Current `main`: `c56c63591a192fa5b61601124b03f2d4a2f7f2f8`.
-- Latest CI/test validation before the correction had 139 passed and 1 failed; the failure was a test expectation mismatch with the engine's intentional ask-entry/bid-exit model, not a production-code failure. The corrected test is now pushed and its CI/evidence runs must complete before validation is declared green.
-- Production evidence is currently blocked by the deployed INDstocks access token being rejected/expired; this is a live-provider credential issue, not an offline test failure. Re-authentication is required before weekday live-market evidence can pass.
-- Full empirical historical V3 P&L remains pending a qualified external option dataset with exact expiry identity.
+- Deterministic QuantNifty intelligence is the sole decision layer; Astra is removed.
+- Current `main` before this handoff update: `c56c63591a192fa5b61601124b03f2d4a2f7f2f8`.
+- Production evidence may still require valid INDstocks authentication during a weekday live session; this is a live-provider credential requirement, not a historical-data requirement.
 
 ## Non-negotiable rules
-Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Use normal repository changes and existing validation workflows only.
+Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Retain live learning history; do not silently reset or delete prior learning data. Use normal repository changes and existing validation workflows only.

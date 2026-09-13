@@ -90,7 +90,16 @@ The production evidence workflow checks the stored-day V3 research endpoint and 
 
 The live validation harness treats NSE weekends as an intentional no-market condition and does not falsely fail on expected provider unavailability outside market days. Weekday live-provider validation remains strict and retries transient provider failures instead of treating one 503 as a code regression.
 
+## Live provider session guard
+`market_session.py` is now the authoritative provider-access boundary for the deployed live loop. LIVE_PROVIDER polling is allowed only Monday-Friday from **09:15 through 15:29 IST**. At 15:30 IST and later, weekends, and pre-open, the background refresh loop does not call INDstocks and sleeps until the next eligible session. `/api/v1/market`, `/api/v1/intelligence`, `/api/v1/decision`, and `/api/v1/final-decision` return an explicit `MARKET_CLOSED` read-only payload instead of initiating a provider call outside the live session. The after-market scheduler remains separate and continues to run its raw stored-snapshot research after the close.
+
+The dashboard previously connected to `/ws` while the backend only exposed `/ws/market`, which caused the screenshot's **"Live stream disconnected · retrying…"** state. The backend now exposes both `/ws` and `/ws/market` to preserve compatibility. Outside market hours the WebSocket sends a `MARKET_CLOSED` heartbeat and does not poll the live provider.
+
 ## Validation state
+- Live-provider session guard: `dc3cb1f27e27aaa62eeccfc3a048cf9db4325ee9`.
+- Live refresh/WebSocket/session-boundary implementation: `87f3755ff00368078ea4f67dbedae285111df590`.
+- NSE session boundary regression tests: `992757c575d8525819fd7e1dfd39e862a4d677ae`.
+- Dashboard/live-session contract tests: `08e408888e85f4c89df13940e614371d9bd8fd68`.
 - Dual learning isolation implemented on `main`: `after_market_lab.py` is explicitly raw-snapshot-only and records `live_*_data_accessed=false`; it remains counterfactual/read-only.
 - New `dual_learning.py` comparison layer: `8cc0fb08da6f741700718859515bcc927966b3da`.
 - Post-market isolation and metadata: `023e1a31671ecc109127dfa67eb3adda445dd82a`.

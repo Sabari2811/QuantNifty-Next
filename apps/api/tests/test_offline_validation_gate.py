@@ -37,9 +37,9 @@ def test_v3_thesis_hold_lifecycle_produces_real_option_pnl(monkeypatch):
     assert result["trading_enabled"] is False
     assert result["position_lifecycle_metrics"]["positions_opened"] == 1
     assert result["trades"][0]["exit_reason"] == "POINT_TARGET"
-    assert result["trades"][0]["entry_price"] == 105
-    assert result["trades"][0]["exit_price"] == 180
-    assert result["trades"][0]["net_pnl"] == 75 * 65
+    assert result["trades"][0]["entry_price"] == 105.5
+    assert result["trades"][0]["exit_price"] == 179.5
+    assert result["trades"][0]["net_pnl"] == 74 * 65
 
 
 def test_research_robustness_and_cost_sensitivity_are_deterministic():

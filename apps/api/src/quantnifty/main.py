@@ -25,6 +25,7 @@ from quantnifty.learning_store import learning_status, record_decision, record_s
 from quantnifty.after_market_scheduler import after_market_loop
 from quantnifty.live_paper_manager import LivePaperManager
 from quantnifty.policy_runtime import load_future_policy
+from quantnifty.market_session import closed_payload, is_live_market_session, market_session_state, seconds_until_next_open
 
 BASE = "https://api.indstocks.com"
 TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "").strip()
@@ -131,6 +132,8 @@ def analytics(spot: float, rows: list[dict[str, Any]], expiry: str | None = None
     return {"spot":spot,"pcr":pcr,"call_oi":call_oi,"put_oi":put_oi,"call_oi_change":call_doi,"put_oi_change":put_doi,"gex":gex,"dex":dex,"vanna_proxy":vanna_proxy,"iv_skew":iv_skew,"atm_iv":atm_iv,"gamma_flip":gamma_flip,"gamma_walls":walls,"max_pain":max_pain(rows),"expected_move":{"move":expected_move,"lower":spot-expected_move,"upper":spot+expected_move} if expected_move else None,"support":support,"resistance":resistance,"structure":structure,"dealer_flow":dealer_flow,"liquidity_score":round(liquidity,1),"bullish_score":round(score,1),"bearish_score":round(100-score,1),"bias":bias,"confidence":round(confidence,1),"rationale":reasons,"strike_selection":select_strikes(spot,rows,bias,expected_move=expected_move),"data_integrity":"LIVE_PROVIDER","rows":len(rows),"option_chain":rows,"timestamp":datetime.now(timezone.utc).isoformat()}
 
 async def snapshot() -> dict[str, Any]:
+    if not is_live_market_session():
+        raise RuntimeError("NSE live market session is closed; live provider access is disabled")
     expiry=EXPIRY
     if not expiry:
         response=await api_get("/market/instruments/expiries",{"underlying":"NIFTY","segment":"DERIVATIVE"}); values=response.get("data") or []
@@ -146,6 +149,9 @@ async def snapshot() -> dict[str, Any]:
 async def continuous_market_refresh():
     global active_policy
     while True:
+        if not is_live_market_session():
+            await asyncio.sleep(min(POLL_SECONDS, seconds_until_next_open()))
+            continue
         try:
             data = await snapshot()
             if str(data.get("data_integrity")) == "LIVE_PROVIDER":
@@ -193,18 +199,23 @@ def backtest_page():
     path=os.path.join(os.path.dirname(__file__),"web","backtest.html"); return FileResponse(path)
 
 @app.get("/health")
-def health(): return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"timestamp":datetime.now(timezone.utc).isoformat()}
+def health():
+    state=market_session_state()
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"market_session":state,"live_provider_connected":False,"timestamp":datetime.now(timezone.utc).isoformat()}
 @app.get("/api/v1/health")
 def api_health(): return health()
 @app.get("/api/v1/status")
 def status():
-    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None,"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"trading":"DISABLED","learning":learning_status(),"active_future_policy":(active_policy or {}).get("policy"),"live_paper_status":("OPEN" if live_paper.active is not None else "IDLE"),"analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION","LIVE_LEARNING_RECORDER","PAPER_OUTCOME_TRACKER","AFTER_MARKET_LAB","ADAPTIVE_POLICY"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
+    state=market_session_state()
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None and bool(state["open"]),"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"market_session":state,"live_provider_connected":False,"trading":"DISABLED","learning":learning_status(),"active_future_policy":(active_policy or {}).get("policy"),"live_paper_status":("OPEN" if live_paper.active is not None else "IDLE"),"analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION","LIVE_LEARNING_RECORDER","PAPER_OUTCOME_TRACKER","AFTER_MARKET_LAB","ADAPTIVE_POLICY"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
 
 @app.get("/api/v1/learning/status")
 def learning_status_api(): return learning_status()
 
 @app.get("/api/v1/market")
 async def market():
+    if not is_live_market_session():
+        return closed_payload()
     cached = cache.get("snapshot")
     if cached is not None:
         return cached
@@ -216,6 +227,8 @@ async def market():
 async def analytics_api(): return await market()
 @app.get("/api/v1/intelligence")
 async def intelligence_api():
+    if not is_live_market_session():
+        return closed_payload()
     try:
         data=await snapshot(); return {"timestamp":data["timestamp"],"spot":data["spot"],"expiry":data.get("expiry"),"intelligence":data["intelligence"]}
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
@@ -224,6 +237,7 @@ async def intelligence_api():
 async def decision(strategy: str="directional"):
     mode=strategy.strip().lower()
     if mode not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
+    if not is_live_market_session(): return closed_payload()
     try: data=await snapshot()
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
     result=final_decision(data,cache.get("previous_snapshot"),mode)
@@ -233,6 +247,7 @@ async def decision(strategy: str="directional"):
 async def final_decision_api(strategy: str="directional"):
     mode=strategy.strip().lower()
     if mode not in {"directional","gamma_blast","adaptive"}: raise HTTPException(400,"strategy must be directional, gamma_blast, or adaptive")
+    if not is_live_market_session(): return closed_payload()
     try: data=await snapshot()
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
     result=final_decision(data,cache.get("previous_snapshot"),mode)
@@ -298,11 +313,19 @@ async def validation_api(payload: dict[str,Any]):
         return result
     except (TypeError,ValueError) as exc: raise HTTPException(400,f"invalid validation configuration: {exc}") from exc
 
+@app.websocket("/ws")
 @app.websocket("/ws/market")
 async def websocket_market(ws: WebSocket):
     await ws.accept()
     try:
         while True:
+            if not is_live_market_session():
+                try:
+                    await ws.send_json(closed_payload())
+                except WebSocketDisconnect:
+                    return
+                await asyncio.sleep(min(POLL_SECONDS, seconds_until_next_open()))
+                continue
             try:
                 data = cache.get("snapshot")
                 if data is None:
@@ -312,7 +335,7 @@ async def websocket_market(ws: WebSocket):
                 return
             except Exception as exc:
                 try:
-                    await ws.send_json({"error": str(exc), "mode": "READ_ONLY"})
+                    await ws.send_json({"error": str(exc), "mode": "READ_ONLY", "data_integrity": "UNAVAILABLE"})
                 except Exception:
                     return
             await asyncio.sleep(POLL_SECONDS)

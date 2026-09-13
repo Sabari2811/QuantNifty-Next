@@ -41,6 +41,9 @@ def _is_current_hold_result(research: dict[str, Any] | None) -> bool:
             return True
         if value.get("risk_model") == "SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT":
             return True
+        tuning = value.get("tuning") or {}
+        if tuning.get("position_lifecycle") == "THESIS_HOLD_UNTIL_INVALIDATION":
+            return True
     return False
 
 
@@ -64,6 +67,7 @@ def _pnl_row(name: str, value: dict[str, Any]) -> dict[str, Any]:
         win_rate = metrics.get("win_rate")
     if win_rate is None:
         win_rate = (wins / count * 100.0) if count else 0.0
+    tuning = value.get("tuning") or {}
     return {
         "strategy": name,
         "status": value.get("status"),
@@ -75,6 +79,9 @@ def _pnl_row(name: str, value: dict[str, Any]) -> dict[str, Any]:
         "gross_pnl": round(float(metrics.get("gross_pnl") or 0.0), 2),
         "profit_factor": metrics.get("profit_factor"),
         "max_drawdown": metrics.get("max_drawdown") if metrics.get("max_drawdown") is not None else metrics.get("max_dd"),
+        "position_lifecycle": value.get("position_lifecycle") or tuning.get("position_lifecycle"),
+        "risk_model": value.get("risk_model") or "SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT",
+        "tuning_profile": tuning.get("profile"),
         "research_only": True,
     }
 

@@ -35,7 +35,7 @@ jobs:
           else:
               raise SystemExit('production health endpoint did not become reachable')
           PY
-      - name: Authenticated live-market and historical replay evidence
+      - name: Authenticated live-market, historical replay, and stored-day research evidence
         run: |
           python - <<'PY'
           import time
@@ -106,6 +106,22 @@ jobs:
           assert replay['summary']['count']>=2
           print('PRODUCTION_REPLAY_EVIDENCE=PASS')
           print('candles=',len(candles),'replay_points=',len(replay['points']))
+
+          research=get_json('/api/v1/research/results',params={'day':'2026-09-11','run_if_missing':'true'},timeout=60,attempts=8)
+          assert research['day']=='2026-09-11'
+          assert research['source']=='STORED_DAY', research
+          assert research['research_only'] is True
+          assert research['orders_placed']==0
+          assert research['mode']=='READ_ONLY_AFTER_MARKET'
+          assert research['strategies'], research
+          rows=research['strategies']
+          assert all(row.get('research_only') is True for row in rows)
+          assert all(row.get('position_lifecycle')=='THESIS_HOLD_UNTIL_INVALIDATION' for row in rows if row.get('status')=='TESTED'), rows
+          assert all(row.get('risk_model')=='SPOT_ATR_PROXY_X4_WITH_ATM_IV_ADJUSTMENT' for row in rows if row.get('status')=='TESTED'), rows
+          assert all(row.get('tuning_profile')=='INTRADAY_OPTION_RESEARCH_V3_THESIS_HOLD' for row in rows if row.get('status')=='TESTED'), rows
+          print('STORED_DAY_V3_RESEARCH_EVIDENCE=PASS')
+          print('research_generated_now=',research.get('generated_now'),'observations=',research.get('observations'),'total_net_pnl=',research.get('total_net_pnl'))
+          print('strategies=',[(r.get('strategy'),r.get('trades'),r.get('net_pnl'),r.get('position_lifecycle'),r.get('risk_model')) for r in rows])
           PY
       - name: Browser E2E against production
         run: |

@@ -71,12 +71,12 @@ def signal_dna(data: dict[str, Any], state: dict[str, Any], attribution: dict[st
 
 
 def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None = None, mode: str = "LIVE") -> dict[str, Any]:
-    state=classify_market_state(data,previous); attribution=move_attribution(data,previous); events=detect_events(data,previous,state); dna=signal_dna(data,state,attribution); pressure=pressure_map(data)
+    state=classify_market_state(data,previous); attribution=move_attribution(data,previous); events=detect_events(data,previous,state); dna=signal_dna(data,state,attribution)
     stack=final_decision({**data,"intelligence":{"market_state":state}},previous,"adaptive",mode)
-    adaptive=stack["signal"].get("adaptive") or {}; bias=str(stack["signal"].get("direction") or data.get("bias") or "NEUTRAL").upper(); confidence=_num(stack["signal"].get("confidence")); liquidity=_num(data.get("liquidity_score"))
-    gates={"direction":bias in {"BULLISH","BEARISH"},"confidence":confidence>=60,"liquidity":liquidity>=50,"state":state["state"] not in {"LIQUIDITY_RISK","COMPRESSION"}}
+    adaptive=stack["signal"].get("adaptive") or {}; bias=str(stack["signal"].get("direction") or data.get("bias") or "NEUTRAL").upper(); model_confidence=_num(stack["signal"].get("confidence")); input_confidence=_num(data.get("confidence")); confidence=min(model_confidence, input_confidence) if input_confidence else model_confidence; liquidity=_num(data.get("liquidity_score"))
+    gates={"direction":bias in {"BULLISH","BEARISH"},"confidence":input_confidence>=60 and model_confidence>=60,"liquidity":liquidity>=50,"state":state["state"] not in {"LIQUIDITY_RISK","COMPRESSION"}}
     trade_ready=all(gates.values()) and bool(stack["risk"].get("approved"))
-    base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressure,"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"},"institutional_signal":stack["signal"],"risk_engine":stack["risk"],"execution_plan":stack["execution_plan"]}
+    base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressure_map(data),"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"},"institutional_signal":stack["signal"],"risk_engine":stack["risk"],"execution_plan":stack["execution_plan"]}
     base["entry_scenario"]=scenario_contract(adaptive.get("regime"),adaptive.get("selected_strategy"),stack["signal"].get("direction"))
     base["entry_scenarios"]={"schema":"entry-scenarios-v1","supported":True,"count":5,"scenarios":["EARLY_ACCUMULATION","DIRECTIONAL","NEGATIVE_GAMMA_EXPANSION","GAMMA_TRANSITION","CAS_REENTRY"],"non_entry_states":["LIQUIDITY_RISK","POSITIVE_GAMMA_RANGE","COMPRESSION","TRANSITION"]}
     base["final_decision"]={"status":stack["status"],"authoritative":stack["authoritative"],"trading":stack["trading"]}

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from quantnifty.astra_decision import review_decision
 from quantnifty.decision_validation import validate_decision, validate_snapshot
 from quantnifty.research_brain import adaptive_exit_state, strategy_selector
 from quantnifty.session_policy import session_decision_policy
@@ -150,13 +149,6 @@ def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None,
         result["status"] = "NO_TRADE"
         result["risk"] = dict(risk, approved=False, reasons=list(dict.fromkeys([*risk.get("reasons", []), "decision_validation"])))
         result["execution_plan"] = execution_plan(data, result["signal"], result["risk"])
-    astra = review_decision(data, result["signal"], result["risk"], mode)
-    result["astra_review"] = astra
-    if astra.get("status") == "AVAILABLE" and astra.get("decision") != "APPROVE" and result["risk"].get("approved"):
-        result["status"] = "NO_TRADE"
-        result["risk"] = dict(result["risk"], approved=False, reasons=list(dict.fromkeys([*result["risk"].get("reasons", []), "astra_veto"])))
-        result["execution_plan"] = execution_plan(data, result["signal"], result["risk"])
-        result["validation"] = validate_decision(data, result, mode)
     return result
 
 

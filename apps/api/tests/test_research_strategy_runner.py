@@ -29,7 +29,7 @@ def test_legacy_default_config_is_replaced_by_tuned_profile(monkeypatch):
         captured["config"] = config
         return {"metrics": {}, "trades": [], "split": {}}
 
-    monkeypatch.setattr("quantnifty.research_strategy_runner.run_backtest", fake_run)
+    monkeypatch.setattr("quantnifty.research_strategy_runner.run_position_hold_backtest", fake_run)
     result = run_research_strategy([], "adaptive", BacktestConfig())
     assert result["research_only"] is True
     assert captured["config"] == TUNED_CONFIG

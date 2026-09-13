@@ -1,19 +1,22 @@
 from __future__ import annotations
 from typing import Any
 
-from quantnifty.astra_intelligence import evaluate_astra
 from quantnifty.entry_scenarios import scenario_contract
 from quantnifty.institutional_engine import final_decision
+
 
 def _num(value: Any) -> float:
     try: return float(value or 0)
     except (TypeError, ValueError): return 0.0
 
+
 def _sign(value: float) -> int: return 1 if value > 0 else -1 if value < 0 else 0
+
 
 def _pct_change(current: float | None, previous: float | None) -> float | None:
     if current is None or previous in (None, 0): return None
     return (current - previous) / abs(previous) * 100.0
+
 
 def classify_market_state(data: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
     previous=previous or {}; spot=_num(data.get("spot")); flip=data.get("gamma_flip"); gex=_num(data.get("gex")); expected=(data.get("expected_move") or {}).get("move"); bias=str(data.get("bias") or "NEUTRAL"); confidence=_num(data.get("confidence")); liquidity=_num(data.get("liquidity_score")); pcr=data.get("pcr")
@@ -29,6 +32,7 @@ def classify_market_state(data: dict[str, Any], previous: dict[str, Any] | None 
     if expected and expected>0 and flip is not None: consumed=min(200.0,abs(spot-_num(flip))/expected*100.0)
     return {"state":state,"label":state.replace("_"," ").title(),"spot_vs_gamma_flip":None if flip is None else round(spot-_num(flip),2),"gamma_change_pct":None if gex_change is None else round(gex_change,2),"expected_move_change_pct":None if em_change is None else round(em_change,2),"volume":round(volume,2),"volume_change_pct":_pct_change(volume,prev_volume) if prev_volume else None,"expected_move_consumed_pct":None if consumed is None else round(consumed,1),"confidence":round(confidence,1),"liquidity":round(liquidity,1),"bias":bias,"pcr":pcr,"transition":previous.get("market_state",{}).get("state") not in (None,state)}
 
+
 def detect_events(data: dict[str, Any], previous: dict[str, Any] | None, state: dict[str, Any]) -> list[dict[str, Any]]:
     previous=previous or {}; events=[]; spot=_num(data.get("spot")); old_spot=_num(previous.get("spot")); flip=data.get("gamma_flip"); old_flip=previous.get("gamma_flip"); gex=_num(data.get("gex")); old_gex=_num(previous.get("gex")); em=_num((data.get("expected_move") or {}).get("move")); old_em=_num((previous.get("expected_move") or {}).get("move"))
     def add(kind,severity,message,value=None): events.append({"type":kind,"severity":severity,"message":message,"value":value})
@@ -41,10 +45,12 @@ def detect_events(data: dict[str, Any], previous: dict[str, Any] | None, state: 
     if state.get("transition"): add("MARKET_STATE_CHANGE","HIGH",f"Market state changed to {state['label']}",state["state"])
     return events
 
+
 def move_attribution(data: dict[str, Any], previous: dict[str, Any] | None) -> dict[str, Any]:
     previous=previous or {}; spot_move=_num(data.get("spot"))-_num(previous.get("spot")); call_doi=_num(data.get("call_oi_change")); put_doi=_num(data.get("put_oi_change")); gex_now=_num(data.get("gex")); gex_old=_num(previous.get("gex")); iv_now=_num(data.get("atm_iv")); iv_old=_num(previous.get("atm_iv")); volume=sum(_num(r.get("volume")) for r in data.get("option_chain",[])); prev_volume=sum(_num(r.get("volume")) for r in previous.get("option_chain",[]))
     raw={"OI positioning":abs(put_doi-call_doi),"Dealer gamma":abs(gex_now-gex_old),"IV expansion":abs(iv_now-iv_old)*100.0,"Volume impulse":abs(volume-prev_volume)/max(1.0,prev_volume)*100.0,"Price momentum":abs(spot_move)}; total=sum(raw.values()); shares={k:round(v/total*100.0,1) for k,v in raw.items()} if total else {k:0.0 for k in raw}; primary=max(shares,key=shares.get) if shares else "Unavailable"; direction="UP" if spot_move>0 else "DOWN" if spot_move<0 else "FLAT"; quality="HIGH" if total and max(shares.values())>=40 else "MEDIUM" if total else "LOW"
     return {"direction":direction,"points":round(spot_move,2),"primary_driver":primary,"quality":quality,"contributors":shares}
+
 
 def pressure_map(data: dict[str, Any]) -> list[dict[str, Any]]:
     spot=_num(data.get("spot")); grouped={}
@@ -57,24 +63,20 @@ def pressure_map(data: dict[str, Any]) -> list[dict[str, Any]]:
         pressure=b["ce_oi"]+b["pe_oi"]+abs(b["ce_doi"])*2+abs(b["pe_doi"])*2+abs(b["gamma"])*1000+b["volume"]*0.01; side="CALL" if b["ce_oi"]>b["pe_oi"] else "PUT" if b["pe_oi"]>b["ce_oi"] else "BALANCED"; out.append({"strike":strike,"distance":round(strike-spot,2),"pressure":round(pressure,2),"dominant_side":side,**{k:round(v,2) for k,v in b.items()}})
     return out
 
+
 def signal_dna(data: dict[str, Any], state: dict[str, Any], attribution: dict[str, Any]) -> list[dict[str, Any]]:
     bias=str(data.get("bias") or "NEUTRAL"); gamma=_num(data.get("gex")); iv=_num(data.get("atm_iv")); confidence=_num(data.get("confidence")); liquidity=_num(data.get("liquidity_score")); doi_diff=abs(_num(data.get("put_oi_change"))-_num(data.get("call_oi_change"))); doi_total=max(1.0,abs(_num(data.get("put_oi_change")))+abs(_num(data.get("call_oi_change"))))
     components=[("Direction",confidence,"bias is directional" if bias!="NEUTRAL" else "bias is neutral"),("Gamma",min(100.0,50.0+abs(gamma)/(abs(gamma)+1.0)*50.0),"gamma regime"),("OI Flow",min(100.0,50.0+doi_diff/doi_total*50.0),"OI imbalance"),("Volatility",min(100.0,50.0+abs(iv)*2.0),"ATM IV context"),("Liquidity",liquidity,"execution quality"),("Move Attribution",75.0 if attribution.get("quality")=="HIGH" else 55.0,attribution.get("primary_driver","unknown"))]
     return [{"name":name,"score":round(max(0.0,min(100.0,score)),1),"reason":reason} for name,score,reason in components]
 
+
 def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None = None, mode: str = "LIVE") -> dict[str, Any]:
-    state=classify_market_state(data,previous); attribution=move_attribution(data,previous); events=detect_events(data,previous,state); dna=signal_dna(data,state,attribution); pressure=pressure_map(data); confidence=_num(data.get("confidence")); liquidity=_num(data.get("liquidity_score")); bias=str(data.get("bias") or "NEUTRAL")
-    gates={"direction":bias in {"BULLISH","BEARISH"},"confidence":confidence>=60,"liquidity":liquidity>=50,"state":state["state"] not in {"LIQUIDITY_RISK","COMPRESSION"}}; trade_ready=all(gates.values())
-    base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressure,"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"}}
-    base["astra_intelligence"]=evaluate_astra(data, previous, base, mode) if mode.upper()=="LIVE" else {"provider":"GPT-6 Astra","model":"gpt-6-astra","enabled":False,"available":False,"decision_role":"LIVE_ONLY","decision":"WAIT","direction":"NEUTRAL","confidence":0.0,"thesis":"Astra is intentionally not used for historical/replay decisions.","invalidation":"N/A","reasons":[],"risk_flags":["LIVE_ONLY"]}
-    astra=base["astra_intelligence"]
-    if trade_ready and astra.get("available") and (astra.get("decision") != "ENTER" or float(astra.get("confidence",0)) < float(astra.get("min_confidence",70))):
-        trade_ready=False; base["decision"]["status"]="NO_TRADE"; base["decision"]["trade_ready"]=False; base["decision"]["reasons"].append("astra_gate")
+    state=classify_market_state(data,previous); attribution=move_attribution(data,previous); events=detect_events(data,previous,state); dna=signal_dna(data,state,attribution); pressure=pressure_map(data)
     stack=final_decision({**data,"intelligence":{"market_state":state}},previous,"adaptive",mode)
-    base["institutional_signal"]=stack["signal"]
-    base["risk_engine"]=stack["risk"]
-    base["execution_plan"]=stack["execution_plan"]
-    adaptive=stack["signal"].get("adaptive") or {}
+    adaptive=stack["signal"].get("adaptive") or {}; bias=str(stack["signal"].get("direction") or data.get("bias") or "NEUTRAL").upper(); confidence=_num(stack["signal"].get("confidence")); liquidity=_num(data.get("liquidity_score"))
+    gates={"direction":bias in {"BULLISH","BEARISH"},"confidence":confidence>=60,"liquidity":liquidity>=50,"state":state["state"] not in {"LIQUIDITY_RISK","COMPRESSION"}}
+    trade_ready=all(gates.values()) and bool(stack["risk"].get("approved"))
+    base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressure,"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"},"institutional_signal":stack["signal"],"risk_engine":stack["risk"],"execution_plan":stack["execution_plan"]}
     base["entry_scenario"]=scenario_contract(adaptive.get("regime"),adaptive.get("selected_strategy"),stack["signal"].get("direction"))
     base["entry_scenarios"]={"schema":"entry-scenarios-v1","supported":True,"count":5,"scenarios":["EARLY_ACCUMULATION","DIRECTIONAL","NEGATIVE_GAMMA_EXPANSION","GAMMA_TRANSITION","CAS_REENTRY"],"non_entry_states":["LIQUIDITY_RISK","POSITIVE_GAMMA_RANGE","COMPRESSION","TRANSITION"]}
     base["final_decision"]={"status":stack["status"],"authoritative":stack["authoritative"],"trading":stack["trading"]}

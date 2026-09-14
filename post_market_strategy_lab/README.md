@@ -1,19 +1,15 @@
 # QuantNifty Post-Market Strategy Lab
 
-Standalone research section. It does **not** modify the live decision engine, paper-trading lifecycle, adaptive memory, or execution settings.
+A standalone research section. It does **not** modify the live decision engine, paper lifecycle, adaptive memory, execution settings, or order path.
 
-## Purpose
+## What is implemented
 
-After each live NSE session, the lab can consume the raw snapshots captured during that session and run a common strategy tournament. Every strategy is evaluated as a counterfactual: **what would this strategy have done using only the information present in each stored snapshot?**
+### Single-leg tournament
+12 signal strategies × 6 contract variants = **72 counterfactual tests**:
 
-The lab is research-only. It must never place orders or feed historical/post-market results into the live decision path.
-
-## Strategy families
-
-### Directional / option-buying
 - VWAP Momentum Breakout
 - VWAP + EMA 9/21
-- EMA trend
+- EMA Trend
 - RSI + Bollinger + VWAP mean reversion
 - Opening Range Breakout
 - OI Flow
@@ -24,17 +20,11 @@ The lab is research-only. It must never place orders or feed historical/post-mar
 - Market Structure + OI
 - VWAP + OI + GEX
 
-### Option selection variants
-For every compatible directional signal, compare:
-- ATM
-- 1-step ITM
-- 1-step OTM
-- delta 0.50
-- delta 0.60
-- delta 0.70
+Variants: ATM, 1-step ITM, 1-step OTM, delta 0.50, 0.60 and 0.70.
 
-### Multi-leg strategies
-These require a multi-leg simulator and must not be approximated as single-leg trades:
+### Multi-leg simulator
+Implemented separately rather than approximating multi-leg positions as single options:
+
 - Bull Put Spread
 - Bear Call Spread
 - Bull Call Spread
@@ -44,44 +34,55 @@ These require a multi-leg simulator and must not be approximated as single-leg t
 - Iron Condor
 - Iron Fly
 
-## Common research rules
+Every leg is frozen at entry using the stored contract identity. Future bars never re-select a nearest strike.
 
-1. Use only raw stored live-session snapshots for the selected trading day(s).
-2. Never use future snapshots when generating an entry decision.
-3. Use actual stored option contracts/prices where available.
-4. Model bid/ask first; fall back to last price only when the dataset explicitly lacks quotes.
-5. Apply brokerage, exchange charges, STT, GST, SEBI/stamp charges and configurable slippage.
-6. Enforce NSE session boundaries and expiry handling.
-7. Record every entry, exit, selected contract, reason, gross P&L, costs and net P&L.
-8. Report P&L by strategy, regime, direction and time bucket.
-9. Do not rank on win rate alone.
-10. Require sufficient observations before declaring a strategy robust.
-11. Separate in-sample, validation and out-of-sample results for multi-day datasets.
-12. Preserve raw results so strategy changes are auditable.
+## Execution/cost correctness
 
-## Required output
+- Raw snapshots from `quantnifty.learning_store.load_snapshots` are the only market-data input.
+- Signal decisions use only the current and previous snapshot.
+- Entry executes on the next stored snapshot, avoiding same-bar look-ahead.
+- Option contracts are fixed at entry by security ID / symbol / strike / expiry.
+- Bid/ask is preferred; last price is only a fallback when a quote is absent.
+- NSE session is restricted to 09:15–15:30 IST.
+- Configurable slippage is applied to every leg.
+- Default 2026 NSE option cost model includes ₹20/order brokerage, 0.03553% NSE option transaction charge, SEBI turnover fee, 0.003% buyer stamp duty, 0.15% sell-side STT, and 18% GST on brokerage + transaction + SEBI charges. Rates are configuration values so they can be changed without touching the live engine.
+- No real orders are possible from this package.
 
-Each run should produce:
+## Robustness
 
-- strategy leaderboard
-- gross P&L
-- net P&L
-- return
-- win rate
-- profit factor
-- expectancy/trade
-- Sharpe-like metric
-- maximum drawdown and drawdown %
+Each research run can include:
+
+- P&L / return / win rate / profit factor / expectancy
 - average win/loss
-- number of trades
-- average holding time
-- cost drag
-- best/worst day
-- regime breakdown
-- OOS result where enough history exists
-- cost/slippage sensitivity
-- trade ledger
+- max drawdown and drawdown percentage
+- daily best/worst result
+- Sharpe-like daily metric
+- 0/5/10/20 bps slippage stress
+- 5,000-path Monte Carlo drawdown / ending-equity distribution
+- risk-of-ruin estimate
+- minimum-observation robustness gate
+- multi-day in-sample vs out-of-sample split
 
-## Important interpretation
+A profitable one-day result is **not** considered a durable edge.
 
-A one-day profitable result is **not** evidence of a durable edge. The lab is intended to accumulate independent daily experiments and later evaluate multi-day robustness. Post-market results remain counterfactual research results and are never represented as actual trades.
+## Commands
+
+Single session:
+
+```powershell
+python -m post_market_strategy_lab.run_day 2026-09-15 --output reports\2026-09-15.json
+```
+
+Multiple sessions, oldest first:
+
+```powershell
+python -m post_market_strategy_lab.run_period 2026-09-01,2026-09-02,2026-09-03 --output reports\period.json
+```
+
+## Research isolation
+
+The lab remains counterfactual and research-only. Its results are not automatically fed into live signals, paper positions, adaptive memory, or execution. Historical recordings are evidence for replay/research only.
+
+## Important limitation
+
+This branch can calculate only what the stored raw snapshots contain. If a snapshot lacks a quote, delta, expiry, OI field, or other required value, the lab does not invent it; the affected test may be skipped or use an explicitly documented fallback. Expiry settlement/exercise is not simulated unless the required expiry-state snapshots are present.

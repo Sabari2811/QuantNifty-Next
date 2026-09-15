@@ -1,6 +1,6 @@
 # QuantNifty-Next — Persistent Project Handoff
 
-**Updated:** 2026-09-13  
+**Updated:** 2026-09-15  
 **Branch:** `main`  
 **Repository:** https://github.com/Sabari2811/QuantNifty-Next  
 **Production:** https://quantnifty-api.onrender.com  
@@ -27,6 +27,15 @@ The decision layer combines the existing market-structure, OI, GEX/DEX, IV, expe
 
 ## Trade Audit
 Read-only paper trade audit is available at `/trade-audit` with API `/api/v1/paper/trade-audit`. It joins durable outcomes to exact entry snapshots/decision timestamps without hindsight and marks incomplete legacy evidence instead of fabricating it.
+
+## Live monitor trade history
+The Market Brain screen now has a dedicated daily trade-history component inside the Active Paper Trade monitor. It reads the durable read-only paper ledger from `/api/v1/paper/ledger` rather than research data or the post-market lab.
+
+For the **current open trade**, the monitor shows option premium entry -> current mark, live P&L, premium target/SL derived from the frozen entry delta/risk budget, current NIFTY spot, entry spot, spot movement, spot SL/target, entry time, mark time, instrument and read-only execution state. Exit is explicitly shown as `OPEN` until the paper lifecycle closes it.
+
+For **previous completed trades today**, the monitor shows trade number, direction, strategy, option/strike, entry premium, exit premium, entry spot, exit spot, frozen NIFTY SL, frozen NIFTY target, realized P&L, exit reason, quantity and entry/exit times. The component refreshes every 5 seconds and uses only the current IST-day paper ledger.
+
+The UI enhancement is implemented in `apps/api/src/quantnifty/web/intelligence.html`. The application now explicitly mounts `paper_ledger_api.py` from `main.py`, making the durable paper ledger available to the live monitor. This remains read-only and does not submit, modify or cancel broker orders.
 
 ## V3 thesis-hold research
 The research lifecycle is:
@@ -96,16 +105,14 @@ The live validation harness treats NSE weekends as an intentional no-market cond
 The dashboard previously connected to `/ws` while the backend only exposed `/ws/market`, which caused the screenshot's **"Live stream disconnected · retrying…"** state. The backend now exposes both `/ws` and `/ws/market` to preserve compatibility. Outside market hours the WebSocket sends a `MARKET_CLOSED` heartbeat and does not poll the live provider.
 
 ## Validation state
-- Latest main: `1f85908cd42d60888da64d68b0a31299fb359264` (`Make production evidence weekend-safe for closed live market`).
-- Weekend-safe production evidence: `1f85908cd42d60888da64d68b0a31299fb359264`.
-- Live-provider session guard: `dc3cb1f27e27aaa62eeccfc3a048cf9db4325ee9`.
-- Live refresh/WebSocket/session-boundary implementation: `87f3755ff00368078ea4f67dbedae285111df590`.
-- NSE session boundary regression tests: `992757c575d8525819fd7e1dfd39e862a4d677ae`.
-- Dashboard/live-session contract tests: `08e408888e85f4c89df13940e614371d9bd8fd68`.
-- Dual learning isolation implemented on `main`: `after_market_lab.py` is explicitly raw-snapshot-only and records `live_*_data_accessed=false`; it remains counterfactual/read-only.
+- Latest main after live-monitor enhancement: `310d4b78fe177b99fee038101577f7d2ea184c9d` (`Test live monitor trade history contract`).
+- Paper ledger router exposure: `d8ef77a8ec12e3b23fde988661ba472247f79152`.
+- Live monitor current/previous trade UI: `d2e6c1cf514e3f5d2ed51eb6701d1389e94d4f15`.
+- Live monitor UI contract test: `310d4b78fe177b99fee038101577f7d2ea184c9d`.
+- Existing dual learning isolation implemented on `main`: `after_market_lab.py` is explicitly raw-snapshot-only and records `live_*_data_accessed=false`; it remains counterfactual/read-only.
 - New `dual_learning.py` comparison layer: `8cc0fb08da6f741700718859515bcc927966b3da`.
 - Post-market isolation and metadata: `023e1a31671ecc109127dfa67eb3adda445dd82a`.
-- Dual-track regression tests: `96d3cf7162f126287d04e6f31bfa73b561de7622` plus strengthened after-market isolation assertions in `ff271151cc20d07d98e02b1f75dda9b58e253424`.
+- Dual-track regression tests: `96d3cf7162f126287d04e6f31bfa73b561de7622` plus strengthened after-market isolation assertions in `ff2711...`.
 - Historical statistical validation remains removed as a project requirement.
 - Thesis-hold implementation and point-based volatility risk are on `main`.
 - Research robustness and optimizer modules remain secondary offline tooling and do not seed live learning.

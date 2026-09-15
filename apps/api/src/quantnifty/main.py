@@ -20,6 +20,7 @@ from quantnifty.institutional_engine import final_decision, replay_signal_stack
 from quantnifty.backtest import BacktestConfig, run_backtest, validation_report
 from quantnifty.recording_api import router as recording_router
 from quantnifty.research_api import router as research_router
+from quantnifty.paper_ledger_api import router as paper_ledger_router
 from quantnifty.decision_validation import validate_snapshot
 from quantnifty.learning_store import learning_status, record_decision, record_snapshot
 from quantnifty.after_market_scheduler import after_market_loop
@@ -40,6 +41,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
 cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_at": None}
 app.include_router(recording_router)
 app.include_router(research_router)
+app.include_router(paper_ledger_router)
 live_paper = LivePaperManager()
 active_policy: dict[str, Any] | None = None
 

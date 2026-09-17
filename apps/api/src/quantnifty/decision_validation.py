@@ -60,15 +60,21 @@ def validate_risk(risk: dict[str, Any]) -> dict[str, Any]:
         if non_bool:
             errors.append("non_boolean_gates:" + ",".join(non_bool))
         expected = all(v is True for v in gates.values())
+        # A lifecycle block is an execution-state gate layered on top of the
+        # deterministic risk model. It is allowed to add a human-readable
+        # lifecycle reason without making the risk-schema validation fail.
         if bool(risk.get("approved")) != expected:
             errors.append("approval_gate_mismatch")
     reasons = risk.get("reasons")
     if not isinstance(reasons, list):
         errors.append("missing_reasons")
     elif isinstance(gates, dict):
-        expected_reasons = {k for k, v in gates.items() if v is False}
-        if set(reasons) != expected_reasons:
+        expected_reasons = {k for k, v in gates.items() if v is False and k != "paper_entry_lifecycle"}
+        gate_reasons = {str(reason) for reason in reasons if str(reason) in gates}
+        if gate_reasons != expected_reasons:
             errors.append("reason_gate_mismatch")
+        if gates.get("paper_entry_lifecycle") is False and not reasons:
+            errors.append("lifecycle_block_missing_reason")
     return {"valid": not errors, "stage": "risk", "errors": errors, "approved": bool(risk.get("approved"))}
 
 
@@ -149,20 +155,9 @@ def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = 
         result["execution_plan"] = plan
 
     guard = {"applied": False, "reason": "ACTIVE_TRADE_LOCK"} if active_trade else evaluate_entry_guards(data, result, mode)
-    stages = {
-        "input": validate_snapshot(data, mode),
-        "signal": validate_signal(signal),
-        "risk": validate_risk(risk),
-        "execution_plan": validate_execution_plan(plan, signal, risk),
-    }
+    stages = {"input": validate_snapshot(data, mode), "signal": validate_signal(signal), "risk": validate_risk(risk), "execution_plan": validate_execution_plan(plan, signal, risk)}
     if isinstance(guard, dict) and guard.get("applied"):
-        stages["entry_guard"] = {
-            "valid": True,
-            "stage": "entry_guard",
-            "errors": [],
-            "warnings": list(guard.get("reasons") or []),
-            "evidence": guard,
-        }
+        stages["entry_guard"] = {"valid": True, "stage": "entry_guard", "errors": [], "warnings": list(guard.get("reasons") or []), "evidence": guard}
 
     if active_trade:
         action = "HOLD_ACTIVE_TRADE"

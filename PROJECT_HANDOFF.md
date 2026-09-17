@@ -70,6 +70,34 @@ The kill switch intentionally has **no reset endpoint for the same day**. The ne
 
 The current live monitor's left-side **Brain Plan** is a next/current decision plan, not the frozen risk plan of the already-open trade. Therefore it can show `WAIT_FOR_TRIGGER` and different spot SL/target values while an existing trade remains OPEN. The active trade's frozen entry/risk values are shown separately in the Active Paper Trade panel. This distinction should remain explicit in future UI revisions.
 
+## 2026-09-17 entry-loss safeguards and lifecycle reconciliation
+The 17-Sep trade review identified three deterministic safeguards and they are now implemented in `apps/api/src/quantnifty/entry_guard.py` and enforced through `decision_validation.validate_decision()` for **LIVE mode only**:
+
+1. **Minimum directional displacement:** 8 NIFTY points in the intended direction. If raw displacement is unavailable, the guard records `UNAVAILABLE_PASS` rather than fabricating a block. A strong aligned trend/structural confirmation can also satisfy the gate, preserving strong directional entries such as the observed #3 trade.
+2. **Support/resistance proximity confirmation:** within 35 NIFTY points of the relevant level, a directional entry requires a confirmed break of at least 5 points. Missing support/resistance data is `UNAVAILABLE_PASS`; it is never invented.
+3. **Failed-signal cooldown:** after a negative same-direction CLOSED paper trade, the same direction is blocked for 3 minutes unless the cooldown expires. The guard uses only durable same-day CLOSED paper outcomes in LIVE mode.
+
+The guard is part of the final deterministic validation path, is included in the immutable decision validation evidence, and forces the execution plan to `BLOCKED` when a guard fails. BACKTEST/REPLAY modes are not connected to live outcomes and are untouched by this guard.
+
+Relevant commits:
+- `20e25725941cd3db79a586017013173b4cfbc41e` — initial entry guard.
+- `4f266e4975495f580fc413a208402132ed281480` — corrected support-break confirmation logic.
+- `9f4dabdf99e6ba4d06a2cee100ed60012fa2eb4f` — integrated guard into deterministic decision validation.
+- `edd596a0c6c6152e46683a865b8cdba55c9669d4` — regression tests for support-area blocking, strong displacement, confirmed break, cooldown, missing support and replay isolation.
+
+The authoritative paper ledger was also hardened in `paper_ledger_api.py`:
+- CLOSED rows are reconciled by durable `trade_id` so duplicate lifecycle events cannot inflate completed-trade counts.
+- `/api/v1/paper/ledger` now exposes `summary.lifecycle_reconciliation` with lifecycle-event count, unique trade IDs, OPEN/CLOSED event counts, closed/active trade IDs and duplicate lifecycle IDs.
+- This does **not** create a second ledger; `/api/v1/paper/ledger` and `/api/v1/paper/trade-audit` remain the canonical sources.
+- Commit: `ac9596baa6be0e6845a15e7c3335de204735f9e8`.
+
+### 17-Sep trade-count investigation
+The earlier six-trade analysis was a **snapshot-time analysis**, based on the live-monitor screenshot captured around 11:19 IST, where the UI itself showed `6 completed · 2 active`. It was not a full-day ledger extraction. Therefore it did not include later trades from the remainder of 17-Sep.
+
+Render production evidence shows the durable `outcomes` counter at **92** before the live session began producing new trades and **145** by 15:30/16:00 IST. `outcomes` is a lifecycle-event counter, not a trade counter: a normal paper trade writes an `OPEN` event and later a `CLOSED` event. Therefore `92 -> 145` cannot be interpreted as 53 trades. The new ledger reconciliation explicitly separates lifecycle events from unique completed/active trade IDs so this ambiguity is removed from future analysis.
+
+The six rows in the earlier report were therefore not evidence that only six trades existed for the whole day. They were the six completed trades visible at that screenshot time. The durable backend is traceable; the earlier report was incomplete because it used the point-in-time UI evidence instead of the full authoritative ledger.
+
 ## V3 thesis-hold research
 The research lifecycle is:
 
@@ -112,7 +140,7 @@ Historical archives are not required for this learning model. No external histor
 ## Validation boundary
 Offline validation proves deterministic code behavior, data-contract handling, safety invariants and research mechanics. It does not prove future live-market behavior.
 
-The offline-completable gate covers compilation and the full unit suite; canonical CSV loading and exact-expiry enforcement; CE/PE/OI/volume/premium normalization; deterministic market-state, event, pressure and confidence gates; V3 entry/fill lifecycle; stored-option premium P&L mechanics; bid/ask-aware fills; spot-point stop/2R target; thesis/session/expiry exits; one-position lifecycle and re-entry suppression; paper/read-only invariants; research diagnostics; chronological splitting; robustness gates; deterministic parameter-grid/ranking behavior; cost-sensitivity plumbing; decision-latency instrumentation; UI telemetry integrity; and independent dual-learning track isolation.
+The offline-completable gate covers compilation and the full unit suite; canonical CSV loading and exact-expiry enforcement; CE/PE/OI/volume/premium normalization; deterministic market-state, event, pressure and confidence gates; V3 entry/fill lifecycle; stored-option premium P&L mechanics; bid/ask-aware fills; spot-point stop/2R target; thesis/session/expiry exits; one-position lifecycle and re-entry suppression; paper/read-only invariants; research diagnostics; chronological splitting; robustness gates; deterministic parameter-grid/ranking behavior; cost-sensitivity plumbing; decision-latency instrumentation; UI telemetry integrity; and independent dual-learning track isolation. The new entry-guard unit coverage includes support-area blocking, minimum displacement, confirmed breakdown, same-direction cooldown, missing-evidence behavior and replay isolation.
 
 The live-only gate covers provider connectivity and current option-chain freshness; real expiry discovery; real-time timestamp monotonicity; live snapshot cadence and network latency; PostgreSQL durability in the deployed environment; append-only same-day Adaptive memory using only CLOSED live-paper outcomes; live paper OPEN/HOLD/EXIT behavior against changing quotes; real bid/ask/liquidity and delta availability; Render deployment parity; weekday live-validation harness success; and complete live sessions including after-market learning. These tests remain paper/read-only.
 
@@ -138,14 +166,15 @@ The live validation harness treats NSE weekends as an intentional no-market cond
 The dashboard previously connected to `/ws` while the backend only exposed `/ws/market`, which caused the screenshot's **"Live stream disconnected · retrying…"** state. The backend now exposes both `/ws` and `/ws/market` to preserve compatibility. Outside market hours the WebSocket sends a `MARKET_CLOSED` heartbeat and does not poll the live provider.
 
 ## Validation state
-- New application runtime boundary: `3009bcc8204da78231bdce2ce925b3521983dd8b` — explicit 09:00-16:00 IST weekday runtime helpers and runtime state in closed payload.
+- Application runtime boundary: `3009bcc8204da78231bdce2ce925b3521983dd8b` — explicit 09:00-16:00 IST weekday runtime helpers and runtime state in closed payload.
 - Runtime boundary tests: `d2d7e70fb320c67d32472f3bf4cecca30387f8c2` — 09:00 open, 15:59 active, 16:00 close, weekend close.
 - Render runtime/cost documentation: `5579304f8bcf4d656f6a551c601dfbb0f9c49211` — `docs/RENDER_RUNTIME.md`.
 - Live monitor current/previous trade UI remains on `main`.
 - Dual learning and post-market isolation remain on `main`.
 - Real trading remains permanently disabled.
-- Daily paper kill switch and multiple-active recovery guard are implemented on `main` as of commit `5fe0597b5ef0e0e9cd0db6551494136d9415835b`.
-- Production is still running the earlier Render deployment at commit `36961c56e8e3e18433f146ecd7e11902e87f7dba`; the new kill-switch/recovery code is not live until a successful deployment of the newer `main` commit completes.
+- Daily paper kill switch and multiple-active recovery guard are implemented on `main`.
+- Live entry safeguards and lifecycle reconciliation are implemented on `main` as of commits `4f266e4975495f580fc413a208402132ed281480`, `9f4dabdf99e6ba4d06a2cee100ed60012fa2eb4f`, `edd596a0c6c6152e46683a865b8cdba55c9669d4`, and `ac9596baa6be0e6845a15e7c3335de204735f9e8`.
+- The new entry-guard/lifecycle-reconciliation changes are not live until a successful Render deployment of the current `main` commit completes.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Retain live learning history; do not silently reset or delete prior learning data. Post-market research must remain independent of live paper decisions/outcomes. Use normal repository changes and existing validation workflows only.

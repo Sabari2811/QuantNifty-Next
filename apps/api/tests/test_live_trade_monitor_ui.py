@@ -33,6 +33,14 @@ def test_live_monitor_reads_durable_paper_ledger_not_research_data():
     assert "/api/v1/paper/signal" not in text
 
 
+def test_live_monitor_has_explicit_closed_session_state():
+    text = INTELLIGENCE_HTML.read_text(encoding="utf-8")
+    assert "MARKET CLOSED" in text
+    assert "live stream paused" in text
+    assert "qnMarketClosed" in text
+    assert "No live option-chain polling" in text
+
+
 def test_main_exposes_read_only_paper_ledger_router():
     text = MAIN_PY.read_text(encoding="utf-8")
     assert "from quantnifty.paper_ledger_api import router as paper_ledger_router" in text

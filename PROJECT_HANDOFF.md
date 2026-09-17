@@ -23,7 +23,7 @@ The current project policy is deliberately narrower than NSE's broader derivativ
 
 - **Application runtime:** 09:00-16:00 IST, Monday-Friday.
 - **NIFTY live provider:** 09:15-15:30 IST only.
-- **Normal paper strategy:** entries during the normal session; normal positions must close before the 15:15 cash-session influence window.
+- **Normal paper strategy:** normal entries before the cash-session window; normal positions must close before 15:15 IST.
 - **Cash-session strategy:** `CAS_REENTRY`, new entries only 15:15-15:27 IST.
 - **Cash-session force exit:** 15:29 IST.
 - **Post-market research:** 15:30-16:00 IST, independent of live decisions/trades.
@@ -49,12 +49,13 @@ Relevant authoritative modules:
 - `cash_session_strategy.py` — deterministic `cas_reentry`, 15:15-15:27 entry window and 15:29 force exit.
 - `paper_trade_tracker.py` — normal-position close before cash session and cash force-close.
 - `paper_entry_gate.py` — three-trade daily cap, active-position lock and cash entry cutoff.
-- `live_paper_manager.py` — one-lot sizing, paper-only lifecycle, recovery guard and read-only exits.
+- `live_paper_manager.py` — one-lot sizing, paper-only lifecycle and durable recovery.
 - `after_market_lab.py` — independent raw-snapshot research track.
-- `after_market_scheduler.py` — starts post-market research at **15:30 IST** and retries until a durable completed stored-day result exists.
+- `after_market_scheduler.py` — starts post-market research at **15:30 IST** and now performs an overdue-position recovery guard before research, so a restart/deploy cannot leave a durable OPEN paper lifecycle into post-market.
 - `.github/workflows/render-service-resume.yml` — Render resume at 09:00 IST weekdays.
 - `.github/workflows/render-service-suspend.yml` — Render suspend at 16:00 IST weekdays.
 - `docs/RENDER_RUNTIME.md` — authoritative Render runtime/cost boundary.
+- `render.yaml` — now aligned to `quantnifty-production`, PostgreSQL 18, and the intended paid web-service runtime definition.
 
 ## Post-market learning boundary
 `after_market_lab.py` loads only the day's raw market snapshots and runs the configured research strategies counterfactually. It records `POST_MARKET`, `RAW_MARKET_SNAPSHOTS`, `READ_ONLY_AFTER_MARKET`, `research_only=true`, and `orders_placed=0`. It does not access live decision, paper-trade or live-outcome data. Any resulting policy information is for future deterministic adaptation and never changes an in-progress live decision.
@@ -66,25 +67,42 @@ Required production resources for this project:
 2. `quantnifty-production` — PostgreSQL, kept available for durable learning, paper and research history.
 3. Separate `QuantNifty` services/workers are unrelated and must remain disabled.
 
+Render workspace: `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).  
 Render service ID: `srv-dad5e767bikc739oighg`.
 
-GitHub Actions use the non-secret service ID and the repository secret `RENDER_API_KEY`. The secret must never be committed or placed in source. Scheduler cron is UTC: `30 3 * * 1-5` for 09:00 IST resume and `30 10 * * 1-5` for 16:00 IST suspend. Scheduler jitter must not widen the application/provider windows because the application is fail-closed outside its defined windows.
+Actual Render inspection on 2026-09-17 confirmed:
+- `quantnifty-api` exists in the correct workspace, uses `main`, is auto-deploy enabled, Singapore region, and is currently a paid `1c-2g` web service.
+- `quantnifty-production` exists, Singapore region, PostgreSQL 18, `basic_256mb`, and is available/not suspended.
+- The separate `QuantNifty` services are present in the workspace but are not this project's service and must not be enabled for this project.
 
-**Important audit note:** `render.yaml` describes a free Render web service/database configuration that does not by itself prove the current production resource/plan. Do not treat that file as proof that the deployed `quantnifty-api` is paid or that the production database is `quantnifty-production`; verify the actual Render service/database state before claiming deployment parity.
+GitHub Actions use the non-secret service ID and repository secret `RENDER_API_KEY`. The secret must never be committed or placed in source. Scheduler cron is UTC: `30 3 * * 1-5` for 09:00 IST resume and `30 10 * * 1-5` for 16:00 IST suspend. Scheduler jitter must not widen the application/provider windows because the application is fail-closed outside its defined windows.
 
-## Validation status and current gaps
-The repository contains extensive unit/contract tests for market boundaries, application runtime, cash strategy, paper lifecycle, learning isolation, UI telemetry, research and safety. The latest code changes added a regression test asserting post-market scheduling starts at 15:30 IST.
+**Production database configuration gap discovered during audit:** the running `quantnifty-api` runtime evidence currently reports a reachable PostgreSQL database named `quantnifty_learning`, not `quantnifty_production`. The service's runtime diagnostics showed `quantnifty_learning_user` and host `dpg-dafd0kmq1p3s73b8inf0-a`. The `quantnifty-production` database itself is available, but the service environment has not yet been safely switched because its connection string is a secret and must not be guessed or committed. `render.yaml` has been corrected to point future Blueprint configuration at `quantnifty-production`. Do not claim the live service is using `quantnifty-production` until Render service environment configuration is explicitly reconciled and revalidated.
 
-Local test execution could not be performed in this environment because outbound GitHub cloning/DNS was unavailable. The repository CI workflow is configured to compile the API and run `pytest -q apps/api/tests` on Python 3.11.
+## Deployment and production validation evidence
+Before this continuation, the deployed `quantnifty-api` was live on commit `99272c58ed0076d178d3e704ce98526feafe71a5`.
 
-Production validation is still a live/deployment task: verify the actual Render service state, latest deploy, health/status endpoints, PostgreSQL durability, live-provider isolation, read-only trading state, and the 16:00 suspend / 09:00 resume lifecycle. Do not claim the Render scheduler is validated merely because its workflow files exist; a successful manual/scheduled run using the configured `RENDER_API_KEY` is required.
+The audit confirmed runtime evidence with:
+- `trading=DISABLED`.
+- PostgreSQL reachable and durable.
+- Live-provider polling stopped outside the configured provider window.
+- Durable learning counters were present: 833 decisions, 148 outcomes, 10 research runs and 7,094 snapshots at the observed runtime point.
 
-## Audit trail for this continuation
-The latest audited `main` before continuation was commit `11e8908c13eeee1408a7b532a541a3bd6f7c99f8`. The continuation changed the post-market scheduler from 15:35 to **15:30 IST** and added a regression test. Runtime documentation was aligned to the same policy. No secrets or `data/instruments/fno.csv` were changed.
+The audit also exposed an important lifecycle-recovery issue: at 15:59 IST the runtime evidence still showed a durable paper position as `OPEN` even though the live-provider window had already closed. The normal live path is designed to close positions by 15:29, but a restart/deploy after the cutoff could restore a stale OPEN lifecycle. `after_market_scheduler.py` now performs a fail-closed overdue-position recovery before starting post-market research.
+
+A new Render deployment was triggered for commit `3e000c6a1bc4ef02d4f880b1f1ec1d002afdcdd9` after the repository changes. At the time this handoff was updated, that deployment was still progressing through Render's build/update lifecycle and therefore must not be described as fully production-validated yet.
+
+## Tests and CI
+The repository CI workflow compiles `apps/api/src` and runs `pytest -q apps/api/tests` on Python 3.11, plus the intelligence UI telemetry integrity checks. A regression test asserts the post-market scheduler starts at 15:30 IST. The scheduler recovery guard is covered by the existing scheduler test module and is isolated from live execution.
+
+Local GitHub cloning was unavailable in the current execution environment due outbound DNS/network restrictions, so local pytest execution was not claimed. GitHub Actions were observed starting for the latest main commits; final CI conclusion must be checked before claiming the full test gate passed.
+
+## Render runtime / cost boundary
+Application-level sleep is not sufficient to stop paid Render compute. The actual `quantnifty-api` service must be suspended at 16:00 IST and resumed at 09:00 IST weekdays. PostgreSQL must remain available. Render's API supports explicit service suspend/resume operations, and the repository workflows use the required API-key secret without committing it.
 
 ## Non-negotiable future rules
 Always follow:
 
 `inspect -> identify gaps -> implement -> test -> commit -> deploy -> validate -> update PROJECT_HANDOFF.md`
 
-Never redesign the architecture without an explicit requirement. Never enable real trading. Never carry paper positions overnight. Never use future market outcomes in live decisions. Keep post-market research independent. Keep PostgreSQL available. Suspend/resume the **actual Render application service**, not merely the Python process.
+Never redesign the architecture without an explicit requirement. Never enable real trading. Never carry paper positions overnight. Never use future market outcomes in live decisions. Keep post-market research independent. Keep PostgreSQL available. Suspend/resume the **actual Render application service**, not merely the Python process. Never modify `data/instruments/fno.csv`.

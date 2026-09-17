@@ -138,6 +138,12 @@ def record_research(research: dict[str, Any]) -> dict[str, Any]:
     return _append("research", {"timestamp": research.get("timestamp"), "day": research.get("day"), "research": research})
 
 
+def record_control(control: dict[str, Any]) -> dict[str, Any]:
+    timestamp = control.get("timestamp") or _utc_now()
+    day = control.get("day") or trading_day(timestamp)
+    return _append("paper_controls", {**control, "timestamp": timestamp, "day": day})
+
+
 def load_snapshots(day: str | None = None) -> list[dict[str, Any]]:
     events = _pg_events("snapshots", day)
     if events is None:

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Query
 
 from quantnifty.learning_store import load_events, load_snapshots
+from quantnifty.paper_control import activate_kill_switch, current_day, kill_switch_state
 from quantnifty.paper_trade_tracker import trading_day
 
 router = APIRouter(tags=["paper-trading"])
@@ -15,7 +16,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 
 def _day_now() -> str:
-    return datetime.now(IST).date().isoformat()
+    return current_day()
 
 
 def _num(value: Any) -> float:
@@ -103,9 +104,20 @@ def _decision_summary(day: str) -> dict[str, Any]:
     return {"total": len(events), "approved": approved, "blocked": blocked, "direction_distribution": dict(sorted(directions.items())), "signal_distribution": dict(sorted(names.items())), "latest": latest}
 
 
+@router.get("/api/v1/paper/control")
+def paper_control() -> dict[str, Any]:
+    return {"mode": "READ_ONLY_PAPER", "trading": "DISABLED", "kill_switch": kill_switch_state()}
+
+
+@router.post("/api/v1/paper/kill-switch")
+def paper_kill_switch() -> dict[str, Any]:
+    state = activate_kill_switch("MANUAL_KILL_SWITCH")
+    return {"mode": "READ_ONLY_PAPER", "trading": "DISABLED", "message": "Daily paper-trading kill switch activated. The live paper manager will close open positions on its next provider snapshot and will block all new entries for the rest of this IST trading day.", "kill_switch": state}
+
+
 @router.get("/api/v1/paper/ledger")
 def paper_ledger(day: str | None = Query(default=None, description="IST trading day YYYY-MM-DD; defaults to today")) -> dict[str, Any]:
     selected_day = str(day or _day_now()); closed = _closed_rows(selected_day); opened = _open_rows(selected_day); snapshots = [s for s in load_snapshots(selected_day) if isinstance(s, dict)]; latest_snapshot = snapshots[-1] if snapshots else None; open_rows = [_dynamic_open_row(row, latest_snapshot) for row in opened]
     realized = sum(_num(r.get("realized_pnl", r.get("gross_pnl_proxy"))) for r in closed); spot_proxy = sum(_num(r.get("spot_move_proxy")) for r in closed); unrealized = sum(_num(r.get("unrealized_pnl")) for r in open_rows if r.get("unrealized_pnl") is not None); total_pnl = realized + unrealized; option_rows = [r for r in closed if str(r.get("pnl_basis") or "").startswith("OPTION_PREMIUM") and _num(r.get("exit_price")) > 0]
     stale_open_count = sum(1 for outcome in _latest_open_lifecycle().values() if str(outcome.get("status") or "").upper() == "OPEN" and (str(outcome.get("day") or trading_day(outcome.get("entry_timestamp")) or "") < selected_day))
-    return {"mode": "READ_ONLY_PAPER", "day": selected_day, "currency": "INR", "status": "OK", "trading": "DISABLED", "session_policy": {"new_decisions_stop_at": "15:30 IST", "all_paper_positions_close_by": "15:30 IST", "overnight_carry": False}, "ledger": closed, "open_positions": open_rows, "mark_to_market": {"snapshot_timestamp": latest_snapshot.get("timestamp") if latest_snapshot else None, "spot": _num(latest_snapshot.get("spot")) if latest_snapshot else None, "open_unrealized_pnl": round(unrealized, 4), "dynamic": bool(open_rows)}, "summary": {"closed_trades": len(closed), "open_positions": len(open_rows), "realized_pnl": round(realized, 4), "unrealized_pnl": round(unrealized, 4), "total_pnl": round(total_pnl, 4), "gross_pnl_proxy": round(realized, 4), "spot_move_proxy": round(spot_proxy, 4), "option_premium_pnl_trades": len(option_rows), "net_pnl": round(total_pnl, 4), "charges": 0.0, "stale_open_positions": stale_open_count, "note": "Paper P&L only. Closed-trade P&L uses option premium when entry/exit prices are available; otherwise spot_move_proxy. Open positions are marked dynamically from the latest LIVE_PROVIDER snapshot. Broker charges are not modeled. Overnight carry is prohibited."}, "decisions": _decision_summary(selected_day)}
+    return {"mode": "READ_ONLY_PAPER", "day": selected_day, "currency": "INR", "status": "OK", "trading": "DISABLED", "kill_switch": kill_switch_state(selected_day), "session_policy": {"new_decisions_stop_at": "15:30 IST", "all_paper_positions_close_by": "15:30 IST", "overnight_carry": False}, "ledger": closed, "open_positions": open_rows, "mark_to_market": {"snapshot_timestamp": latest_snapshot.get("timestamp") if latest_snapshot else None, "spot": _num(latest_snapshot.get("spot")) if latest_snapshot else None, "open_unrealized_pnl": round(unrealized, 4), "dynamic": bool(open_rows)}, "summary": {"closed_trades": len(closed), "open_positions": len(open_rows), "realized_pnl": round(realized, 4), "unrealized_pnl": round(unrealized, 4), "total_pnl": round(total_pnl, 4), "gross_pnl_proxy": round(realized, 4), "spot_move_proxy": round(spot_proxy, 4), "option_premium_pnl_trades": len(option_rows), "net_pnl": round(total_pnl, 4), "charges": 0.0, "stale_open_positions": stale_open_count, "note": "Paper P&L only. Closed-trade P&L uses option premium when entry/exit prices are available; otherwise spot_move_proxy. Open positions are marked dynamically from the latest LIVE_PROVIDER snapshot. Broker charges are not modeled. Overnight carry is prohibited."}, "decisions": _decision_summary(selected_day)}

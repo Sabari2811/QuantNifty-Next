@@ -46,22 +46,31 @@ def test_any_recent_close_blocks_reentry_for_five_minutes(monkeypatch):
     assert gate["reason"] == "REENTRY_COOLDOWN"
 
 
-def test_same_direction_requires_new_structure_after_cooldown(monkeypatch):
-    monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: [_closed(direction="BEARISH", exit_spot=23220)])
+def test_same_direction_after_both_slots_requires_new_structure(monkeypatch):
+    rows = [
+        _closed(trade_id="T1", direction="BEARISH", exit_timestamp="2026-09-17T05:00:00+00:00", exit_spot=23220),
+        _closed(trade_id="T2", direction="BULLISH", exit_timestamp="2026-09-17T05:10:00+00:00", exit_spot=23220),
+    ]
+    monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: rows)
     gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", spot=23221), "BEARISH", strategy="gamma_transition")
     assert gate["action"] == "WAIT_CONFIRMATION"
     assert gate["reason"] == "REENTRY_STRUCTURE_REQUIRED"
 
 
-def test_same_direction_with_eight_point_displacement_allows_reentry(monkeypatch):
-    monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: [_closed(direction="BEARISH", exit_spot=23220)])
+def test_third_same_direction_with_eight_point_displacement_allows_reentry(monkeypatch):
+    rows = [
+        _closed(trade_id="T1", direction="BEARISH", exit_timestamp="2026-09-17T05:00:00+00:00", exit_spot=23220),
+        _closed(trade_id="T2", direction="BULLISH", exit_timestamp="2026-09-17T05:10:00+00:00", exit_spot=23220),
+    ]
+    monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: rows)
     gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", spot=23211), "BEARISH", strategy="gamma_transition")
     assert gate["action"] == "TAKE_TRADE"
     assert gate["reason"] == "NEW_STRUCTURAL_EVIDENCE"
     assert gate["directional_displacement_points"] == 9.0
+    assert gate["third_trade"] is True
 
 
-def test_direction_change_after_cooldown_allows_reentry(monkeypatch):
+def test_direction_change_after_cooldown_allows_second_direction_slot(monkeypatch):
     monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: [_closed(direction="BEARISH")])
     gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", spot=23220), "BULLISH")
     assert gate["action"] == "TAKE_TRADE"
@@ -97,14 +106,23 @@ def test_one_bullish_momentum_slot_per_day(monkeypatch):
     assert gate["reason"] == "BULLISH_MOMENTUM_TRADE_LIMIT"
 
 
-def test_non_momentum_third_slot_can_use_remaining_daily_capacity(monkeypatch):
-    rows = [
-        _closed(trade_id="T1", direction="BEARISH", strategy="directional", exit_timestamp="2026-09-17T05:00:00+00:00"),
-        _closed(trade_id="T2", direction="BULLISH", strategy="adaptive", exit_timestamp="2026-09-17T05:10:00+00:00"),
-    ]
+def test_third_trade_is_available_only_after_both_direction_slots(monkeypatch):
+    rows = [_closed(trade_id="T1", direction="BEARISH", exit_timestamp="2026-09-17T05:00:00+00:00")]
     monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: rows)
     gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", state="TREND_DOWN", spot=23190), "BEARISH", strategy="gamma_transition")
+    assert gate["allowed"] is False
+    assert gate["reason"] == "BEARISH_MOMENTUM_TRADE_LIMIT"
+
+
+def test_three_trade_cycle_allows_final_reversal_slot(monkeypatch):
+    rows = [
+        _closed(trade_id="T1", direction="BEARISH", exit_timestamp="2026-09-17T05:00:00+00:00"),
+        _closed(trade_id="T2", direction="BULLISH", exit_timestamp="2026-09-17T05:10:00+00:00"),
+    ]
+    monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: rows)
+    gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", state="TREND_DOWN", spot=23200), "BEARISH", strategy="gamma_transition")
     assert gate["allowed"] is True
+    assert gate["third_trade"] is True
 
 
 def test_no_new_entry_during_final_preclose_minute(monkeypatch):

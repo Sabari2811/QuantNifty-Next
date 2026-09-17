@@ -8,7 +8,8 @@ from zoneinfo import ZoneInfo
 from quantnifty.after_market_lab import latest_research, run_after_market_lab
 
 IST = ZoneInfo("Asia/Kolkata")
-RUN_AT = time(15, 35)
+# Post-market research starts as soon as the NIFTY live-provider window closes.
+RUN_AT = time(15, 30)
 logger = logging.getLogger(__name__)
 
 

@@ -119,7 +119,7 @@ def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = 
     lifecycle = evaluate_paper_entry(data, direction, mode)
     result["paper_entry_gate"] = lifecycle
 
-    active_trade = lifecycle.get("reason") == "ACTIVE_TRADE_LOCK"
+    active_trade = lifecycle.get("reason") == "ACTIVE_TRADE_LOCK" and bool(risk.get("approved"))
     if active_trade:
         result["status"] = "HOLD_ACTIVE_TRADE"
         result["decision_action"] = "HOLD_ACTIVE_TRADE"

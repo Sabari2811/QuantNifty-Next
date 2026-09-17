@@ -108,6 +108,16 @@ def _set_entry_block(risk: dict[str, Any], reason: str) -> None:
     risk["approved"] = False
 
 
+def _decision_strategy(result: dict[str, Any]) -> str | None:
+    signal = result.get("signal") if isinstance(result, dict) else None
+    if isinstance(signal, dict):
+        adaptive = signal.get("adaptive")
+        if isinstance(adaptive, dict) and adaptive.get("selected_strategy"):
+            return str(adaptive.get("selected_strategy"))
+    value = result.get("strategy") if isinstance(result, dict) else None
+    return str(value) if value else None
+
+
 def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:
     signal = result.get("signal") if isinstance(result, dict) else {}
     risk = result.get("risk") if isinstance(result, dict) else {}
@@ -116,7 +126,7 @@ def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = 
     risk = risk if isinstance(risk, dict) else {}
     plan = plan if isinstance(plan, dict) else {}
     direction = str(signal.get("direction") or "NEUTRAL").upper()
-    lifecycle = evaluate_paper_entry(data, direction, mode)
+    lifecycle = evaluate_paper_entry(data, direction, mode, _decision_strategy(result))
     result["paper_entry_gate"] = lifecycle
 
     active_trade = lifecycle.get("reason") == "ACTIVE_TRADE_LOCK" and bool(risk.get("approved"))

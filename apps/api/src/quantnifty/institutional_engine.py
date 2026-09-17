@@ -129,11 +129,11 @@ def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None,
     requested = str(strategy or "directional").strip().lower()
     if requested not in {"directional","gamma_blast","adaptive"}: raise ValueError("strategy must be directional, gamma_blast, or adaptive")
     input_validation = validate_snapshot(data, mode)
-    session = session_decision_policy(data)
+    session = session_decision_policy(data, previous)
     signal = institutional_signal(data, previous)
     if requested == "adaptive":
         if session["phase"] == "CAS_REENTRY":
-            cas = session["cas"]; signal = dict(signal); signal["direction"] = cas["direction"] if cas["valid"] else "NEUTRAL"; signal["confidence"] = max(_f(signal.get("confidence")), cas["confidence"]) if cas["valid"] else _f(signal.get("confidence")); signal["adaptive"] = {"regime": "CAS_REENTRY", "selected_strategy": "cas_reentry" if cas["valid"] else "standby", "preferred_direction": cas["direction"], "readiness_pct": cas["confidence"], "reason": session["reason"], "risk_profile": "CAS_CONTROLLED", "learning": {"cas_source": cas.get("source")}}
+            cas = session["cas"]; signal = dict(signal); signal["direction"] = cas["direction"] if cas["valid"] else "NEUTRAL"; signal["confidence"] = max(_f(signal.get("confidence")), cas["confidence"]) if cas["valid"] else _f(signal.get("confidence")); signal["adaptive"] = {"regime": "CAS_REENTRY", "selected_strategy": "cas_reentry" if cas["valid"] else "standby", "preferred_direction": cas["direction"], "readiness_pct": cas["confidence"], "reason": session["reason"], "risk_profile": "CAS_CONTROLLED", "learning": {"cas_source": cas.get("source"), "cash_strategy": cas.get("strategy")}}
         elif session["phase"] == "NORMAL_ADAPTIVE":
             signal = _adaptive_signal(data, previous, signal, mode)
         else:

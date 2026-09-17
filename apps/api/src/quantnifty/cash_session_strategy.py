@@ -3,11 +3,23 @@ from __future__ import annotations
 from datetime import time
 from typing import Any
 
-CASH_SESSION_START = time(15, 15)
-CASH_ENTRY_CUTOFF = time(15, 27)
-CASH_FORCE_EXIT = time(15, 29)
+# NSE Closing Auction Session (CAS) applies to eligible cash-segment stocks.
+# QuantNifty does not treat NIFTY options as CAS instruments. It uses this
+# window only as an observable cash-market influence on NIFTY derivatives.
+CAS_START = time(15, 15)
+CAS_ORDER_ENTRY_START = time(15, 20)
+CAS_ORDER_ENTRY_END = time(15, 30)
+CAS_MATCHING_END = time(15, 35)
+DERIVATIVES_CLOSE = time(15, 40)
+CAS_STRATEGY_ENTRY_CUTOFF = time(15, 30)
+CAS_STRATEGY_FORCE_EXIT = time(15, 39)
 MIN_SPOT_MOVE_POINTS = 8.0
 MIN_SCORE = 70.0
+
+# Backward-compatible aliases used by existing callers/tests.
+CASH_SESSION_START = CAS_START
+CASH_ENTRY_CUTOFF = CAS_STRATEGY_ENTRY_CUTOFF
+CASH_FORCE_EXIT = CAS_STRATEGY_FORCE_EXIT
 
 
 def _f(value: Any) -> float:
@@ -60,11 +72,12 @@ def _option_momentum(snapshot: dict[str, Any]) -> tuple[float, float]:
 
 
 def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Deterministic late-session NIFTY options strategy using available observations only.
+    """Deterministic CAS-aware late-session NIFTY options strategy.
 
-    This is a cash-market-influence window for NIFTY options, not a claim that
-    the NIFTY index itself participates in the equity cash closing auction.
-    The strategy requires directional movement plus participation/OI evidence.
+    CAS itself is a cash-segment auction. This function never claims that the
+    NIFTY index/options participate in CAS and never consumes a future auction
+    result. It uses observations available before/within the CAS window to
+    derive a read-only NIFTY-derivatives signal.
     """
     previous = previous or {}
     spot = _f(snapshot.get("spot"))
@@ -74,10 +87,7 @@ def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | 
     if move_points == 0.0:
         premium_bias = "BULLISH" if bullish_premium > bearish_premium else "BEARISH" if bearish_premium > bullish_premium else "NEUTRAL"
         recorded_bias = str(snapshot.get("bias") or "NEUTRAL").upper()
-        if premium_bias == "NEUTRAL" and recorded_bias in {"BULLISH", "BEARISH"}:
-            direction = recorded_bias
-        else:
-            direction = premium_bias
+        direction = recorded_bias if premium_bias == "NEUTRAL" and recorded_bias in {"BULLISH", "BEARISH"} else premium_bias
     else:
         direction = "BULLISH" if move_points > 0 else "BEARISH"
 
@@ -106,8 +116,15 @@ def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | 
 
     valid = direction in {"BULLISH", "BEARISH"} and score >= MIN_SCORE and liquidity >= 50.0
     return {
-        "strategy": "cash_session",
-        "session": "CASH_INFLUENCE_15:15_15:30",
+        "strategy": "cas_reentry",
+        "session": "NSE_CAS_INFLUENCE_15:15_15:35",
+        "cas": {
+            "applies_to": "ELIGIBLE_CASH_SEGMENT_STOCKS",
+            "nifty_options_participate_in_cas": False,
+            "reference_vwap_window": "15:00-15:15 IST",
+            "order_entry_window": "15:20-15:30 IST",
+            "matching_window": "15:30-15:35 IST",
+        },
         "valid": valid,
         "direction": direction if valid else "NEUTRAL",
         "confidence": round(min(99.0, score), 1),
@@ -123,12 +140,17 @@ def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | 
         "expected_move_change_pct": round(expected_move_change, 2),
         "gamma_regime": "NEGATIVE" if gex < 0 else "POSITIVE" if gex > 0 else "NEUTRAL",
         "liquidity": round(liquidity, 1),
-        "entry_cutoff": CASH_ENTRY_CUTOFF.strftime("%H:%M"),
-        "force_exit": CASH_FORCE_EXIT.strftime("%H:%M"),
-        "reason": "late-session momentum + participation + OI confirmation" if valid else "cash-session confirmation threshold not met",
+        "entry_cutoff": CAS_STRATEGY_ENTRY_CUTOFF.strftime("%H:%M"),
+        "force_exit": CAS_STRATEGY_FORCE_EXIT.strftime("%H:%M"),
+        "derivatives_close": DERIVATIVES_CLOSE.strftime("%H:%M"),
+        "reason": "CAS-aware late-session momentum + participation + OI confirmation" if valid else "CAS-aware confirmation threshold not met",
         "research_only": False,
         "read_only_execution": True,
     }
 
 
-__all__ = ["CASH_SESSION_START", "CASH_ENTRY_CUTOFF", "CASH_FORCE_EXIT", "evaluate_cash_strategy"]
+__all__ = [
+    "CAS_START", "CAS_ORDER_ENTRY_START", "CAS_ORDER_ENTRY_END", "CAS_MATCHING_END",
+    "DERIVATIVES_CLOSE", "CAS_STRATEGY_ENTRY_CUTOFF", "CAS_STRATEGY_FORCE_EXIT",
+    "CASH_SESSION_START", "CASH_ENTRY_CUTOFF", "CASH_FORCE_EXIT", "evaluate_cash_strategy",
+]

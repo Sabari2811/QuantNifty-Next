@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from quantnifty.learning_store import claim_paper_trade_lock, load_events, load_snapshots, reconcile_paper_trade_lock, record_outcome, release_paper_trade_lock
 from quantnifty.paper_control import activate_kill_switch, current_day, kill_switch_state
+from quantnifty.paper_entry_gate import evaluate_paper_entry
 from quantnifty.paper_trade_tracker import PaperTrade, make_trade_id, same_trading_day, session_close_required, trading_day
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -174,9 +175,6 @@ class LivePaperManager:
                     self._close(snapshots[-1], guard_decision, "MULTIPLE_ACTIVE_TRADE_GUARD")
                 current = [keep]
             else:
-                # No safe exit mark exists yet. Do not restore any position into
-                # the in-memory executor; the durable entry gate will block all
-                # new entries until the next snapshot allows reconciliation.
                 current = []
         open_ids = {str(row.get("trade_id")) for row in current if row.get("trade_id")}
         reconcile_paper_trade_lock(today, open_ids)
@@ -194,10 +192,14 @@ class LivePaperManager:
     def _open(self, snapshot: dict[str, Any], decision: dict[str, Any]) -> bool:
         signal = decision.get("signal") or {}; plan = decision.get("execution_plan") or {}; instrument = plan.get("instrument"); leg = _leg(snapshot, instrument); timestamp = str(snapshot.get("timestamp") or ""); spot = _f(snapshot.get("spot")); direction = str(signal.get("direction") or "NEUTRAL"); price = _price(leg, "BUY"); delta = _delta(leg)
         if not timestamp or spot <= 0 or direction not in {"BULLISH", "BEARISH"} or price <= 0 or delta is None or abs(delta) <= 0: return False
+        strategy = str((signal.get("adaptive") or {}).get("selected_strategy") or decision.get("strategy") or "adaptive")
+        gate = evaluate_paper_entry(snapshot, direction, "LIVE", strategy)
+        if not bool(gate.get("allowed")):
+            return False
         day = trading_day(timestamp); next_sequence = self.sequence + 1; trade_id = make_trade_id(timestamp, next_sequence)
         if not day or not claim_paper_trade_lock(day, trade_id): return False
         try:
-            self.sequence = next_sequence; strategy = str((signal.get("adaptive") or {}).get("selected_strategy") or decision.get("strategy") or "adaptive"); quantity = DEFAULT_NIFTY_LOT_SIZE; self.entry_risk = _risk_levels(spot, direction, plan); self.entry_delta = delta; self.entry_trigger = plan.get("entry"); self.entry_mode = plan.get("entry_mode"); self.exit_policy = plan.get("exit_policy") if isinstance(plan.get("exit_policy"), dict) else {}
+            self.sequence = next_sequence; quantity = DEFAULT_NIFTY_LOT_SIZE; self.entry_risk = _risk_levels(spot, direction, plan); self.entry_delta = delta; self.entry_trigger = plan.get("entry"); self.entry_mode = plan.get("entry_mode"); self.exit_policy = plan.get("exit_policy") if isinstance(plan.get("exit_policy"), dict) else {}
             self.active = PaperTrade(trade_id, strategy, direction, timestamp, spot); self.entry_price = price; self.entry_quantity = quantity; self.instrument = instrument if isinstance(instrument, dict) else None; self.entry_reasons = _entry_reasons(decision); self.entry_decision = decision; delta_risk = _delta_premium_levels(price, delta, self.entry_risk)
             record_outcome({**asdict(self.active), "day": trading_day(timestamp), "lifecycle": "OPEN", "entry_price": round(price, 6), "entry_price_source": "ASK_THEN_LAST_THEN_BID", "quantity": quantity, "instrument": self.instrument, "entry_reasons": self.entry_reasons, "entry_decision": self.entry_decision, "entry_risk": self.entry_risk, "entry_delta": round(delta, 6), "delta_risk_at_entry": delta_risk, "entry_trigger": self.entry_trigger, "entry_mode": self.entry_mode, "exit_policy": self.exit_policy, "risk_anchor": "ENTRY_PREMIUM_WITH_LIVE_DELTA", "position_policy": "ONE_POSITION_ONE_LOT", "read_only": True, "execution": "NONE"})
             return True
@@ -242,9 +244,9 @@ class LivePaperManager:
         current_price = _f(trade_view.get("current_price")); premium_sl = _f(trade_view.get("premium_sl")); premium_target = _f(trade_view.get("premium_target"))
         hit_sl = premium_sl > 0 and current_price > 0 and current_price <= premium_sl
         hit_target = premium_target > 0 and current_price >= premium_target
-        should_close = session_close_required(timestamp) or not same_day or hit_sl or hit_target or not bool((decision.get("risk") or {}).get("approved"))
+        should_close = session_close_required(timestamp) or not same_day or hit_sl or hit_target
         if should_close:
-            reason = "SESSION_CLOSE" if session_close_required(timestamp) else "OVERNIGHT_GUARD" if not same_day else "DELTA_PREMIUM_STOP" if hit_sl else "DELTA_PREMIUM_TARGET" if hit_target else "SIGNAL_INVALIDATION"
+            reason = "SESSION_CLOSE" if session_close_required(timestamp) else "OVERNIGHT_GUARD" if not same_day else "DELTA_PREMIUM_STOP" if hit_sl else "DELTA_PREMIUM_TARGET"
             outcome = self._close(snapshot, decision, reason)
             return {"status": "CLOSED", "outcome": outcome}
         return {"status": "OPEN", "trade": trade_view}
@@ -256,8 +258,6 @@ class LivePaperManager:
                 return {"status": "CLOSED", "outcome": outcome, "kill_switch": True}
             return {"status": "KILL_SWITCH_ACTIVE", "kill_switch": True}
         if self.active is None:
-            # Reconcile the durable ledger before every potential new entry.
-            # This catches restart/multi-instance state before an entry can occur.
             self._recover()
         if self.active is not None:
             return self._manage_active(snapshot, decision)
@@ -265,5 +265,5 @@ class LivePaperManager:
         if bool((decision.get("risk") or {}).get("approved")) and plan.get("instrument") and str(decision.get("decision_action") or "") == "TAKE_TRADE":
             if self._open(snapshot, decision):
                 return {"status": "OPEN", "trade": self._trade_view(snapshot)}
-            return {"status": "NO_TRADE", "reason": "ACTIVE_TRADE_LOCK_OR_ENTRY_DATA_INVALID"}
+            return {"status": "NO_TRADE", "reason": "ENTRY_CAP_OR_ACTIVE_TRADE_LOCK_OR_ENTRY_DATA_INVALID"}
         return {"status": str(decision.get("decision_action") or "NO_TRADE"), "reason": ((decision.get("risk") or {}).get("reasons") or ["ENTRY_NOT_APPROVED"])[-1]}

@@ -57,11 +57,7 @@ def session_phase(snapshot: dict[str, Any]) -> dict[str, Any]:
             "decision_enabled": True,
             "reason": "nse_closing_auction_influence_window",
             "local_time": local.isoformat(),
-            "cas": {
-                "start": CAS_START.strftime("%H:%M"),
-                "matching_end": CAS_MATCHING_END.strftime("%H:%M"),
-                "nifty_options_participate_in_cas": False,
-            },
+            "cas": {"start": CAS_START.strftime("%H:%M"), "matching_end": CAS_MATCHING_END.strftime("%H:%M"), "nifty_options_participate_in_cas": False},
         }
     if t < DERIVATIVES_CLOSE:
         return {
@@ -77,12 +73,7 @@ def session_phase(snapshot: dict[str, Any]) -> dict[str, Any]:
 
 
 def cas_signal(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Produce a CAS-aware NIFTY-options signal from current observations.
-
-    A provider-supplied CAS signal is optional evidence only. The live decision
-    never consumes a future auction result and never assumes NIFTY options are
-    themselves traded in the cash CAS.
-    """
+    """Produce a CAS-aware NIFTY-options signal from current observations."""
     strategy = evaluate_cash_strategy(snapshot, previous)
     raw = _cas_payload(snapshot)
     raw_direction = str(raw.get("direction") or raw.get("bias") or "NEUTRAL").upper()
@@ -94,11 +85,7 @@ def cas_signal(snapshot: dict[str, Any], previous: dict[str, Any] | None = None)
         "confidence": strategy.get("confidence", 0.0),
         "source": "DETERMINISTIC_CAS_AWARE" if strategy.get("valid") else raw_source,
         "strategy": strategy,
-        "provider_cas_evidence": {
-            "available": bool(raw),
-            "direction": raw_direction if raw_direction in {"BULLISH", "BEARISH"} else "NEUTRAL",
-            "source": raw_source,
-        },
+        "provider_cas_evidence": {"available": bool(raw), "direction": raw_direction if raw_direction in {"BULLISH", "BEARISH"} else "NEUTRAL", "source": raw_source},
     }
 
 
@@ -106,11 +93,13 @@ def session_decision_policy(snapshot: dict[str, Any], previous: dict[str, Any] |
     phase = session_phase(snapshot)
     cas = cas_signal(snapshot, previous) if phase["phase"] == "CAS_REENTRY" else {"available": False, "valid": False, "direction": "NEUTRAL", "confidence": 0.0, "source": None}
     if phase["phase"] == "CAS_REENTRY":
-        allow_entry = bool(cas["valid"]) and _timestamp(snapshot.get("timestamp")).astimezone(IST).time() < CAS_STRATEGY_ENTRY_CUTOFF
+        timestamp = _timestamp(snapshot.get("timestamp"))
+        allow_entry = bool(cas["valid"]) and timestamp is not None and timestamp.astimezone(IST).time() < CAS_STRATEGY_ENTRY_CUTOFF
         return {
             **phase,
             "cas": cas,
             "cas_strategy": cas.get("strategy"),
+            "cash_strategy": cas.get("strategy"),
             "allow_normal_adaptive": False,
             "allow_new_trade": allow_entry,
             "selected_strategy": "cas_reentry" if allow_entry else "standby",
@@ -118,5 +107,5 @@ def session_decision_policy(snapshot: dict[str, Any], previous: dict[str, Any] |
             "reason": "deterministic CAS-aware strategy confirmed" if allow_entry else "waiting for CAS-aware confirmation or entry cutoff",
         }
     if phase["phase"] == "NORMAL_ADAPTIVE":
-        return {**phase, "cas": cas, "cas_strategy": None, "allow_normal_adaptive": True, "allow_new_trade": True, "selected_strategy": None, "preferred_direction": "NEUTRAL"}
-    return {**phase, "cas": cas, "cas_strategy": None, "allow_normal_adaptive": False, "allow_new_trade": False, "selected_strategy": "standby", "preferred_direction": "NEUTRAL"}
+        return {**phase, "cas": cas, "cas_strategy": None, "cash_strategy": None, "allow_normal_adaptive": True, "allow_new_trade": True, "selected_strategy": None, "preferred_direction": "NEUTRAL"}
+    return {**phase, "cas": cas, "cas_strategy": None, "cash_strategy": None, "allow_normal_adaptive": False, "allow_new_trade": False, "selected_strategy": "standby", "preferred_direction": "NEUTRAL"}

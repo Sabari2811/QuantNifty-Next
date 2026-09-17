@@ -3,19 +3,21 @@
 QuantNifty-Next is intended to run on weekdays only during the useful operating window:
 
 - 09:00 IST: application runtime starts/resumes.
-- 09:15-15:40 IST: NSE NIFTY equity-derivatives live-provider polling and live paper lifecycle.
-- 15:15-15:35 IST: NSE Closing Auction Session (CAS) is observed as a cash-market influence; NIFTY options are not CAS instruments.
-- 15:30 IST: CAS-aware new entries stop; existing CAS-aware NIFTY paper positions may be managed until the derivatives close guard.
-- 15:39 IST: all NIFTY paper positions are forced closed, one minute before the 15:40 derivatives close.
-- 15:40-16:00 IST: post-market research, strategy comparison, P&L and result generation.
+- 09:15-15:30 IST: NSE NIFTY live-provider polling and live paper lifecycle.
+- 15:15-15:27 IST: cash-session strategy may generate a new NIFTY-options paper entry when its deterministic confirmation passes.
+- Before 15:15 IST: normal paper positions are closed before the cash-session influence window.
+- 15:29 IST: any remaining cash-session NIFTY paper position is force-closed.
+- 15:30-16:00 IST: independent post-market research, strategy comparison, P&L and result generation from the day's raw snapshots.
 - 16:00 IST: application compute is suspended.
 - Saturday/Sunday: application compute remains suspended.
 
-The application-level session guard is deliberately narrower for market data: provider polling remains disabled before 09:15 and at/after 15:40. The 09:00-16:00 runtime window exists for pre-market initialization and the post-market lab.
+The application-level session guard is deliberately narrower for market data: provider polling remains disabled before 09:15 and at/after 15:30. The 09:00-16:00 runtime window exists for pre-market initialization and the independent post-market lab.
 
 ## NSE timing authority
 
-NSE currently documents CAS as a separate 20-minute session from 15:15 to 15:35 for eligible cash-segment stocks, with reference-price calculation/transition at 15:15-15:20, order entry at 15:20-15:30 and matching/trade confirmation at 15:30-15:35. NSE separately documents equity-derivatives regular trading from 09:15 to 15:40. QuantNifty therefore treats CAS as an influence/evidence window, not as a trading session for NIFTY options.
+NSE Closing Auction Session (CAS) is a separate cash-segment session for eligible cash-segment stocks. QuantNifty observes the cash session only as an underlying-market influence/evidence window; NIFTY options are not CAS instruments. QuantNifty's own paper-entry policy is intentionally narrower: `CAS_REENTRY` entries are permitted only from 15:15 through 15:27 IST, and the resulting paper position is force-closed by 15:29 IST.
+
+NIFTY equity-derivatives live-provider access is independently closed at 15:30 IST by project policy. Post-market research begins at that boundary and does not consume live paper decisions, live outcomes or future auction results.
 
 ## Important billing boundary
 
@@ -25,13 +27,13 @@ A Python sleep or application-level closed state does **not** stop a paid Render
 
 For QuantNifty-Next only:
 
-1. `quantnifty-api` — paid web service, active only during the runtime window.
+1. `quantnifty-api` — paid web-service compute, active only during the 09:00-16:00 weekday runtime window.
 2. `quantnifty-production` — paid PostgreSQL for durable production learning/paper/research data. Keep this database available; do not suspend it as part of the daily compute schedule.
 3. Do not enable the separate `QuantNifty` worker/services unless explicitly required by a later architecture change.
 
 ## Daily scheduler
 
-The repository now contains GitHub Actions scheduler workflows for the actual Render service lifecycle. They require one repository secret:
+The repository contains GitHub Actions scheduler workflows for the actual Render service lifecycle. They require one repository secret:
 
 - `RENDER_API_KEY` — a Render API key with permission to suspend/resume the service.
 

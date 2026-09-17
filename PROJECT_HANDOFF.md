@@ -15,7 +15,7 @@ Do not modify `QuantNifty`, `data/instruments/fno.csv`, or commit secrets.
 ## Render runtime / cost boundary
 The application runtime window is **09:00-16:00 IST, Monday-Friday**. This intentionally includes 09:00-09:15 pre-market initialization and 15:30-16:00 post-market research. The live provider remains separately guarded to **09:15-15:30 IST**. The new `application_runtime_state()` / `is_application_runtime_window()` helpers in `apps/api/src/quantnifty/market_session.py` make this boundary explicit and add runtime state to the closed payload.
 
-The production cost-saving design is: paid `quantnifty-api` compute active only during the 09:00-16:00 weekday window; paid `quantnifty-production` PostgreSQL remains available for durable learning, paper trades and research history. Application sleep alone does not stop paid Render compute; the Render service itself must be suspended/resumed. Render provides service suspend/resume API endpoints. The required scheduler configuration is documented in `docs/RENDER_RUNTIME.md`. No Render API secret is committed.
+The production cost-saving design is: paid `quantnifty-api` compute active only during the 09:00-16:00 weekday window; paid `quantnifty-production` PostgreSQL remains available for durable learning, paper trades and research history. Application sleep alone does not stop paid Render compute; the Render service itself must be suspended/resumed. The required scheduler configuration is documented in `docs/RENDER_RUNTIME.md`. No Render API secret is committed.
 
 Required QuantNifty-Next production resources:
 - `quantnifty-api`: paid `0.5c-512mb` / Starter-equivalent compute.
@@ -48,6 +48,27 @@ For the **current open trade**, the monitor shows option premium entry -> curren
 For **previous completed trades today**, the monitor shows trade number, direction, strategy, option/strike, entry premium, exit premium, entry spot, exit spot, frozen NIFTY SL, frozen NIFTY target, realized P&L, exit reason, quantity and entry/exit times. The component refreshes every 5 seconds and uses only the current IST-day paper ledger.
 
 The UI enhancement is implemented in `apps/api/src/quantnifty/web/intelligence.html`. The application now explicitly mounts `paper_ledger_api.py` from `main.py`, making the durable paper ledger available to the live monitor. This remains read-only and does not submit, modify or cancel broker orders.
+
+## Paper-trade discrepancy guard and daily kill switch
+The live monitor screenshot on 2026-09-17 showed **6 completed · 2 active** while only one active trade was rendered. This exposed a lifecycle-recovery edge case: `LivePaperManager._recover()` previously restored only the newest OPEN trade into memory while leaving an older OPEN lifecycle in the durable ledger. That could violate the intended one-position-at-a-time invariant across a service restart.
+
+`live_paper_manager.py` now enforces a single-active invariant during recovery. If multiple current-day OPEN paper trades are found, the newest entry is retained and older orphaned OPEN trades are closed at the latest available snapshot with reason `MULTIPLE_ACTIVE_TRADE_GUARD`. This is paper-only and does not represent a broker action.
+
+A persistent **daily paper kill switch** is now implemented in `paper_control.py` and stored through the durable learning-event store as `paper_controls`. It is scoped to the **current IST trading day only** and automatically ceases to apply on the next IST trading day. When active:
+- all new paper entries are blocked;
+- any existing paper position is closed on the next live snapshot with reason `MANUAL_KILL_SWITCH`;
+- previously closed trades remain untouched;
+- the kill state survives service restart because it is persisted in PostgreSQL when configured, with the existing filesystem fallback otherwise;
+- real trading remains disabled.
+
+Control endpoints:
+- `/api/v1/paper/control` — current kill-switch state.
+- `POST /api/v1/paper/kill-switch` — activate the daily kill switch.
+- `/paper-control` — dedicated browser control page with confirmation and status.
+
+The kill switch intentionally has **no reset endpoint for the same day**. The next IST trading day starts clear automatically. The dedicated control page links back to `/intelligence`.
+
+The current live monitor's left-side **Brain Plan** is a next/current decision plan, not the frozen risk plan of the already-open trade. Therefore it can show `WAIT_FOR_TRIGGER` and different spot SL/target values while an existing trade remains OPEN. The active trade's frozen entry/risk values are shown separately in the Active Paper Trade panel. This distinction should remain explicit in future UI revisions.
 
 ## V3 thesis-hold research
 The research lifecycle is:
@@ -123,6 +144,8 @@ The dashboard previously connected to `/ws` while the backend only exposed `/ws/
 - Live monitor current/previous trade UI remains on `main`.
 - Dual learning and post-market isolation remain on `main`.
 - Real trading remains permanently disabled.
+- Daily paper kill switch and multiple-active recovery guard are implemented on `main` as of commit `5fe0597b5ef0e0e9cd0db6551494136d9415835b`.
+- Production is still running the earlier Render deployment at commit `36961c56e8e3e18433f146ecd7e11902e87f7dba`; the new kill-switch/recovery code is not live until a successful deployment of the newer `main` commit completes.
 
 ## Non-negotiable rules
 Never commit secrets or `data_Review.txt`; never use future outcomes in live decisions; never use historical recordings for live Adaptive learning; never represent research as actual trades; never submit real orders; no overnight paper positions; do not touch `data/instruments/fno.csv` or unrelated audit/backup artifacts. Retain live learning history; do not silently reset or delete prior learning data. Post-market research must remain independent of live paper decisions/outcomes. Use normal repository changes and existing validation workflows only.

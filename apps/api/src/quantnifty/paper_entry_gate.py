@@ -10,6 +10,8 @@ REENTRY_COOLDOWN_MINUTES = 5
 MIN_REENTRY_DISPLACEMENT_POINTS = 8.0
 MAX_DAILY_TRADES = 3
 MAX_MOMENTUM_TRADES_PER_DIRECTION = 1
+PAPER_ENTRY_CUTOFF_HOUR = 15
+PAPER_ENTRY_CUTOFF_MINUTE = 29
 MOMENTUM_STRATEGIES = {
     "directional",
     "adaptive",
@@ -89,9 +91,12 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     if timestamp is None or not day:
         return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "TIMESTAMP_REQUIRED_FOR_PAPER_ENTRY"}
 
+    local_time = timestamp.astimezone(timezone.utc).astimezone(__import__("zoneinfo").zoneinfo.ZoneInfo("Asia/Kolkata")).time()
     session = market_session_state(timestamp.astimezone(timezone.utc))
     if not bool(session.get("open")):
         return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "MARKET_SESSION_CLOSED", "market_session": session}
+    if (local_time.hour, local_time.minute) >= (PAPER_ENTRY_CUTOFF_HOUR, PAPER_ENTRY_CUTOFF_MINUTE):
+        return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "PAPER_ENTRY_CUTOFF", "cutoff": "15:29 IST"}
 
     active, closed = _lifecycle(day)
     if active:
@@ -212,4 +217,4 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     }
 
 
-__all__ = ["evaluate_paper_entry", "REENTRY_COOLDOWN_MINUTES", "MIN_REENTRY_DISPLACEMENT_POINTS", "MAX_DAILY_TRADES", "MAX_MOMENTUM_TRADES_PER_DIRECTION", "MOMENTUM_STRATEGIES"]
+__all__ = ["evaluate_paper_entry", "REENTRY_COOLDOWN_MINUTES", "MIN_REENTRY_DISPLACEMENT_POINTS", "MAX_DAILY_TRADES", "MAX_MOMENTUM_TRADES_PER_DIRECTION", "PAPER_ENTRY_CUTOFF_HOUR", "PAPER_ENTRY_CUTOFF_MINUTE", "MOMENTUM_STRATEGIES"]

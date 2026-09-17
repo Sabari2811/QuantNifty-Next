@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from quantnifty.entry_guard import evaluate_entry_guards
+
 VALID_DIRECTIONS = {"BULLISH", "BEARISH", "NEUTRAL"}
 
 
@@ -97,12 +99,21 @@ def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = 
     signal = result.get("signal") if isinstance(result, dict) else {}
     risk = result.get("risk") if isinstance(result, dict) else {}
     plan = result.get("execution_plan") if isinstance(result, dict) else {}
+    guard = evaluate_entry_guards(data, result, mode)
     stages = {
         "input": validate_snapshot(data, mode),
         "signal": validate_signal(signal if isinstance(signal, dict) else {}),
         "risk": validate_risk(risk if isinstance(risk, dict) else {}),
         "execution_plan": validate_execution_plan(plan if isinstance(plan, dict) else {}, signal if isinstance(signal, dict) else {}, risk if isinstance(risk, dict) else {}),
     }
+    if isinstance(guard, dict) and guard.get("applied"):
+        stages["entry_guard"] = {
+            "valid": not bool(guard.get("blocked")),
+            "stage": "entry_guard",
+            "errors": list(guard.get("reasons") or []),
+            "warnings": [],
+            "evidence": guard,
+        }
     errors = [f"{name}:{err}" for name, stage in stages.items() for err in stage["errors"]]
     warnings = [f"{name}:{warning}" for name, stage in stages.items() for warning in stage.get("warnings", [])]
     return {"valid": not errors, "stages": stages, "errors": errors, "warnings": warnings}

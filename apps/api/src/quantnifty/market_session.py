@@ -7,10 +7,9 @@ IST = ZoneInfo("Asia/Kolkata")
 # Paid application runtime window. The live market-provider window is narrower.
 RUNTIME_OPEN = time(9, 0)
 RUNTIME_CLOSE = time(16, 0)
-# NSE equity-derivatives regular session. CAS is a cash-segment session and does
-# not change the NIFTY derivatives close.
+# QuantNifty-Next policy: live NIFTY provider access stops at 15:30 IST.
 MARKET_OPEN = time(9, 15)
-MARKET_CLOSE = time(15, 40)
+MARKET_CLOSE = time(15, 30)
 
 
 def application_runtime_state(now: datetime | None = None) -> dict[str, object]:
@@ -30,10 +29,11 @@ def is_application_runtime_window(now: datetime | None = None) -> bool:
 
 
 def market_session_state(now: datetime | None = None) -> dict[str, object]:
-    """Return the NSE NIFTY-equity-derivatives live-provider window in IST.
+    """Return the QuantNifty live-provider window in IST.
 
-    NSE CAS (15:15-15:35) applies to the equity cash segment. NIFTY options
-    remain equity derivatives and their regular market closes at 15:40 IST.
+    Provider access is deliberately closed at 15:30 so the independent
+    post-market research window can start at 15:30. Cash-session strategy
+    entries are limited to 15:15-15:27 and positions are force-closed by 15:29.
     """
     current = (now or datetime.now(IST)).astimezone(IST)
     if current.weekday() >= 5:
@@ -41,8 +41,8 @@ def market_session_state(now: datetime | None = None) -> dict[str, object]:
     if current.time() < MARKET_OPEN:
         return {"open": False, "phase": "PRE_OPEN", "reason": "before_09:15", "local_time": current.isoformat()}
     if current.time() >= MARKET_CLOSE:
-        return {"open": False, "phase": "CLOSED", "reason": "after_15:40", "local_time": current.isoformat()}
-    return {"open": True, "phase": "LIVE", "reason": "nse_equity_derivatives_session", "local_time": current.isoformat()}
+        return {"open": False, "phase": "CLOSED", "reason": "after_15:30", "local_time": current.isoformat()}
+    return {"open": True, "phase": "LIVE", "reason": "quantnifty_nifty_provider_window", "local_time": current.isoformat()}
 
 
 def is_live_market_session(now: datetime | None = None) -> bool:
@@ -71,6 +71,6 @@ def closed_payload(now: datetime | None = None) -> dict[str, object]:
         "live_provider_connected": False,
         "application_runtime": runtime,
         "market_session": state,
-        "message": "NSE NIFTY derivatives live market session is closed. Live provider polling is stopped.",
+        "message": "QuantNifty NIFTY live-provider session is closed. Live provider polling is stopped.",
         "timestamp": datetime.now(IST).isoformat(),
     }

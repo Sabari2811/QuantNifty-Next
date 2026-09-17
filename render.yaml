@@ -3,20 +3,20 @@ services:
     name: quantnifty-api
     runtime: python
     region: singapore
-    plan: free
+    plan: starter
     branch: main
     buildCommand: pip install -e ./apps/api
-    startCommand: uvicorn quantnifty.runtime_observability:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn quantnifty.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: quantnifty-learning
+          name: quantnifty-production
           property: connectionString
 
 databases:
-  - name: quantnifty-learning
+  - name: quantnifty-production
     region: singapore
-    plan: free
+    plan: basic_256mb
     postgresMajorVersion: 18

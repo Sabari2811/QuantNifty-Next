@@ -19,7 +19,6 @@ def _day(now: datetime) -> str:
 
 
 def _training_already_completed(day: str) -> bool:
-    """Return True only for a durable, completed daily after-market run."""
     try:
         events = latest_research(day)
     except Exception:
@@ -37,11 +36,17 @@ def _training_already_completed(day: str) -> bool:
 def _reconcile_overdue_paper_position(day: str, manager: LivePaperManager | None = None) -> None:
     """Fail closed on an OPEN paper trade after the 15:29 cutoff.
 
-    Use the API's singleton manager when supplied. A second manager can close
-    the durable row but leave the API's original in-memory position OPEN.
+    Use the API singleton manager when available; a second manager can close
+    the durable row while leaving the API's original in-memory lifecycle OPEN.
     """
     try:
-        active_manager = manager or LivePaperManager()
+        if manager is None:
+            # Lazy import avoids the after_market_scheduler <-> main import cycle
+            # while ensuring production closes the same manager used by /status.
+            from quantnifty.main import live_paper
+            active_manager = live_paper
+        else:
+            active_manager = manager
         if active_manager.active is None:
             return
         snapshots = load_snapshots(day)

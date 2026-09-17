@@ -65,6 +65,7 @@ def _pg_connection():
 def _ensure_pg(conn) -> None:
     with conn.cursor() as cur:
         cur.execute("CREATE TABLE IF NOT EXISTS quantnifty_learning_events (event_id TEXT PRIMARY KEY, kind TEXT NOT NULL, day TEXT, timestamp TEXT, payload JSONB NOT NULL, stored_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+        cur.execute("CREATE TABLE IF NOT EXISTS quantnifty_paper_trade_locks (day TEXT PRIMARY KEY, trade_id TEXT NOT NULL, acquired_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
     conn.commit()
 
 
@@ -101,6 +102,97 @@ def _pg_events(kind: str, day: str | None = None) -> list[dict[str, Any]] | None
         return None
     finally:
         conn.close()
+
+
+def claim_paper_trade_lock(day: str, trade_id: str) -> bool:
+    """Atomically reserve the single paper-trade slot for an IST day.
+
+    PostgreSQL is authoritative in production. The filesystem fallback uses an
+    exclusive lock file so two local processes cannot acquire the slot together.
+    """
+    day = str(day or "").strip(); trade_id = str(trade_id or "").strip()
+    if not day or not trade_id:
+        return False
+    conn = _pg_connection()
+    if conn is not None:
+        try:
+            _ensure_pg(conn)
+            with conn.cursor() as cur:
+                cur.execute("INSERT INTO quantnifty_paper_trade_locks(day,trade_id) VALUES (%s,%s) ON CONFLICT (day) DO NOTHING RETURNING trade_id", (day, trade_id))
+                row = cur.fetchone()
+            conn.commit()
+            return bool(row and str(row[0]) == trade_id)
+        except Exception:
+            conn.rollback()
+        finally:
+            conn.close()
+    root = _root(); root.mkdir(parents=True, exist_ok=True); path = root / f"paper_trade_lock_{day}.json"
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(_json({"day": day, "trade_id": trade_id, "acquired_at": _utc_now()}))
+        return True
+    except FileExistsError:
+        return False
+
+
+def release_paper_trade_lock(day: str, trade_id: str) -> bool:
+    day = str(day or "").strip(); trade_id = str(trade_id or "").strip()
+    if not day or not trade_id:
+        return False
+    conn = _pg_connection()
+    if conn is not None:
+        try:
+            _ensure_pg(conn)
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM quantnifty_paper_trade_locks WHERE day=%s AND trade_id=%s", (day, trade_id))
+                changed = cur.rowcount > 0
+            conn.commit()
+            return changed
+        except Exception:
+            conn.rollback()
+        finally:
+            conn.close()
+    path = _root() / f"paper_trade_lock_{day}.json"
+    try:
+        if not path.exists():
+            return False
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if str(payload.get("trade_id") or "") != trade_id:
+            return False
+        path.unlink()
+        return True
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def reconcile_paper_trade_lock(day: str, open_trade_ids: set[str]) -> None:
+    """Remove a stale lock when no matching OPEN trade remains."""
+    day = str(day or "").strip()
+    conn = _pg_connection()
+    if conn is not None:
+        try:
+            _ensure_pg(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT trade_id FROM quantnifty_paper_trade_locks WHERE day=%s", (day,))
+                row = cur.fetchone()
+                if row and str(row[0]) not in open_trade_ids:
+                    cur.execute("DELETE FROM quantnifty_paper_trade_locks WHERE day=%s", (day,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        finally:
+            conn.close()
+        return
+    path = _root() / f"paper_trade_lock_{day}.json"
+    try:
+        if not path.exists():
+            return
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if str(payload.get("trade_id") or "") not in open_trade_ids:
+            path.unlink()
+    except (OSError, json.JSONDecodeError):
+        return
 
 
 def _append(kind: str, payload: dict[str, Any]) -> dict[str, Any]:

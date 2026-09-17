@@ -6,6 +6,8 @@ from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from quantnifty.after_market_lab import latest_research, run_after_market_lab
+from quantnifty.live_paper_manager import LivePaperManager
+from quantnifty.learning_store import load_snapshots
 
 IST = ZoneInfo("Asia/Kolkata")
 # Post-market research starts as soon as the NIFTY live-provider window closes.
@@ -33,12 +35,42 @@ def _training_already_completed(day: str) -> bool:
     return False
 
 
+def _reconcile_overdue_paper_position(day: str) -> None:
+    """Fail closed on a persisted OPEN paper trade after the 15:29 cutoff.
+
+    The normal live snapshot path is responsible for closing positions by the
+    15:29 IST cash-session deadline. This recovery guard handles a restart or
+    deploy occurring after that deadline so a durable OPEN lifecycle can never
+    survive into the post-market window.
+    """
+    try:
+        manager = LivePaperManager()
+        if manager.active is None:
+            return
+        snapshots = load_snapshots(day)
+        if not snapshots:
+            logger.warning("Overdue paper position found for %s but no stored snapshot is available", day)
+            return
+        latest = snapshots[-1]
+        manager._close(latest, {
+            "strategy": "paper_recovery",
+            "signal": {"direction": manager.active.direction, "confidence": None, "evidence": [], "rationale": [], "adaptive": {}},
+            "risk": {"approved": False, "gates": {}, "reasons": ["POST_MARKET_OVERDUE_POSITION_GUARD"]},
+            "execution_plan": {},
+            "mode": "RECOVERY",
+        }, "POST_MARKET_OVERDUE_POSITION_GUARD")
+        logger.warning("Closed overdue persisted paper position for %s before post-market research", day)
+    except Exception:
+        logger.exception("Unable to reconcile overdue paper position for %s", day)
+
+
 async def after_market_loop() -> None:
     last_run_day: str | None = None
     while True:
         now = datetime.now(IST)
         day = _day(now)
         if now.weekday() < 5 and now.time() >= RUN_AT and last_run_day != day:
+            _reconcile_overdue_paper_position(day)
             if _training_already_completed(day):
                 last_run_day = day
             else:

@@ -8,17 +8,16 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 NORMAL_ENTRY_CUTOFF_HOUR = 15
 NORMAL_ENTRY_CUTOFF_MINUTE = 14
-CAS_SESSION_START_HOUR = 15
-CAS_SESSION_START_MINUTE = 15
-CAS_FORCE_EXIT_HOUR = 15
-CAS_FORCE_EXIT_MINUTE = 39
+CASH_SESSION_START_HOUR = 15
+CASH_SESSION_START_MINUTE = 15
+CASH_FORCE_EXIT_HOUR = 15
+CASH_FORCE_EXIT_MINUTE = 29
 DERIVATIVES_CLOSE_HOUR = 15
-DERIVATIVES_CLOSE_MINUTE = 40
-# Backward-compatible names.
-CASH_SESSION_START_HOUR = CAS_SESSION_START_HOUR
-CASH_SESSION_START_MINUTE = CAS_SESSION_START_MINUTE
-CASH_FORCE_EXIT_HOUR = CAS_FORCE_EXIT_HOUR
-CASH_FORCE_EXIT_MINUTE = CAS_FORCE_EXIT_MINUTE
+DERIVATIVES_CLOSE_MINUTE = 30
+CAS_SESSION_START_HOUR = CASH_SESSION_START_HOUR
+CAS_SESSION_START_MINUTE = CASH_SESSION_START_MINUTE
+CAS_FORCE_EXIT_HOUR = CASH_FORCE_EXIT_HOUR
+CAS_FORCE_EXIT_MINUTE = CASH_FORCE_EXIT_MINUTE
 
 
 @dataclass
@@ -94,20 +93,18 @@ def _active_strategy_for_day(day: str | None) -> str | None:
 def session_close_required(timestamp: str | None) -> bool:
     """Return whether the current active paper position must be closed.
 
-    Normal NIFTY-option positions are closed before the NSE CAS begins at
-    15:15. A CAS-aware NIFTY-derivatives position may remain through the CAS
-    matching period, but is forcibly closed at 15:39, one minute before the
-    NSE equity-derivatives regular-session close at 15:40.
+    Normal NIFTY-option positions must close before the 15:15 cash-session
+    influence window. A cash-session NIFTY paper position may be managed after
+    15:15 but is force-closed at 15:29. No paper position survives 15:30.
     """
     dt = _timestamp(timestamp)
     if not dt:
         return False
     local = dt.astimezone(IST)
-    t = local.time()
-    minute = (t.hour, t.minute)
-    if minute >= (CAS_FORCE_EXIT_HOUR, CAS_FORCE_EXIT_MINUTE):
+    minute = (local.hour, local.minute)
+    if minute >= (CASH_FORCE_EXIT_HOUR, CASH_FORCE_EXIT_MINUTE):
         return True
-    if minute < (CAS_SESSION_START_HOUR, CAS_SESSION_START_MINUTE):
+    if minute < (CASH_SESSION_START_HOUR, CASH_SESSION_START_MINUTE):
         return False
     strategy = _active_strategy_for_day(local.date().isoformat())
     return strategy != "cas_reentry"

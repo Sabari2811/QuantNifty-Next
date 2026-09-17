@@ -102,7 +102,7 @@ def _set_entry_block(risk: dict[str, Any], reason: str) -> None:
     gates = dict(risk.get("gates") or {})
     gates["paper_entry_lifecycle"] = False
     risk["gates"] = gates
-    reasons = [str(item) for item in (risk.get("reasons") or []) if str(item) not in gates]
+    reasons = [str(item) for item in (risk.get("reasons") or [])]
     reasons.append(reason)
     risk["reasons"] = list(dict.fromkeys(reasons))
     risk["approved"] = False

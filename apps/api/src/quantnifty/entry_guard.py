@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 
@@ -24,8 +24,6 @@ def _timestamp(value: Any) -> datetime | None:
         if not raw:
             return None
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            return parsed
         return parsed
     except (TypeError, ValueError):
         return None
@@ -69,18 +67,30 @@ def _support_gate(data: dict[str, Any], direction: str) -> tuple[bool, dict[str,
     if spot is None or level is None:
         return True, {"status": "UNAVAILABLE_PASS", "level": level, "spot": spot}
     distance = spot - level if direction == "BEARISH" else level - spot
-    near = 0 <= distance <= SUPPORT_PROXIMITY_POINTS
-    if not near:
-        return True, {"status": "NOT_NEAR_LEVEL", "level": level, "spot": spot, "distance_points": round(distance, 2)}
+    # Positive distance means price is still on the safe side of the level.
+    # A negative distance is already below/above the level; only a clear break
+    # of BREAK_CONFIRMATION_POINTS is treated as confirmation.
     confirmed_break = distance <= -BREAK_CONFIRMATION_POINTS
-    return confirmed_break, {
-        "status": "CONFIRMED_BREAK" if confirmed_break else "NEAR_LEVEL_WITHOUT_BREAK",
-        "level": level,
-        "spot": spot,
-        "distance_points": round(distance, 2),
-        "proximity_points": SUPPORT_PROXIMITY_POINTS,
-        "confirmation_points": BREAK_CONFIRMATION_POINTS,
-    }
+    near_level = abs(distance) <= SUPPORT_PROXIMITY_POINTS
+    if confirmed_break:
+        return True, {
+            "status": "CONFIRMED_BREAK",
+            "level": level,
+            "spot": spot,
+            "distance_points": round(distance, 2),
+            "proximity_points": SUPPORT_PROXIMITY_POINTS,
+            "confirmation_points": BREAK_CONFIRMATION_POINTS,
+        }
+    if near_level:
+        return False, {
+            "status": "NEAR_LEVEL_WITHOUT_BREAK",
+            "level": level,
+            "spot": spot,
+            "distance_points": round(distance, 2),
+            "proximity_points": SUPPORT_PROXIMITY_POINTS,
+            "confirmation_points": BREAK_CONFIRMATION_POINTS,
+        }
+    return True, {"status": "NOT_NEAR_LEVEL", "level": level, "spot": spot, "distance_points": round(distance, 2)}
 
 
 def _latest_failed_signal(direction: str, data: dict[str, Any]) -> dict[str, Any] | None:
@@ -165,11 +175,11 @@ def evaluate_entry_guards(data: dict[str, Any], result: dict[str, Any], mode: st
         "failed_signal_cooldown": cooldown_ok,
     }
     reasons = [name for name, passed in gates.items() if not passed]
+    existing_gates = dict(risk.get("gates") or {})
+    existing_gates.update(gates)
+    risk["gates"] = existing_gates
+    existing_reasons = [str(item) for item in (risk.get("reasons") or [])]
     if reasons:
-        existing_gates = dict(risk.get("gates") or {})
-        existing_gates.update(gates)
-        existing_reasons = [str(item) for item in (risk.get("reasons") or [])]
-        risk["gates"] = existing_gates
         risk["reasons"] = list(dict.fromkeys([*existing_reasons, *reasons]))
         risk["approved"] = False
         plan = result.get("execution_plan")
@@ -180,10 +190,7 @@ def evaluate_entry_guards(data: dict[str, Any], result: dict[str, Any], mode: st
             plan["target_points"] = None
             plan["risk_reward"] = None
     else:
-        existing_gates = dict(risk.get("gates") or {})
-        existing_gates.update(gates)
-        risk["gates"] = existing_gates
-        risk["reasons"] = [str(item) for item in (risk.get("reasons") or []) if str(item) not in gates]
+        risk["reasons"] = [str(item) for item in existing_reasons if str(item) not in gates]
 
     return {
         "applied": True,

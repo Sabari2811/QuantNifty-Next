@@ -4,9 +4,21 @@ from datetime import datetime, timezone
 from typing import Any
 
 from quantnifty.learning_store import load_events, trading_day
+from quantnifty.market_session import market_session_state
 
 REENTRY_COOLDOWN_MINUTES = 5
 MIN_REENTRY_DISPLACEMENT_POINTS = 8.0
+MAX_DAILY_TRADES = 3
+MAX_MOMENTUM_TRADES_PER_DIRECTION = 1
+MOMENTUM_STRATEGIES = {
+    "directional",
+    "adaptive",
+    "gamma_blast",
+    "early_accumulation",
+    "negative_gamma_expansion",
+    "cas_reentry",
+    "breakout_watch",
+}
 
 
 def _f(value: Any) -> float | None:
@@ -27,8 +39,18 @@ def _ts(value: Any) -> datetime | None:
         return None
 
 
-def _latest_lifecycle(day: str) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+def _strategy_name(strategy: Any, data: dict[str, Any]) -> str:
+    value = str(strategy or data.get("strategy") or "").strip().lower()
+    if value:
+        return value
+    intelligence = data.get("intelligence") if isinstance(data.get("intelligence"), dict) else {}
+    adaptive = intelligence.get("adaptive") if isinstance(intelligence.get("adaptive"), dict) else {}
+    return str(adaptive.get("selected_strategy") or "").strip().lower()
+
+
+def _lifecycle(day: str) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     latest: dict[str, dict[str, Any]] = {}
+    closed: dict[str, dict[str, Any]] = {}
     for event in load_events("outcomes", day):
         outcome = event.get("outcome") if isinstance(event, dict) else None
         if not isinstance(outcome, dict):
@@ -41,29 +63,19 @@ def _latest_lifecycle(day: str) -> tuple[list[dict[str, Any]], dict[str, dict[st
             latest[trade_id] = outcome
         elif status == "CLOSED":
             latest.pop(trade_id, None)
-    closed: dict[str, dict[str, Any]] = {}
-    for event in load_events("outcomes", day):
-        outcome = event.get("outcome") if isinstance(event, dict) else None
-        if not isinstance(outcome, dict):
-            continue
-        trade_id = str(outcome.get("trade_id") or "")
-        if not trade_id:
-            continue
-        status = str(outcome.get("status") or outcome.get("lifecycle") or "").upper()
-        if status == "CLOSED":
             previous = closed.get(trade_id)
             stamp = str(outcome.get("exit_timestamp") or outcome.get("timestamp") or "")
             previous_stamp = str((previous or {}).get("exit_timestamp") or (previous or {}).get("timestamp") or "")
             if previous is None or stamp >= previous_stamp:
                 closed[trade_id] = outcome
-    return list(latest.values()), closed
+    return latest, closed
 
 
-def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE") -> dict[str, Any]:
-    """Return a durable, deterministic TAKE/WAIT/NO-TRADE lifecycle decision.
+def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE", strategy: str | None = None) -> dict[str, Any]:
+    """Return a durable, deterministic TAKE/WAIT/HOLD/NO-TRADE lifecycle decision.
 
-    This gate is live-paper only. It never reads research/replay data and never
-    creates or mutates a trade lifecycle by itself.
+    LIVE mode only. The gate never reads research/replay data and never creates
+    or mutates a trade lifecycle by itself.
     """
     if str(mode or "LIVE").upper() != "LIVE":
         return {"applied": False, "action": "PASS", "allowed": True, "reason": "NON_LIVE_MODE"}
@@ -77,9 +89,13 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     if timestamp is None or not day:
         return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "TIMESTAMP_REQUIRED_FOR_PAPER_ENTRY"}
 
-    active, closed = _latest_lifecycle(day)
+    session = market_session_state(timestamp.astimezone(timezone.utc))
+    if not bool(session.get("open")):
+        return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "MARKET_SESSION_CLOSED", "market_session": session}
+
+    active, closed = _lifecycle(day)
     if active:
-        newest = max(active, key=lambda row: str(row.get("entry_timestamp") or row.get("timestamp") or ""))
+        newest = max(active.values(), key=lambda row: str(row.get("entry_timestamp") or row.get("timestamp") or ""))
         return {
             "applied": True,
             "action": "HOLD_ACTIVE_TRADE",
@@ -89,10 +105,37 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
             "active_direction": newest.get("direction"),
             "active_entry_timestamp": newest.get("entry_timestamp"),
             "active_trade_count": len(active),
+            "daily_limit": MAX_DAILY_TRADES,
+        }
+
+    trade_count = len(closed)
+    if trade_count >= MAX_DAILY_TRADES:
+        return {
+            "applied": True,
+            "action": "NO_TRADE",
+            "allowed": False,
+            "reason": "DAILY_TRADE_LIMIT",
+            "daily_trade_count": trade_count,
+            "max_daily_trades": MAX_DAILY_TRADES,
+        }
+
+    strategy_name = _strategy_name(strategy, data)
+    momentum = strategy_name in MOMENTUM_STRATEGIES or not strategy_name
+    direction_count = sum(1 for row in closed.values() if str(row.get("direction") or "").upper() == direction and (str(row.get("strategy") or "").strip().lower() in MOMENTUM_STRATEGIES or not str(row.get("strategy") or "").strip()))
+    if momentum and direction_count >= MAX_MOMENTUM_TRADES_PER_DIRECTION:
+        return {
+            "applied": True,
+            "action": "NO_TRADE",
+            "allowed": False,
+            "reason": f"{direction}_MOMENTUM_TRADE_LIMIT",
+            "daily_trade_count": trade_count,
+            "directional_trade_count": direction_count,
+            "max_directional_trades": MAX_MOMENTUM_TRADES_PER_DIRECTION,
+            "strategy": strategy_name or "UNSPECIFIED_MOMENTUM",
         }
 
     if not closed:
-        return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "NO_PRIOR_TRADE_TODAY"}
+        return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "NO_PRIOR_TRADE_TODAY", "daily_trade_count": 0, "max_daily_trades": MAX_DAILY_TRADES}
 
     latest = max(closed.values(), key=lambda row: str(row.get("exit_timestamp") or row.get("timestamp") or ""))
     exit_ts = _ts(latest.get("exit_timestamp") or latest.get("timestamp"))
@@ -112,6 +155,7 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
             "elapsed_seconds": round(elapsed_seconds, 1),
             "remaining_seconds": round(cooldown_seconds - elapsed_seconds, 1),
             "cooldown_minutes": REENTRY_COOLDOWN_MINUTES,
+            "daily_trade_count": trade_count,
         }
 
     last_direction = str(latest.get("direction") or "NEUTRAL").upper()
@@ -122,6 +166,7 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
             "allowed": True,
             "reason": "DIRECTION_CHANGE_AFTER_COOLDOWN",
             "last_trade_id": latest.get("trade_id"),
+            "daily_trade_count": trade_count,
         }
 
     exit_spot = _f(latest.get("exit_spot"))
@@ -149,6 +194,7 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
             "last_trade_id": latest.get("trade_id"),
             "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None,
             "structural_confirmation": structural_ok,
+            "daily_trade_count": trade_count,
         }
 
     return {
@@ -162,7 +208,8 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
         "minimum_displacement_points": MIN_REENTRY_DISPLACEMENT_POINTS,
         "trend_state": trend_state,
         "structural_event": structural_event,
+        "daily_trade_count": trade_count,
     }
 
 
-__all__ = ["evaluate_paper_entry", "REENTRY_COOLDOWN_MINUTES", "MIN_REENTRY_DISPLACEMENT_POINTS"]
+__all__ = ["evaluate_paper_entry", "REENTRY_COOLDOWN_MINUTES", "MIN_REENTRY_DISPLACEMENT_POINTS", "MAX_DAILY_TRADES", "MAX_MOMENTUM_TRADES_PER_DIRECTION", "MOMENTUM_STRATEGIES"]

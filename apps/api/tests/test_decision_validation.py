@@ -1,5 +1,5 @@
 from quantnifty.institutional_engine import final_decision
-from quantnifty.decision_validation import validate_snapshot
+from quantnifty.decision_validation import validate_decision, validate_snapshot
 
 
 def snapshot(ts="2026-08-04T04:30:00+00:00"):
@@ -47,3 +47,23 @@ def test_replay_uses_recorded_historical_provenance():
     data = snapshot(); data["data_integrity"] = "RECORDED_HISTORICAL"
     result = final_decision(data, None, "adaptive", "REPLAY")
     assert result["validation"]["stages"]["input"]["valid"]
+
+
+def test_lifecycle_block_is_valid_but_not_tradeable(monkeypatch):
+    from quantnifty import decision_validation
+
+    monkeypatch.setattr(decision_validation, "evaluate_paper_entry", lambda *args, **kwargs: {
+        "applied": True, "action": "NO_TRADE", "allowed": False, "reason": "DAILY_TRADE_LIMIT"
+    })
+    data = snapshot(ts="2026-08-04T05:00:00+00:00")
+    result = {
+        "strategy": "directional",
+        "signal": {"direction": "BULLISH", "confidence": 80, "scores": {}, "evidence": []},
+        "risk": {"approved": True, "gates": {"liquidity": True}, "reasons": []},
+        "execution_plan": {"execution_enabled": False, "order_action": "DISABLED", "status": "APPROVED_READ_ONLY", "stop_points": 10, "target_points": 20, "risk_reward": 2},
+    }
+    validation = validate_decision(data, result, "LIVE")
+    assert validation["valid"] is True
+    assert result["decision_action"] == "WAIT_CONFIRMATION"
+    assert result["execution_plan"]["status"] == "BLOCKED"
+    assert "DAILY_TRADE_LIMIT" in result["risk"]["reasons"]

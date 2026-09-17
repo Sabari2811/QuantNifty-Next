@@ -33,6 +33,8 @@ def test_open_close_persists_complete_trade_evidence(monkeypatch):
     monkeypatch.setattr(manager_module, "claim_paper_trade_lock", lambda day, trade_id: True)
     monkeypatch.setattr(manager_module, "release_paper_trade_lock", lambda day, trade_id: True)
     monkeypatch.setattr(manager_module, "evaluate_paper_entry", lambda *args, **kwargs: {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "TEST_ENTRY"})
+    monkeypatch.setattr(manager_module, "current_day", lambda: "2026-09-10")
+    monkeypatch.setattr(manager_module, "kill_switch_state", lambda day=None: {"active": False, "day": day or "2026-09-10"})
     manager = LivePaperManager()
     manager.process(_snapshot(), _decision())
     assert recorded[0]["day"] == "2026-09-10"

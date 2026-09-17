@@ -6,8 +6,12 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
-PAPER_ENTRY_CUTOFF_HOUR = 15
-PAPER_ENTRY_CUTOFF_MINUTE = 29
+NORMAL_ENTRY_CUTOFF_HOUR = 15
+NORMAL_ENTRY_CUTOFF_MINUTE = 14
+CASH_SESSION_START_HOUR = 15
+CASH_SESSION_START_MINUTE = 15
+CASH_FORCE_EXIT_HOUR = 15
+CASH_FORCE_EXIT_MINUTE = 29
 
 
 @dataclass
@@ -54,9 +58,53 @@ def trading_day(timestamp: str | None) -> str | None:
     return dt.date().isoformat() if dt else None
 
 
+def _active_strategy_for_day(day: str | None) -> str | None:
+    if not day:
+        return None
+    try:
+        from quantnifty.learning_store import load_events
+        active: dict[str, dict[str, Any]] = {}
+        for event in load_events("outcomes", day):
+            outcome = event.get("outcome") if isinstance(event, dict) else None
+            if not isinstance(outcome, dict):
+                continue
+            trade_id = str(outcome.get("trade_id") or "")
+            if not trade_id:
+                continue
+            status = str(outcome.get("status") or outcome.get("lifecycle") or "").upper()
+            if status == "OPEN":
+                active[trade_id] = outcome
+            elif status == "CLOSED":
+                active.pop(trade_id, None)
+        if not active:
+            return None
+        latest = max(active.values(), key=lambda row: str(row.get("entry_timestamp") or row.get("timestamp") or ""))
+        return str(latest.get("strategy") or "").strip().lower() or None
+    except Exception:
+        # A lifecycle lookup failure must fail closed at the normal cutoff.
+        return None
+
+
 def session_close_required(timestamp: str | None) -> bool:
+    """Return whether the current active paper position must be closed.
+
+    Normal positions are forced out before the 15:15 cash/CAS influence window.
+    A dedicated cash-session position may remain until 15:29, after which every
+    paper position is forced closed. If durable lifecycle evidence is missing,
+    the function fails closed and closes the position rather than carrying it
+    through the cash window.
+    """
     dt = _timestamp(timestamp)
-    return bool(dt and (dt.time().hour, dt.time().minute) >= (PAPER_ENTRY_CUTOFF_HOUR, PAPER_ENTRY_CUTOFF_MINUTE))
+    if not dt:
+        return False
+    local = dt.astimezone(IST)
+    t = local.time()
+    if (t.hour, t.minute) >= (CASH_FORCE_EXIT_HOUR, CASH_FORCE_EXIT_MINUTE):
+        return True
+    if (t.hour, t.minute) < (NORMAL_ENTRY_CUTOFF_HOUR, NORMAL_ENTRY_CUTOFF_MINUTE):
+        return False
+    strategy = _active_strategy_for_day(local.date().isoformat())
+    return strategy != "cas_reentry"
 
 
 def same_trading_day(entry_timestamp: str | None, timestamp: str | None) -> bool:

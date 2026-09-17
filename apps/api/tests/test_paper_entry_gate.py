@@ -48,14 +48,14 @@ def test_any_recent_close_blocks_reentry_for_five_minutes(monkeypatch):
 
 def test_same_direction_requires_new_structure_after_cooldown(monkeypatch):
     monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: [_closed(direction="BEARISH", exit_spot=23220)])
-    gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", spot=23221), "BEARISH")
+    gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", spot=23221), "BEARISH", strategy="gamma_transition")
     assert gate["action"] == "WAIT_CONFIRMATION"
     assert gate["reason"] == "REENTRY_STRUCTURE_REQUIRED"
 
 
 def test_same_direction_with_eight_point_displacement_allows_reentry(monkeypatch):
     monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: [_closed(direction="BEARISH", exit_spot=23220)])
-    gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", spot=23211), "BEARISH")
+    gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00", spot=23211), "BEARISH", strategy="gamma_transition")
     assert gate["action"] == "TAKE_TRADE"
     assert gate["reason"] == "NEW_STRUCTURAL_EVIDENCE"
     assert gate["directional_displacement_points"] == 9.0

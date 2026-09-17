@@ -6,6 +6,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
+PAPER_ENTRY_CUTOFF_HOUR = 15
+PAPER_ENTRY_CUTOFF_MINUTE = 29
 
 
 @dataclass
@@ -54,7 +56,7 @@ def trading_day(timestamp: str | None) -> str | None:
 
 def session_close_required(timestamp: str | None) -> bool:
     dt = _timestamp(timestamp)
-    return bool(dt and (dt.time().hour, dt.time().minute) >= (15, 30))
+    return bool(dt and (dt.time().hour, dt.time().minute) >= (PAPER_ENTRY_CUTOFF_HOUR, PAPER_ENTRY_CUTOFF_MINUTE))
 
 
 def same_trading_day(entry_timestamp: str | None, timestamp: str | None) -> bool:

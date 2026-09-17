@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query
+from fastapi.responses import HTMLResponse
 
 from quantnifty.learning_store import load_events, load_snapshots
 from quantnifty.paper_control import activate_kill_switch, current_day, kill_switch_state
@@ -113,6 +114,11 @@ def paper_control() -> dict[str, Any]:
 def paper_kill_switch() -> dict[str, Any]:
     state = activate_kill_switch("MANUAL_KILL_SWITCH")
     return {"mode": "READ_ONLY_PAPER", "trading": "DISABLED", "message": "Daily paper-trading kill switch activated. The live paper manager will close open positions on its next provider snapshot and will block all new entries for the rest of this IST trading day.", "kill_switch": state}
+
+
+@router.get("/paper-control", response_class=HTMLResponse)
+def paper_control_page() -> str:
+    return """<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>QuantNifty Paper Kill Switch</title><style>body{margin:0;background:#080d19;color:#e8edf7;font-family:Inter,system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}.card{width:min(620px,90vw);background:#11182b;border:1px solid #263250;border-radius:18px;padding:28px;box-shadow:0 16px 50px #0007}.title{font-size:24px;font-weight:900}.muted{color:#8793ad}.state{margin:18px 0;padding:14px;border-radius:10px;border:1px solid #33405e}.armed{border-color:#a84455;background:#29151c}.safe{border-color:#2a927f;background:#102c28}.kill{width:100%;padding:18px;border:0;border-radius:12px;background:#a84455;color:#fff;font-size:18px;font-weight:900;cursor:pointer}.kill:disabled{opacity:.55;cursor:not-allowed}.links{margin-top:18px;display:flex;gap:12px;flex-wrap:wrap}.links a{color:#aeb9d0}.small{font-size:12px;margin-top:12px}</style></head><body><main class='card'><div class='title'>🛑 QuantNifty Paper Trade Kill Switch</div><p class='muted'>Stops new paper entries for the rest of the current IST trading day and closes any open paper position on the next live snapshot. Previous closed trades are untouched.</p><div id='state' class='state'>Loading…</div><button id='kill' class='kill'>STOP ALL PAPER TRADING FOR TODAY</button><div id='msg' class='small muted'></div><div class='links'><a href='/intelligence'>← Live Monitor</a><a href='/api/v1/paper/ledger'>Paper Ledger API</a></div></main><script>const s=document.getElementById('state'),b=document.getElementById('kill'),m=document.getElementById('msg');async function refresh(){try{const r=await fetch('/api/v1/paper/control',{cache:'no-store'});const x=await r.json(),k=x.kill_switch||{};s.className='state '+(k.active?'armed':'safe');s.innerHTML=k.active?'🛑 KILL SWITCH ACTIVE<br><span class="muted">'+(k.activated_at||'activated')+' · no new entries today</span>':'🟢 TRADING ENABLED FOR TODAY';b.disabled=!!k.active;b.textContent=k.active?'KILL SWITCH ALREADY ACTIVE':'STOP ALL PAPER TRADING FOR TODAY'}catch(e){s.textContent='Control status unavailable: '+e.message}}b.onclick=async()=>{if(!confirm('Stop the ongoing paper trade and block ALL upcoming paper trades for the rest of today?'))return;b.disabled=true;try{const r=await fetch('/api/v1/paper/kill-switch',{method:'POST'});const x=await r.json();m.textContent=x.message||'Kill switch activated.'}catch(e){m.textContent='Failed: '+e.message}await refresh()};refresh();setInterval(refresh,5000)</script></body></html>"""
 
 
 @router.get("/api/v1/paper/ledger")

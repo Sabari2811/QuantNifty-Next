@@ -4,10 +4,11 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from quantnifty.cash_session_strategy import CASH_ENTRY_CUTOFF, CASH_FORCE_EXIT, CASH_SESSION_START, evaluate_cash_strategy
+
 IST = ZoneInfo("Asia/Kolkata")
 NORMAL_START = time(9, 20)
-NORMAL_END = time(15, 15)
-CAS_START = time(15, 15)
+NORMAL_END = CASH_SESSION_START
 MARKET_CLOSE = time(15, 30)
 
 
@@ -45,34 +46,53 @@ def session_phase(snapshot: dict[str, Any]) -> dict[str, Any]:
     if t < NORMAL_END:
         return {"phase": "NORMAL_ADAPTIVE", "decision_enabled": True, "reason": "adaptive_intraday_window", "local_time": local.isoformat()}
     if t < MARKET_CLOSE:
-        return {"phase": "CAS_REENTRY", "decision_enabled": True, "reason": "cas_reentry_window", "local_time": local.isoformat()}
+        return {
+            "phase": "CAS_REENTRY",
+            "decision_enabled": True,
+            "reason": "cash_influence_reentry_window",
+            "local_time": local.isoformat(),
+            "cash_session": {"start": CASH_SESSION_START.strftime("%H:%M"), "entry_cutoff": CASH_ENTRY_CUTOFF.strftime("%H:%M"), "force_exit": CASH_FORCE_EXIT.strftime("%H:%M")},
+        }
     return {"phase": "CLOSED", "decision_enabled": False, "reason": "after_15:30", "local_time": local.isoformat()}
 
 
-def cas_signal(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Read an already-produced CAS signal; never synthesize CAS from future data."""
+def cas_signal(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Produce a cash-session signal from current/previous observations.
+
+    A provider-supplied CAS signal is retained as optional evidence, but the
+    live decision does not depend on a future-looking auction result. The
+    deterministic cash strategy uses only observations already available at
+    the current snapshot.
+    """
+    strategy = evaluate_cash_strategy(snapshot, previous)
     raw = _cas_payload(snapshot)
-    direction = str(raw.get("direction") or raw.get("bias") or "NEUTRAL").upper()
-    confidence = raw.get("confidence")
-    try:
-        confidence_value = float(confidence or 0)
-    except (TypeError, ValueError):
-        confidence_value = 0.0
-    valid = direction in {"BULLISH", "BEARISH"} and confidence_value >= 60
+    raw_direction = str(raw.get("direction") or raw.get("bias") or "NEUTRAL").upper()
+    raw_source = str(raw.get("source") or raw.get("method") or "PROVIDER_CAS") if raw else None
     return {
-        "available": bool(raw),
-        "valid": valid,
-        "direction": direction if direction in {"BULLISH", "BEARISH"} else "NEUTRAL",
-        "confidence": round(confidence_value, 1),
-        "source": str(raw.get("source") or raw.get("method") or "CAS") if raw else None,
+        "available": True,
+        "valid": bool(strategy.get("valid")),
+        "direction": strategy.get("direction", "NEUTRAL"),
+        "confidence": strategy.get("confidence", 0.0),
+        "source": "DETERMINISTIC_CASH_SESSION" if strategy.get("valid") else raw_source,
+        "strategy": strategy,
+        "provider_cas_evidence": {"available": bool(raw), "direction": raw_direction if raw_direction in {"BULLISH", "BEARISH"} else "NEUTRAL", "source": raw_source},
     }
 
 
-def session_decision_policy(snapshot: dict[str, Any]) -> dict[str, Any]:
+def session_decision_policy(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
     phase = session_phase(snapshot)
-    cas = cas_signal(snapshot)
+    cas = cas_signal(snapshot, previous) if phase["phase"] == "CAS_REENTRY" else {"available": False, "valid": False, "direction": "NEUTRAL", "confidence": 0.0, "source": None}
     if phase["phase"] == "CAS_REENTRY":
-        return {**phase, "cas": cas, "allow_normal_adaptive": False, "allow_new_trade": cas["valid"], "selected_strategy": "cas_reentry" if cas["valid"] else "standby", "preferred_direction": cas["direction"] if cas["valid"] else "NEUTRAL", "reason": "CAS confirmed re-entry" if cas["valid"] else "waiting for valid CAS signal"}
+        return {
+            **phase,
+            "cas": cas,
+            "cash_strategy": cas.get("strategy"),
+            "allow_normal_adaptive": False,
+            "allow_new_trade": bool(cas["valid"]),
+            "selected_strategy": "cas_reentry" if cas["valid"] else "standby",
+            "preferred_direction": cas["direction"] if cas["valid"] else "NEUTRAL",
+            "reason": "deterministic cash-session strategy confirmed" if cas["valid"] else "waiting for cash-session confirmation",
+        }
     if phase["phase"] == "NORMAL_ADAPTIVE":
-        return {**phase, "cas": cas, "allow_normal_adaptive": True, "allow_new_trade": True, "selected_strategy": None, "preferred_direction": "NEUTRAL"}
-    return {**phase, "cas": cas, "allow_normal_adaptive": False, "allow_new_trade": False, "selected_strategy": "standby", "preferred_direction": "NEUTRAL"}
+        return {**phase, "cas": cas, "cash_strategy": None, "allow_normal_adaptive": True, "allow_new_trade": True, "selected_strategy": None, "preferred_direction": "NEUTRAL"}
+    return {**phase, "cas": cas, "cash_strategy": None, "allow_normal_adaptive": False, "allow_new_trade": False, "selected_strategy": "standby", "preferred_direction": "NEUTRAL"}

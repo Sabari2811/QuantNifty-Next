@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse
@@ -13,7 +11,6 @@ from quantnifty.paper_control import activate_kill_switch, current_day, kill_swi
 from quantnifty.paper_trade_tracker import trading_day
 
 router = APIRouter(tags=["paper-trading"])
-IST = ZoneInfo("Asia/Kolkata")
 
 
 def _day_now() -> str:
@@ -38,7 +35,15 @@ def _outcomes_for_day(day: str) -> list[dict[str, Any]]:
 
 
 def _closed_rows(day: str) -> list[dict[str, Any]]:
-    return sorted([r for r in _outcomes_for_day(day) if str(r.get("status") or "").upper() == "CLOSED"], key=lambda r: str(r.get("exit_timestamp") or r.get("timestamp") or ""))
+    latest_closed: dict[str, dict[str, Any]] = {}
+    for row in _outcomes_for_day(day):
+        if str(row.get("status") or "").upper() != "CLOSED": continue
+        trade_id = str(row.get("trade_id") or "")
+        if not trade_id: continue
+        previous = latest_closed.get(trade_id)
+        if previous is None or str(row.get("exit_timestamp") or row.get("timestamp") or "") >= str(previous.get("exit_timestamp") or previous.get("timestamp") or ""):
+            latest_closed[trade_id] = row
+    return sorted(latest_closed.values(), key=lambda r: str(r.get("exit_timestamp") or r.get("timestamp") or ""))
 
 
 def _open_rows(day: str) -> list[dict[str, Any]]:
@@ -49,6 +54,34 @@ def _open_rows(day: str) -> list[dict[str, Any]]:
         if str(row.get("status") or "").upper() == "OPEN": latest[trade_id] = row
         elif str(row.get("status") or "").upper() == "CLOSED": latest.pop(trade_id, None)
     return sorted(latest.values(), key=lambda r: str(r.get("entry_timestamp") or r.get("timestamp") or ""))
+
+
+def _lifecycle_reconciliation(day: str) -> dict[str, Any]:
+    rows = _outcomes_for_day(day); by_trade: dict[str, list[str]] = {}; open_events = close_events = 0
+    for row in rows:
+        trade_id = str(row.get("trade_id") or "")
+        if not trade_id: continue
+        status = str(row.get("status") or row.get("lifecycle") or "").upper()
+        by_trade.setdefault(trade_id, []).append(status)
+        if status == "OPEN": open_events += 1
+        elif status == "CLOSED": close_events += 1
+    duplicate_open_ids = sorted(tid for tid, states in by_trade.items() if states.count("OPEN") > 1)
+    duplicate_close_ids = sorted(tid for tid, states in by_trade.items() if states.count("CLOSED") > 1)
+    open_ids = {tid for tid, states in by_trade.items() if states and states[-1] == "OPEN"}
+    closed_ids = {tid for tid, states in by_trade.items() if "CLOSED" in states}
+    return {
+        "lifecycle_event_count": len(rows),
+        "unique_trade_ids": len(by_trade),
+        "open_events": open_events,
+        "close_events": close_events,
+        "closed_trade_ids": len(closed_ids),
+        "active_trade_ids": len(open_ids),
+        "unmatched_open_trade_ids": len(open_ids),
+        "duplicate_open_trade_ids": duplicate_open_ids,
+        "duplicate_close_trade_ids": duplicate_close_ids,
+        "reconciled": not duplicate_open_ids and not duplicate_close_ids and close_events >= len(closed_ids),
+        "note": "Lifecycle events are OPEN/CLOSED records. Trade counts are reconciled by durable trade_id, not by decision-event count.",
+    }
 
 
 def _latest_open_lifecycle() -> dict[str, dict[str, Any]]:
@@ -123,7 +156,10 @@ def paper_control_page() -> str:
 
 @router.get("/api/v1/paper/ledger")
 def paper_ledger(day: str | None = Query(default=None, description="IST trading day YYYY-MM-DD; defaults to today")) -> dict[str, Any]:
-    selected_day = str(day or _day_now()); closed = _closed_rows(selected_day); opened = _open_rows(selected_day); snapshots = [s for s in load_snapshots(selected_day) if isinstance(s, dict)]; latest_snapshot = snapshots[-1] if snapshots else None; open_rows = [_dynamic_open_row(row, latest_snapshot) for row in opened]
+    selected_day = str(day or _day_now())
+    closed = _closed_rows(selected_day); opened = _open_rows(selected_day)
+    snapshots = [s for s in load_snapshots(selected_day) if isinstance(s, dict)]; latest_snapshot = snapshots[-1] if snapshots else None; open_rows = [_dynamic_open_row(row, latest_snapshot) for row in opened]
+    reconciliation = _lifecycle_reconciliation(selected_day)
     realized = sum(_num(r.get("realized_pnl", r.get("gross_pnl_proxy"))) for r in closed); spot_proxy = sum(_num(r.get("spot_move_proxy")) for r in closed); unrealized = sum(_num(r.get("unrealized_pnl")) for r in open_rows if r.get("unrealized_pnl") is not None); total_pnl = realized + unrealized; option_rows = [r for r in closed if str(r.get("pnl_basis") or "").startswith("OPTION_PREMIUM") and _num(r.get("exit_price")) > 0]
     stale_open_count = sum(1 for outcome in _latest_open_lifecycle().values() if str(outcome.get("status") or "").upper() == "OPEN" and (str(outcome.get("day") or trading_day(outcome.get("entry_timestamp")) or "") < selected_day))
-    return {"mode": "READ_ONLY_PAPER", "day": selected_day, "currency": "INR", "status": "OK", "trading": "DISABLED", "kill_switch": kill_switch_state(selected_day), "session_policy": {"new_decisions_stop_at": "15:30 IST", "all_paper_positions_close_by": "15:30 IST", "overnight_carry": False}, "ledger": closed, "open_positions": open_rows, "mark_to_market": {"snapshot_timestamp": latest_snapshot.get("timestamp") if latest_snapshot else None, "spot": _num(latest_snapshot.get("spot")) if latest_snapshot else None, "open_unrealized_pnl": round(unrealized, 4), "dynamic": bool(open_rows)}, "summary": {"closed_trades": len(closed), "open_positions": len(open_rows), "realized_pnl": round(realized, 4), "unrealized_pnl": round(unrealized, 4), "total_pnl": round(total_pnl, 4), "gross_pnl_proxy": round(realized, 4), "spot_move_proxy": round(spot_proxy, 4), "option_premium_pnl_trades": len(option_rows), "net_pnl": round(total_pnl, 4), "charges": 0.0, "stale_open_positions": stale_open_count, "note": "Paper P&L only. Closed-trade P&L uses option premium when entry/exit prices are available; otherwise spot_move_proxy. Open positions are marked dynamically from the latest LIVE_PROVIDER snapshot. Broker charges are not modeled. Overnight carry is prohibited."}, "decisions": _decision_summary(selected_day)}
+    return {"mode": "READ_ONLY_PAPER", "day": selected_day, "currency": "INR", "status": "OK", "trading": "DISABLED", "kill_switch": kill_switch_state(selected_day), "session_policy": {"new_decisions_stop_at": "15:30 IST", "all_paper_positions_close_by": "15:30 IST", "overnight_carry": False}, "ledger": closed, "open_positions": open_rows, "mark_to_market": {"snapshot_timestamp": latest_snapshot.get("timestamp") if latest_snapshot else None, "spot": _num(latest_snapshot.get("spot")) if latest_snapshot else None, "open_unrealized_pnl": round(unrealized, 4), "dynamic": bool(open_rows)}, "summary": {"closed_trades": len(closed), "open_positions": len(open_rows), "realized_pnl": round(realized, 4), "unrealized_pnl": round(unrealized, 4), "total_pnl": round(total_pnl, 4), "gross_pnl_proxy": round(realized, 4), "spot_move_proxy": round(spot_proxy, 4), "option_premium_pnl_trades": len(option_rows), "net_pnl": round(total_pnl, 4), "charges": 0.0, "stale_open_positions": stale_open_count, "lifecycle_reconciliation": reconciliation, "note": "Paper P&L only. Closed-trade P&L uses option premium when entry/exit prices are available; otherwise spot_move_proxy. Open positions are marked dynamically from the latest LIVE_PROVIDER snapshot. Broker charges are not modeled. Overnight carry is prohibited."}, "decisions": _decision_summary(selected_day)}

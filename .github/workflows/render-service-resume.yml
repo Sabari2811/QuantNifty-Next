@@ -1,0 +1,24 @@
+name: QuantNifty Render Resume
+
+on:
+  schedule:
+    - cron: '30 3 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Resume QuantNifty API
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          SERVICE_ID: srv-dad5e767bikc739oighg
+        run: |
+          set -euo pipefail
+          test -n "$RENDER_API_KEY"
+          curl --fail --silent --show-error \
+            --request POST \
+            --url "https://api.render.com/v1/services/${SERVICE_ID}/resume" \
+            --header "Authorization: Bearer ${RENDER_API_KEY}" \
+            --header "Accept: application/json"

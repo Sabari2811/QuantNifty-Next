@@ -4,8 +4,27 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
+# Application compute window. The NSE live-provider window remains narrower below.
+RUNTIME_OPEN = time(9, 0)
+RUNTIME_CLOSE = time(16, 0)
 MARKET_OPEN = time(9, 15)
 MARKET_CLOSE = time(15, 30)
+
+
+def application_runtime_state(now: datetime | None = None) -> dict[str, object]:
+    """Return the intended weekday application runtime window in IST."""
+    current = (now or datetime.now(IST)).astimezone(IST)
+    if current.weekday() >= 5:
+        return {"open": False, "phase": "CLOSED", "reason": "weekend", "local_time": current.isoformat()}
+    if current.time() < RUNTIME_OPEN:
+        return {"open": False, "phase": "PRE_RUNTIME", "reason": "before_09:00", "local_time": current.isoformat()}
+    if current.time() >= RUNTIME_CLOSE:
+        return {"open": False, "phase": "CLOSED", "reason": "after_16:00", "local_time": current.isoformat()}
+    return {"open": True, "phase": "RUNTIME", "reason": "weekday_runtime_window", "local_time": current.isoformat()}
+
+
+def is_application_runtime_window(now: datetime | None = None) -> bool:
+    return bool(application_runtime_state(now)["open"])
 
 
 def market_session_state(now: datetime | None = None) -> dict[str, object]:
@@ -38,11 +57,13 @@ def seconds_until_next_open(now: datetime | None = None) -> float:
 
 def closed_payload(now: datetime | None = None) -> dict[str, object]:
     state = market_session_state(now)
+    runtime = application_runtime_state(now)
     return {
         "data_integrity": "MARKET_CLOSED",
         "mode": "READ_ONLY",
         "provider": "INDstocks",
         "live_provider_connected": False,
+        "application_runtime": runtime,
         "market_session": state,
         "message": "NSE live market session is closed. Live provider polling is stopped.",
         "timestamp": datetime.now(IST).isoformat(),

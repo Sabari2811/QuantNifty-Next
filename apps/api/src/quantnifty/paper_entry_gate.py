@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from quantnifty.learning_store import load_events, trading_day
 from quantnifty.market_session import market_session_state
 
+IST = ZoneInfo("Asia/Kolkata")
 REENTRY_COOLDOWN_MINUTES = 5
 MIN_REENTRY_DISPLACEMENT_POINTS = 8.0
 MAX_DAILY_TRADES = 3
@@ -74,11 +76,7 @@ def _lifecycle(day: str) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str,
 
 
 def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE", strategy: str | None = None) -> dict[str, Any]:
-    """Return a durable, deterministic TAKE/WAIT/HOLD/NO-TRADE lifecycle decision.
-
-    LIVE mode only. The gate never reads research/replay data and never creates
-    or mutates a trade lifecycle by itself.
-    """
+    """Return a durable, deterministic TAKE/WAIT/HOLD/NO-TRADE lifecycle decision."""
     if str(mode or "LIVE").upper() != "LIVE":
         return {"applied": False, "action": "PASS", "allowed": True, "reason": "NON_LIVE_MODE"}
 
@@ -91,7 +89,7 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     if timestamp is None or not day:
         return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "TIMESTAMP_REQUIRED_FOR_PAPER_ENTRY"}
 
-    local_time = timestamp.astimezone(timezone.utc).astimezone(__import__("zoneinfo").zoneinfo.ZoneInfo("Asia/Kolkata")).time()
+    local_time = timestamp.astimezone(IST).time()
     session = market_session_state(timestamp.astimezone(timezone.utc))
     if not bool(session.get("open")):
         return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "MARKET_SESSION_CLOSED", "market_session": session}
@@ -115,29 +113,13 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
 
     trade_count = len(closed)
     if trade_count >= MAX_DAILY_TRADES:
-        return {
-            "applied": True,
-            "action": "NO_TRADE",
-            "allowed": False,
-            "reason": "DAILY_TRADE_LIMIT",
-            "daily_trade_count": trade_count,
-            "max_daily_trades": MAX_DAILY_TRADES,
-        }
+        return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "DAILY_TRADE_LIMIT", "daily_trade_count": trade_count, "max_daily_trades": MAX_DAILY_TRADES}
 
     strategy_name = _strategy_name(strategy, data)
     momentum = strategy_name in MOMENTUM_STRATEGIES or not strategy_name
     direction_count = sum(1 for row in closed.values() if str(row.get("direction") or "").upper() == direction and (str(row.get("strategy") or "").strip().lower() in MOMENTUM_STRATEGIES or not str(row.get("strategy") or "").strip()))
     if momentum and direction_count >= MAX_MOMENTUM_TRADES_PER_DIRECTION:
-        return {
-            "applied": True,
-            "action": "NO_TRADE",
-            "allowed": False,
-            "reason": f"{direction}_MOMENTUM_TRADE_LIMIT",
-            "daily_trade_count": trade_count,
-            "directional_trade_count": direction_count,
-            "max_directional_trades": MAX_MOMENTUM_TRADES_PER_DIRECTION,
-            "strategy": strategy_name or "UNSPECIFIED_MOMENTUM",
-        }
+        return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": f"{direction}_MOMENTUM_TRADE_LIMIT", "daily_trade_count": trade_count, "directional_trade_count": direction_count, "max_directional_trades": MAX_MOMENTUM_TRADES_PER_DIRECTION, "strategy": strategy_name or "UNSPECIFIED_MOMENTUM"}
 
     if not closed:
         return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "NO_PRIOR_TRADE_TODAY", "daily_trade_count": 0, "max_daily_trades": MAX_DAILY_TRADES}
@@ -150,33 +132,13 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     elapsed_seconds = max(0.0, (timestamp - exit_ts).total_seconds())
     cooldown_seconds = REENTRY_COOLDOWN_MINUTES * 60.0
     if elapsed_seconds < cooldown_seconds:
-        return {
-            "applied": True,
-            "action": "WAIT_CONFIRMATION",
-            "allowed": False,
-            "reason": "REENTRY_COOLDOWN",
-            "last_trade_id": latest.get("trade_id"),
-            "last_direction": latest.get("direction"),
-            "elapsed_seconds": round(elapsed_seconds, 1),
-            "remaining_seconds": round(cooldown_seconds - elapsed_seconds, 1),
-            "cooldown_minutes": REENTRY_COOLDOWN_MINUTES,
-            "daily_trade_count": trade_count,
-        }
+        return {"applied": True, "action": "WAIT_CONFIRMATION", "allowed": False, "reason": "REENTRY_COOLDOWN", "last_trade_id": latest.get("trade_id"), "last_direction": latest.get("direction"), "elapsed_seconds": round(elapsed_seconds, 1), "remaining_seconds": round(cooldown_seconds - elapsed_seconds, 1), "cooldown_minutes": REENTRY_COOLDOWN_MINUTES, "daily_trade_count": trade_count}
 
     last_direction = str(latest.get("direction") or "NEUTRAL").upper()
     if direction != last_direction:
-        return {
-            "applied": True,
-            "action": "TAKE_TRADE",
-            "allowed": True,
-            "reason": "DIRECTION_CHANGE_AFTER_COOLDOWN",
-            "last_trade_id": latest.get("trade_id"),
-            "daily_trade_count": trade_count,
-        }
+        return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "DIRECTION_CHANGE_AFTER_COOLDOWN", "last_trade_id": latest.get("trade_id"), "daily_trade_count": trade_count}
 
-    exit_spot = _f(latest.get("exit_spot"))
-    spot = _f(data.get("spot"))
-    directional_displacement = None
+    exit_spot = _f(latest.get("exit_spot")); spot = _f(data.get("spot")); directional_displacement = None
     if exit_spot is not None and spot is not None:
         directional_displacement = spot - exit_spot if direction == "BULLISH" else exit_spot - spot
 
@@ -191,30 +153,9 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     structural_ok = trend_state and structural_event
 
     if displacement_ok or structural_ok:
-        return {
-            "applied": True,
-            "action": "TAKE_TRADE",
-            "allowed": True,
-            "reason": "NEW_STRUCTURAL_EVIDENCE",
-            "last_trade_id": latest.get("trade_id"),
-            "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None,
-            "structural_confirmation": structural_ok,
-            "daily_trade_count": trade_count,
-        }
+        return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "NEW_STRUCTURAL_EVIDENCE", "last_trade_id": latest.get("trade_id"), "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None, "structural_confirmation": structural_ok, "daily_trade_count": trade_count}
 
-    return {
-        "applied": True,
-        "action": "WAIT_CONFIRMATION",
-        "allowed": False,
-        "reason": "REENTRY_STRUCTURE_REQUIRED",
-        "last_trade_id": latest.get("trade_id"),
-        "last_direction": last_direction,
-        "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None,
-        "minimum_displacement_points": MIN_REENTRY_DISPLACEMENT_POINTS,
-        "trend_state": trend_state,
-        "structural_event": structural_event,
-        "daily_trade_count": trade_count,
-    }
+    return {"applied": True, "action": "WAIT_CONFIRMATION", "allowed": False, "reason": "REENTRY_STRUCTURE_REQUIRED", "last_trade_id": latest.get("trade_id"), "last_direction": last_direction, "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None, "minimum_displacement_points": MIN_REENTRY_DISPLACEMENT_POINTS, "trend_state": trend_state, "structural_event": structural_event, "daily_trade_count": trade_count}
 
 
 __all__ = ["evaluate_paper_entry", "REENTRY_COOLDOWN_MINUTES", "MIN_REENTRY_DISPLACEMENT_POINTS", "MAX_DAILY_TRADES", "MAX_MOMENTUM_TRADES_PER_DIRECTION", "PAPER_ENTRY_CUTOFF_HOUR", "PAPER_ENTRY_CUTOFF_MINUTE", "MOMENTUM_STRATEGIES"]

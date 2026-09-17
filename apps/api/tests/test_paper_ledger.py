@@ -21,7 +21,8 @@ def _snapshot(ts="2026-09-10T04:00:00+00:00", spot=23500, bid=110, ask=112):
 
 def test_trading_day_and_session_close():
     assert trading_day("2026-09-10T04:00:00+00:00") == "2026-09-10"
-    assert not session_close_required("2026-09-10T09:59:59+00:00")
+    assert not session_close_required("2026-09-10T09:58:59+00:00")
+    assert session_close_required("2026-09-10T09:59:00+00:00")
     assert session_close_required("2026-09-10T10:00:00+00:00")
 
 
@@ -29,6 +30,8 @@ def test_open_close_persists_complete_trade_evidence(monkeypatch):
     recorded = []
     monkeypatch.setattr(manager_module, "record_outcome", recorded.append)
     monkeypatch.setattr(manager_module.LivePaperManager, "_recover", lambda self: None)
+    monkeypatch.setattr(manager_module, "claim_paper_trade_lock", lambda day, trade_id: True)
+    monkeypatch.setattr(manager_module, "release_paper_trade_lock", lambda day, trade_id: True)
     manager = LivePaperManager()
     manager.process(_snapshot(), _decision())
     assert recorded[0]["day"] == "2026-09-10"
@@ -38,7 +41,7 @@ def test_open_close_persists_complete_trade_evidence(monkeypatch):
     assert recorded[0]["delta_risk_at_entry"]["premium_target"] == 216
     assert recorded[0]["quantity"] == 65
     assert recorded[0]["entry_reasons"]["signal_evidence"]
-    close = manager.process(_snapshot(ts="2026-09-10T10:00:00+00:00", spot=23520, bid=125, ask=127), _decision())
+    close = manager.process(_snapshot(ts="2026-09-10T09:59:00+00:00", spot=23520, bid=125, ask=127), _decision())
     assert close["status"] == "CLOSED"
     assert recorded[1]["exit_reason"] == "SESSION_CLOSE"
     assert recorded[1]["exit_reasons"]["exit_reason"] == "SESSION_CLOSE"

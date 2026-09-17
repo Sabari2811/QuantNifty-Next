@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from quantnifty import entry_guard
 from quantnifty.decision_validation import validate_decision
 
@@ -102,10 +100,12 @@ def test_replay_mode_is_untouched(monkeypatch):
     assert result["risk"]["approved"] is True
 
 
-def test_validation_surfaces_entry_guard_block(monkeypatch):
+def test_validation_surfaces_entry_guard_as_expected_wait_not_schema_failure(monkeypatch):
     monkeypatch.setattr(entry_guard, "_latest_failed_signal", lambda direction, data: None)
+    monkeypatch.setattr("quantnifty.paper_entry_gate.load_events", lambda *args, **kwargs: [])
     result = _result()
     validation = validate_decision(_data(), result, "LIVE")
-    assert validation["valid"] is False
-    assert "entry_guard:support_breakdown_confirmation" in validation["errors"]
+    assert validation["valid"] is True
+    assert result["decision_action"] == "WAIT_CONFIRMATION"
+    assert result["status"] == "WAIT_CONFIRMATION"
     assert result["risk"]["approved"] is False

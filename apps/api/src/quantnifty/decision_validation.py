@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from quantnifty.entry_guard import evaluate_entry_guards
+from quantnifty.paper_entry_gate import evaluate_paper_entry
 
 VALID_DIRECTIONS = {"BULLISH", "BEARISH", "NEUTRAL"}
 
@@ -79,6 +80,8 @@ def validate_execution_plan(plan: dict[str, Any], signal: dict[str, Any], risk: 
     if plan.get("order_action") != "DISABLED":
         errors.append("order_action_must_be_disabled")
     expected_status = "APPROVED_READ_ONLY" if approved else "BLOCKED"
+    if approved and plan.get("status") == "HOLD_ACTIVE_TRADE":
+        expected_status = "HOLD_ACTIVE_TRADE"
     if plan.get("status") != expected_status:
         errors.append("plan_status_mismatch")
     direction = str(signal.get("direction") or "NEUTRAL").upper()
@@ -88,32 +91,80 @@ def validate_execution_plan(plan: dict[str, Any], signal: dict[str, Any], risk: 
         expected_side = "CE" if direction == "BULLISH" else "PE"
         if side and side != expected_side:
             errors.append("instrument_direction_mismatch")
-    if approved:
+    if approved and plan.get("status") != "HOLD_ACTIVE_TRADE":
         for field in ("stop_points", "target_points", "risk_reward"):
             if not _num(plan.get(field)) or float(plan.get(field) or 0) <= 0:
                 errors.append(f"invalid_{field}")
     return {"valid": not errors, "stage": "execution_plan", "errors": errors}
 
 
+def _set_entry_block(risk: dict[str, Any], reason: str) -> None:
+    gates = dict(risk.get("gates") or {})
+    gates["paper_entry_lifecycle"] = False
+    risk["gates"] = gates
+    reasons = [str(item) for item in (risk.get("reasons") or []) if str(item) not in gates]
+    reasons.append(reason)
+    risk["reasons"] = list(dict.fromkeys(reasons))
+    risk["approved"] = False
+
+
 def validate_decision(data: dict[str, Any], result: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:
     signal = result.get("signal") if isinstance(result, dict) else {}
     risk = result.get("risk") if isinstance(result, dict) else {}
     plan = result.get("execution_plan") if isinstance(result, dict) else {}
-    guard = evaluate_entry_guards(data, result, mode)
+    signal = signal if isinstance(signal, dict) else {}
+    risk = risk if isinstance(risk, dict) else {}
+    plan = plan if isinstance(plan, dict) else {}
+    direction = str(signal.get("direction") or "NEUTRAL").upper()
+    lifecycle = evaluate_paper_entry(data, direction, mode)
+    result["paper_entry_gate"] = lifecycle
+
+    active_trade = lifecycle.get("reason") == "ACTIVE_TRADE_LOCK"
+    if active_trade:
+        result["status"] = "HOLD_ACTIVE_TRADE"
+        result["decision_action"] = "HOLD_ACTIVE_TRADE"
+        plan["status"] = "HOLD_ACTIVE_TRADE"
+        plan["entry"] = None
+        plan["execution_enabled"] = False
+        plan["order_action"] = "DISABLED"
+        result["execution_plan"] = plan
+    elif lifecycle.get("applied") and not lifecycle.get("allowed") and str(mode).upper() == "LIVE":
+        reason = str(lifecycle.get("reason") or "PAPER_ENTRY_BLOCKED")
+        _set_entry_block(risk, reason)
+        result["risk"] = risk
+        plan["status"] = "BLOCKED"
+        plan["entry"] = None
+        plan["execution_enabled"] = False
+        plan["order_action"] = "DISABLED"
+        result["execution_plan"] = plan
+
+    guard = {"applied": False, "reason": "ACTIVE_TRADE_LOCK"} if active_trade else evaluate_entry_guards(data, result, mode)
     stages = {
         "input": validate_snapshot(data, mode),
-        "signal": validate_signal(signal if isinstance(signal, dict) else {}),
-        "risk": validate_risk(risk if isinstance(risk, dict) else {}),
-        "execution_plan": validate_execution_plan(plan if isinstance(plan, dict) else {}, signal if isinstance(signal, dict) else {}, risk if isinstance(risk, dict) else {}),
+        "signal": validate_signal(signal),
+        "risk": validate_risk(risk),
+        "execution_plan": validate_execution_plan(plan, signal, risk),
     }
     if isinstance(guard, dict) and guard.get("applied"):
         stages["entry_guard"] = {
-            "valid": not bool(guard.get("blocked")),
+            "valid": True,
             "stage": "entry_guard",
-            "errors": list(guard.get("reasons") or []),
-            "warnings": [],
+            "errors": [],
+            "warnings": list(guard.get("reasons") or []),
             "evidence": guard,
         }
+
+    if active_trade:
+        action = "HOLD_ACTIVE_TRADE"
+    elif bool(risk.get("approved")) and not bool(guard.get("blocked")):
+        action = "TAKE_TRADE"
+    elif direction in {"BULLISH", "BEARISH"}:
+        action = "WAIT_CONFIRMATION"
+    else:
+        action = "NO_TRADE"
+    result["decision_action"] = action
+    result["status"] = action
+
     errors = [f"{name}:{err}" for name, stage in stages.items() for err in stage["errors"]]
     warnings = [f"{name}:{warning}" for name, stage in stages.items() for warning in stage.get("warnings", [])]
-    return {"valid": not errors, "stages": stages, "errors": errors, "warnings": warnings}
+    return {"valid": not errors, "stages": stages, "errors": errors, "warnings": warnings, "decision_action": action, "paper_entry_gate": lifecycle}

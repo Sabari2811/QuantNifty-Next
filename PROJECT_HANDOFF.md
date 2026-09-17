@@ -1,6 +1,6 @@
 # QuantNifty-Next — Persistent Project Handoff
 
-**Updated:** 2026-09-15  
+**Updated:** 2026-09-17  
 **Branch:** `main`  
 **Repository:** https://github.com/Sabari2811/QuantNifty-Next  
 **Production:** https://quantnifty-api.onrender.com  
@@ -11,6 +11,18 @@
 QuantNifty-Next is a Live Adaptive Brain + After-Market Research Lab. Live decisions use only data available at decision time. Adaptive runtime is restricted to the live IST session; no overnight paper positions are allowed. Same-day Adaptive memory consumes only current-IST-day CLOSED outcomes in explicit LIVE mode. There is no historical learning/bootstrap/performance-gate path. Past live-session data is retained and accumulated; it is not deleted or used as a historical replay substitute. `data_Review.txt`, old recordings and external historical archives are replay/reference evidence only and never seed live Adaptive memory or policy. Real trading is permanently disabled.
 
 Do not modify `QuantNifty`, `data/instruments/fno.csv`, or commit secrets.
+
+## Render runtime / cost boundary
+The application runtime window is **09:00-16:00 IST, Monday-Friday**. This intentionally includes 09:00-09:15 pre-market initialization and 15:30-16:00 post-market research. The live provider remains separately guarded to **09:15-15:30 IST**. The new `application_runtime_state()` / `is_application_runtime_window()` helpers in `apps/api/src/quantnifty/market_session.py` make this boundary explicit and add runtime state to the closed payload.
+
+The production cost-saving design is: paid `quantnifty-api` compute active only during the 09:00-16:00 weekday window; paid `quantnifty-production` PostgreSQL remains available for durable learning, paper trades and research history. Application sleep alone does not stop paid Render compute; the Render service itself must be suspended/resumed. Render provides service suspend/resume API endpoints. The required scheduler configuration is documented in `docs/RENDER_RUNTIME.md`. No Render API secret is committed.
+
+Required QuantNifty-Next production resources:
+- `quantnifty-api`: paid `0.5c-512mb` / Starter-equivalent compute.
+- `quantnifty-production`: paid PostgreSQL for durable production state.
+- Separate `QuantNifty` services/workers are unrelated and must not be enabled for this project.
+
+Current Render integration cannot perform suspend/resume directly, so the final daily service lifecycle requires Render Dashboard/API scheduler configuration using a secret Render API key. The application code and exact IST/UTC schedule are now documented.
 
 ## Live paper risk
 At entry the paper manager freezes entry spot, entry premium, selected instrument, trigger, stop/target points, R:R and exit policy. Option premium SL/target are delta-driven from the NIFTY-point risk budget using live option delta. New entries require valid delta. Existing legacy OPEN trades without delta evidence are not fabricated or rewritten. No real orders are submitted and no overnight paper positions are carried.
@@ -105,21 +117,11 @@ The live validation harness treats NSE weekends as an intentional no-market cond
 The dashboard previously connected to `/ws` while the backend only exposed `/ws/market`, which caused the screenshot's **"Live stream disconnected · retrying…"** state. The backend now exposes both `/ws` and `/ws/market` to preserve compatibility. Outside market hours the WebSocket sends a `MARKET_CLOSED` heartbeat and does not poll the live provider.
 
 ## Validation state
-- Latest main after live-monitor enhancement: `310d4b78fe177b99fee038101577f7d2ea184c9d` (`Test live monitor trade history contract`).
-- Paper ledger router exposure: `d8ef77a8ec12e3b23fde988661ba472247f79152`.
-- Live monitor current/previous trade UI: `d2e6c1cf514e3f5d2ed51eb6701d1389e94d4f15`.
-- Live monitor UI contract test: `310d4b78fe177b99fee038101577f7d2ea184c9d`.
-- Existing dual learning isolation implemented on `main`: `after_market_lab.py` is explicitly raw-snapshot-only and records `live_*_data_accessed=false`; it remains counterfactual/read-only.
-- New `dual_learning.py` comparison layer: `8cc0fb08da6f741700718859515bcc927966b3da`.
-- Post-market isolation and metadata: `023e1a31671ecc109127dfa67eb3adda445dd82a`.
-- Dual-track regression tests: `96d3cf7162f126287d04e6f31bfa73b561de7622` plus strengthened after-market isolation assertions in `ff2711...`.
-- Historical statistical validation remains removed as a project requirement.
-- Thesis-hold implementation and point-based volatility risk are on `main`.
-- Research robustness and optimizer modules remain secondary offline tooling and do not seed live learning.
-- Validation harness hardening: `ff61a70f7d20fa00a356cc41d9dc474bd617e98c`.
-- Latency instrumentation: `d7349e16f2d564cb49bf78cf0afcce7622eae7c1`, `6af1c459efcf37f2423e4e81fa234320e88772d2`, `b6e30ed7163081713fdd762e36998cced4e248a3`.
-- Offline validation gate: `5802e4dd6c148544e722bc8ca2d2478d366b4dc4`, with V3 bid/ask assertion correction `c56c63591a192fa5b61601124b03f2d4a2f7f2f8`.
-- Deterministic QuantNifty intelligence is the sole decision layer; Astra is removed.
+- New application runtime boundary: `3009bcc8204da78231bdce2ce925b3521983dd8b` — explicit 09:00-16:00 IST weekday runtime helpers and runtime state in closed payload.
+- Runtime boundary tests: `d2d7e70fb320c67d32472f3bf4cecca30387f8c2` — 09:00 open, 15:59 active, 16:00 close, weekend close.
+- Render runtime/cost documentation: `5579304f8bcf4d656f6a551c601dfbb0f9c49211` — `docs/RENDER_RUNTIME.md`.
+- Live monitor current/previous trade UI remains on `main`.
+- Dual learning and post-market isolation remain on `main`.
 - Real trading remains permanently disabled.
 
 ## Non-negotiable rules

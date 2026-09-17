@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from quantnifty.learning_store import load_events, load_snapshots, record_outcome
+from quantnifty.paper_control import activate_kill_switch, current_day, kill_switch_state
 from quantnifty.paper_trade_tracker import PaperTrade, make_trade_id, same_trading_day, session_close_required, trading_day
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -109,12 +110,22 @@ def _exit_reasons(decision: dict[str, Any], reason: str) -> dict[str, Any]:
 
 
 class LivePaperManager:
-    """One-at-a-time read-only paper lifecycle with delta-driven option risk."""
+    """One-at-a-time read-only paper lifecycle with delta-driven option risk and a persistent daily kill switch."""
 
     def __init__(self) -> None:
         self.sequence = 0; self.active: PaperTrade | None = None; self.entry_price = 0.0; self.entry_quantity = DEFAULT_NIFTY_LOT_SIZE; self.instrument: dict[str, Any] | None = None; self.entry_reasons: dict[str, Any] = {}; self.entry_decision: dict[str, Any] = {}
         self.entry_risk: dict[str, Any] = {}; self.entry_trigger: str | None = None; self.entry_mode: str | None = None; self.exit_policy: dict[str, Any] = {}; self.entry_delta: float | None = None
+        self.kill_switch_day = current_day(); self.kill_switch_active = bool(kill_switch_state(self.kill_switch_day).get("active"))
         self._recover()
+
+    def _refresh_kill_switch(self) -> bool:
+        day = current_day()
+        if day != self.kill_switch_day:
+            self.kill_switch_day = day
+            self.kill_switch_active = False
+        if not self.kill_switch_active:
+            self.kill_switch_active = bool(kill_switch_state(day).get("active"))
+        return self.kill_switch_active
 
     def _restore(self, outcome: dict[str, Any]) -> None:
         self.active = PaperTrade(**{k: outcome[k] for k in PaperTrade.__dataclass_fields__ if k in outcome})
@@ -127,7 +138,7 @@ class LivePaperManager:
         self.entry_trigger = outcome.get("entry_trigger") or plan.get("entry"); self.entry_mode = outcome.get("entry_mode") or plan.get("entry_mode"); self.exit_policy = outcome.get("exit_policy") if isinstance(outcome.get("exit_policy"), dict) else (plan.get("exit_policy") if isinstance(plan.get("exit_policy"), dict) else {})
 
     def _recover(self) -> None:
-        today = datetime.now(IST).date().isoformat(); latest_by_trade: dict[str, dict[str, Any]] = {}
+        today = current_day(); latest_by_trade: dict[str, dict[str, Any]] = {}
         for event in load_events("outcomes"):
             outcome = event.get("outcome") if isinstance(event, dict) else None
             if not isinstance(outcome, dict): continue
@@ -145,6 +156,16 @@ class LivePaperManager:
             recovery_decision = {"strategy": "paper_recovery", "signal": {"direction": stale_row.get("direction"), "confidence": None, "evidence": [], "rationale": [], "adaptive": {}}, "risk": {"approved": False, "gates": {}, "reasons": ["SESSION_CLOSE_RECOVERY"]}, "execution_plan": {}, "mode": "RECOVERY"}
             self._close(snapshots[-1], recovery_decision, "SESSION_CLOSE_RECOVERY")
         current = [row for row in latest_by_trade.values() if trading_day(row.get("entry_timestamp")) == today]
+        if len(current) > 1:
+            snapshots = load_snapshots(today)
+            keep = max(current, key=lambda row: str(row.get("entry_timestamp") or ""))
+            if snapshots:
+                guard_decision = {"strategy": "paper_recovery_guard", "signal": {"direction": None, "confidence": None, "evidence": [], "rationale": [], "adaptive": {}}, "risk": {"approved": False, "gates": {}, "reasons": ["MULTIPLE_ACTIVE_TRADE_GUARD"]}, "execution_plan": {}, "mode": "RECOVERY_GUARD"}
+                for row in current:
+                    if row.get("trade_id") == keep.get("trade_id"): continue
+                    self._restore(row)
+                    self._close(snapshots[-1], guard_decision, "MULTIPLE_ACTIVE_TRADE_GUARD")
+            current = [keep]
         if current:
             try: self._restore(current[-1])
             except (TypeError, ValueError): self.active = None
@@ -173,8 +194,35 @@ class LivePaperManager:
         self.active = None; self.entry_price = 0.0; self.entry_quantity = DEFAULT_NIFTY_LOT_SIZE; self.instrument = None; self.entry_reasons = {}; self.entry_decision = {}; self.entry_risk = {}; self.entry_delta = None; self.entry_trigger = None; self.entry_mode = None; self.exit_policy = {}
         return outcome
 
+    def activate_daily_kill_switch(self, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        state = activate_kill_switch("MANUAL_KILL_SWITCH")
+        self.kill_switch_day = str(state["day"]); self.kill_switch_active = True
+        latest = snapshot
+        if latest is None:
+            snapshots = load_snapshots(self.kill_switch_day)
+            latest = snapshots[-1] if snapshots else None
+        if latest is not None:
+            open_rows: dict[str, dict[str, Any]] = {}
+            for event in load_events("outcomes", self.kill_switch_day):
+                outcome = event.get("outcome") if isinstance(event, dict) else None
+                if not isinstance(outcome, dict): continue
+                trade_id = str(outcome.get("trade_id") or "")
+                if not trade_id: continue
+                if str(outcome.get("status") or "").upper() == "OPEN": open_rows[trade_id] = outcome
+                elif str(outcome.get("status") or "").upper() == "CLOSED": open_rows.pop(trade_id, None)
+            decision = {"strategy": "manual_kill_switch", "signal": {"direction": None, "confidence": None, "evidence": [], "rationale": [], "adaptive": {}}, "risk": {"approved": False, "gates": {"kill_switch": False}, "reasons": ["MANUAL_KILL_SWITCH"]}, "execution_plan": {}, "mode": "PAPER_CONTROL"}
+            for row in sorted(open_rows.values(), key=lambda item: str(item.get("entry_timestamp") or "")):
+                self._restore(row)
+                self._close(latest, decision, "MANUAL_KILL_SWITCH")
+        return {**state, "closed_open_positions": True if latest is not None else False}
+
     def process(self, snapshot: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
         timestamp = str(snapshot.get("timestamp") or ""); plan = decision.get("execution_plan") or {}
+        if self._refresh_kill_switch():
+            if self.active is not None:
+                outcome = self._close(snapshot, decision, "MANUAL_KILL_SWITCH")
+                return {"status": "CLOSED", "outcome": outcome, "kill_switch": True}
+            return {"status": "KILL_SWITCH_ACTIVE", "kill_switch": True}
         if self.active is not None:
             self.active.update(timestamp, _f(snapshot.get("spot"))); same_day = same_trading_day(self.active.entry_timestamp, timestamp); trade_view = self._trade_view(snapshot); current_price = _f(trade_view.get("current_price")); premium_sl = _f(trade_view.get("premium_sl")); premium_target = _f(trade_view.get("premium_target")); hit_sl = premium_sl > 0 and current_price > 0 and current_price <= premium_sl; hit_target = premium_target > 0 and current_price >= premium_target
             should_close = session_close_required(timestamp) or not same_day or hit_sl or hit_target or not bool((decision.get("risk") or {}).get("approved"))

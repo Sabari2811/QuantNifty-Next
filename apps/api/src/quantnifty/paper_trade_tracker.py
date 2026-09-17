@@ -8,10 +8,17 @@ from zoneinfo import ZoneInfo
 IST = ZoneInfo("Asia/Kolkata")
 NORMAL_ENTRY_CUTOFF_HOUR = 15
 NORMAL_ENTRY_CUTOFF_MINUTE = 14
-CASH_SESSION_START_HOUR = 15
-CASH_SESSION_START_MINUTE = 15
-CASH_FORCE_EXIT_HOUR = 15
-CASH_FORCE_EXIT_MINUTE = 29
+CAS_SESSION_START_HOUR = 15
+CAS_SESSION_START_MINUTE = 15
+CAS_FORCE_EXIT_HOUR = 15
+CAS_FORCE_EXIT_MINUTE = 39
+DERIVATIVES_CLOSE_HOUR = 15
+DERIVATIVES_CLOSE_MINUTE = 40
+# Backward-compatible names.
+CASH_SESSION_START_HOUR = CAS_SESSION_START_HOUR
+CASH_SESSION_START_MINUTE = CAS_SESSION_START_MINUTE
+CASH_FORCE_EXIT_HOUR = CAS_FORCE_EXIT_HOUR
+CASH_FORCE_EXIT_MINUTE = CAS_FORCE_EXIT_MINUTE
 
 
 @dataclass
@@ -81,27 +88,26 @@ def _active_strategy_for_day(day: str | None) -> str | None:
         latest = max(active.values(), key=lambda row: str(row.get("entry_timestamp") or row.get("timestamp") or ""))
         return str(latest.get("strategy") or "").strip().lower() or None
     except Exception:
-        # A lifecycle lookup failure must fail closed at the normal cutoff.
         return None
 
 
 def session_close_required(timestamp: str | None) -> bool:
     """Return whether the current active paper position must be closed.
 
-    Normal positions are forced out before the 15:15 cash/CAS influence window.
-    A dedicated cash-session position may remain until 15:29, after which every
-    paper position is forced closed. If durable lifecycle evidence is missing,
-    the function fails closed and closes the position rather than carrying it
-    through the cash window.
+    Normal NIFTY-option positions are closed before the NSE CAS begins at
+    15:15. A CAS-aware NIFTY-derivatives position may remain through the CAS
+    matching period, but is forcibly closed at 15:39, one minute before the
+    NSE equity-derivatives regular-session close at 15:40.
     """
     dt = _timestamp(timestamp)
     if not dt:
         return False
     local = dt.astimezone(IST)
     t = local.time()
-    if (t.hour, t.minute) >= (CASH_FORCE_EXIT_HOUR, CASH_FORCE_EXIT_MINUTE):
+    minute = (t.hour, t.minute)
+    if minute >= (CAS_FORCE_EXIT_HOUR, CAS_FORCE_EXIT_MINUTE):
         return True
-    if (t.hour, t.minute) < (NORMAL_ENTRY_CUTOFF_HOUR, NORMAL_ENTRY_CUTOFF_MINUTE):
+    if minute < (CAS_SESSION_START_HOUR, CAS_SESSION_START_MINUTE):
         return False
     strategy = _active_strategy_for_day(local.date().isoformat())
     return strategy != "cas_reentry"

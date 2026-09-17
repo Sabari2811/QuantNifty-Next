@@ -4,12 +4,18 @@ from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from quantnifty.cash_session_strategy import CASH_ENTRY_CUTOFF, CASH_FORCE_EXIT, CASH_SESSION_START, evaluate_cash_strategy
+from quantnifty.cash_session_strategy import (
+    CAS_MATCHING_END,
+    CAS_START,
+    CAS_STRATEGY_ENTRY_CUTOFF,
+    CAS_STRATEGY_FORCE_EXIT,
+    DERIVATIVES_CLOSE,
+    evaluate_cash_strategy,
+)
 
 IST = ZoneInfo("Asia/Kolkata")
 NORMAL_START = time(9, 20)
-NORMAL_END = CASH_SESSION_START
-MARKET_CLOSE = time(15, 30)
+NORMAL_END = CAS_START
 
 
 def _timestamp(value: Any) -> datetime | None:
@@ -45,24 +51,37 @@ def session_phase(snapshot: dict[str, Any]) -> dict[str, Any]:
         return {"phase": "PRE_OPEN", "decision_enabled": False, "reason": "before_09:20", "local_time": local.isoformat()}
     if t < NORMAL_END:
         return {"phase": "NORMAL_ADAPTIVE", "decision_enabled": True, "reason": "adaptive_intraday_window", "local_time": local.isoformat()}
-    if t < MARKET_CLOSE:
+    if t < CAS_MATCHING_END:
         return {
             "phase": "CAS_REENTRY",
             "decision_enabled": True,
-            "reason": "cash_influence_reentry_window",
+            "reason": "nse_closing_auction_influence_window",
             "local_time": local.isoformat(),
-            "cash_session": {"start": CASH_SESSION_START.strftime("%H:%M"), "entry_cutoff": CASH_ENTRY_CUTOFF.strftime("%H:%M"), "force_exit": CASH_FORCE_EXIT.strftime("%H:%M")},
+            "cas": {
+                "start": CAS_START.strftime("%H:%M"),
+                "matching_end": CAS_MATCHING_END.strftime("%H:%M"),
+                "nifty_options_participate_in_cas": False,
+            },
         }
-    return {"phase": "CLOSED", "decision_enabled": False, "reason": "after_15:30", "local_time": local.isoformat()}
+    if t < DERIVATIVES_CLOSE:
+        return {
+            "phase": "DERIVATIVES_CLOSE_ONLY",
+            "decision_enabled": True,
+            "reason": "cas_matching_complete_nifty_derivatives_still_open",
+            "local_time": local.isoformat(),
+            "new_entries": False,
+            "force_exit": CAS_STRATEGY_FORCE_EXIT.strftime("%H:%M"),
+            "derivatives_close": DERIVATIVES_CLOSE.strftime("%H:%M"),
+        }
+    return {"phase": "CLOSED", "decision_enabled": False, "reason": "after_15:40", "local_time": local.isoformat()}
 
 
 def cas_signal(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Produce a cash-session signal from current/previous observations.
+    """Produce a CAS-aware NIFTY-options signal from current observations.
 
-    A provider-supplied CAS signal is retained as optional evidence, but the
-    live decision does not depend on a future-looking auction result. The
-    deterministic cash strategy uses only observations already available at
-    the current snapshot.
+    A provider-supplied CAS signal is optional evidence only. The live decision
+    never consumes a future auction result and never assumes NIFTY options are
+    themselves traded in the cash CAS.
     """
     strategy = evaluate_cash_strategy(snapshot, previous)
     raw = _cas_payload(snapshot)
@@ -73,9 +92,13 @@ def cas_signal(snapshot: dict[str, Any], previous: dict[str, Any] | None = None)
         "valid": bool(strategy.get("valid")),
         "direction": strategy.get("direction", "NEUTRAL"),
         "confidence": strategy.get("confidence", 0.0),
-        "source": "DETERMINISTIC_CASH_SESSION" if strategy.get("valid") else raw_source,
+        "source": "DETERMINISTIC_CAS_AWARE" if strategy.get("valid") else raw_source,
         "strategy": strategy,
-        "provider_cas_evidence": {"available": bool(raw), "direction": raw_direction if raw_direction in {"BULLISH", "BEARISH"} else "NEUTRAL", "source": raw_source},
+        "provider_cas_evidence": {
+            "available": bool(raw),
+            "direction": raw_direction if raw_direction in {"BULLISH", "BEARISH"} else "NEUTRAL",
+            "source": raw_source,
+        },
     }
 
 
@@ -83,16 +106,17 @@ def session_decision_policy(snapshot: dict[str, Any], previous: dict[str, Any] |
     phase = session_phase(snapshot)
     cas = cas_signal(snapshot, previous) if phase["phase"] == "CAS_REENTRY" else {"available": False, "valid": False, "direction": "NEUTRAL", "confidence": 0.0, "source": None}
     if phase["phase"] == "CAS_REENTRY":
+        allow_entry = bool(cas["valid"]) and _timestamp(snapshot.get("timestamp")).astimezone(IST).time() < CAS_STRATEGY_ENTRY_CUTOFF
         return {
             **phase,
             "cas": cas,
-            "cash_strategy": cas.get("strategy"),
+            "cas_strategy": cas.get("strategy"),
             "allow_normal_adaptive": False,
-            "allow_new_trade": bool(cas["valid"]),
-            "selected_strategy": "cas_reentry" if cas["valid"] else "standby",
-            "preferred_direction": cas["direction"] if cas["valid"] else "NEUTRAL",
-            "reason": "deterministic cash-session strategy confirmed" if cas["valid"] else "waiting for cash-session confirmation",
+            "allow_new_trade": allow_entry,
+            "selected_strategy": "cas_reentry" if allow_entry else "standby",
+            "preferred_direction": cas["direction"] if allow_entry else "NEUTRAL",
+            "reason": "deterministic CAS-aware strategy confirmed" if allow_entry else "waiting for CAS-aware confirmation or entry cutoff",
         }
     if phase["phase"] == "NORMAL_ADAPTIVE":
-        return {**phase, "cas": cas, "cash_strategy": None, "allow_normal_adaptive": True, "allow_new_trade": True, "selected_strategy": None, "preferred_direction": "NEUTRAL"}
-    return {**phase, "cas": cas, "cash_strategy": None, "allow_normal_adaptive": False, "allow_new_trade": False, "selected_strategy": "standby", "preferred_direction": "NEUTRAL"}
+        return {**phase, "cas": cas, "cas_strategy": None, "allow_normal_adaptive": True, "allow_new_trade": True, "selected_strategy": None, "preferred_direction": "NEUTRAL"}
+    return {**phase, "cas": cas, "cas_strategy": None, "allow_normal_adaptive": False, "allow_new_trade": False, "selected_strategy": "standby", "preferred_direction": "NEUTRAL"}

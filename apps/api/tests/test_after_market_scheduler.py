@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from quantnifty.after_market_scheduler import _training_already_completed
+from quantnifty.after_market_scheduler import RUN_AT, _training_already_completed
+
+
+def test_scheduler_starts_at_1530():
+    assert RUN_AT.hour == 15
+    assert RUN_AT.minute == 30
 
 
 def test_scheduler_requires_completed_stored_day_training(monkeypatch):

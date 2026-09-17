@@ -40,24 +40,51 @@ def _oi_pressure(snapshot: dict[str, Any]) -> tuple[float, float]:
     return bullish, bearish
 
 
+def _option_momentum(snapshot: dict[str, Any]) -> tuple[float, float]:
+    """Return aggregate positive/negative near-ATM premium momentum."""
+    spot = _f(snapshot.get("spot"))
+    bullish = bearish = 0.0
+    for row in snapshot.get("option_chain") or []:
+        if not isinstance(row, dict):
+            continue
+        strike = _f(row.get("strike")); side = str(row.get("side") or row.get("option_type") or "").upper()
+        if side not in {"CE", "PE"} or strike <= 0 or spot <= 0 or abs(strike - spot) / spot > 0.02:
+            continue
+        price = _f(row.get("last_price")); previous_close = _f(row.get("previous_close")); change = price - previous_close
+        weight = max(_f(row.get("volume")), 1.0)
+        if side == "CE":
+            bullish += change * weight
+        else:
+            bearish += change * weight
+    return bullish, bearish
+
+
 def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Deterministic late-session NIFTY options strategy using only current/previous data.
+    """Deterministic late-session NIFTY options strategy using available observations only.
 
     This is a cash-market-influence window for NIFTY options, not a claim that
     the NIFTY index itself participates in the equity cash closing auction.
-    It deliberately requires fresh directional movement plus participation/OI
-    confirmation so the final minutes are not traded merely because the clock
-    changed.
+    The strategy requires directional movement plus participation/OI evidence.
     """
     previous = previous or {}
     spot = _f(snapshot.get("spot"))
     previous_spot = _f(previous.get("spot"))
     move_points = spot - previous_spot if spot and previous_spot else 0.0
+    bullish_premium, bearish_premium = _option_momentum(snapshot)
+    if move_points == 0.0:
+        premium_bias = "BULLISH" if bullish_premium > bearish_premium else "BEARISH" if bearish_premium > bullish_premium else "NEUTRAL"
+        recorded_bias = str(snapshot.get("bias") or "NEUTRAL").upper()
+        if premium_bias == "NEUTRAL" and recorded_bias in {"BULLISH", "BEARISH"}:
+            direction = recorded_bias
+        else:
+            direction = premium_bias
+    else:
+        direction = "BULLISH" if move_points > 0 else "BEARISH"
+
     volume = sum(_f(row.get("volume")) for row in snapshot.get("option_chain") or [] if isinstance(row, dict))
     previous_volume = sum(_f(row.get("volume")) for row in previous.get("option_chain") or [] if isinstance(row, dict))
     volume_change = _pct(volume, previous_volume) if previous_volume else 0.0
     bullish_oi, bearish_oi = _oi_pressure(snapshot)
-    total_oi = bullish_oi + bearish_oi
     oi_bias = "BULLISH" if bullish_oi > bearish_oi * 1.15 else "BEARISH" if bearish_oi > bullish_oi * 1.15 else "NEUTRAL"
     iv_change = _pct(_f(snapshot.get("atm_iv")), _f(previous.get("atm_iv"))) if _f(previous.get("atm_iv")) else 0.0
     em = _f((snapshot.get("expected_move") or {}).get("move"))
@@ -66,7 +93,6 @@ def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | 
     liquidity = _f(snapshot.get("liquidity_score"))
     gex = _f(snapshot.get("gex"))
 
-    direction = "BULLISH" if move_points > 0 else "BEARISH" if move_points < 0 else oi_bias
     alignment = oi_bias == direction and direction in {"BULLISH", "BEARISH"}
     score = 0.0
     score += 25.0 if abs(move_points) >= MIN_SPOT_MOVE_POINTS else 0.0
@@ -78,7 +104,7 @@ def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | 
     if direction in {"BULLISH", "BEARISH"} and oi_bias not in {"NEUTRAL", direction}:
         score -= 15.0
 
-    valid = direction in {"BULLISH", "BEARISH"} and abs(move_points) >= MIN_SPOT_MOVE_POINTS and score >= MIN_SCORE and liquidity >= 50.0
+    valid = direction in {"BULLISH", "BEARISH"} and score >= MIN_SCORE and liquidity >= 50.0
     return {
         "strategy": "cash_session",
         "session": "CASH_INFLUENCE_15:15_15:30",
@@ -87,6 +113,7 @@ def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | 
         "confidence": round(min(99.0, score), 1),
         "score": round(score, 1),
         "spot_move_points": round(move_points, 2),
+        "option_premium_momentum": "BULLISH" if bullish_premium > bearish_premium else "BEARISH" if bearish_premium > bullish_premium else "NEUTRAL",
         "volume_change_pct": round(volume_change, 2),
         "oi_bias": oi_bias,
         "oi_bullish_pressure": round(bullish_oi, 2),
@@ -104,9 +131,4 @@ def evaluate_cash_strategy(snapshot: dict[str, Any], previous: dict[str, Any] | 
     }
 
 
-__all__ = [
-    "CASH_SESSION_START",
-    "CASH_ENTRY_CUTOFF",
-    "CASH_FORCE_EXIT",
-    "evaluate_cash_strategy",
-]
+__all__ = ["CASH_SESSION_START", "CASH_ENTRY_CUTOFF", "CASH_FORCE_EXIT", "evaluate_cash_strategy"]

@@ -22,6 +22,7 @@ MOMENTUM_STRATEGIES = {
     "negative_gamma_expansion",
     "cas_reentry",
     "breakout_watch",
+    "gamma_transition",
 }
 
 
@@ -75,8 +76,26 @@ def _lifecycle(day: str) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str,
     return latest, closed
 
 
+def _direction_counts(closed: dict[str, dict[str, Any]]) -> dict[str, int]:
+    counts = {"BULLISH": 0, "BEARISH": 0}
+    for row in closed.values():
+        direction = str(row.get("direction") or "").upper()
+        if direction in counts:
+            counts[direction] += 1
+    return counts
+
+
 def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE", strategy: str | None = None) -> dict[str, Any]:
-    """Return a durable, deterministic TAKE/WAIT/HOLD/NO-TRADE lifecycle decision."""
+    """Return a durable, deterministic TAKE/WAIT/HOLD/NO-TRADE lifecycle decision.
+
+    Paper session policy:
+    - one active position at a time;
+    - at most three completed entries per IST session;
+    - first bullish momentum slot and first bearish momentum slot are separate;
+    - a third daily momentum trade is allowed only after both directional slots
+      have been used and the normal re-entry confirmation rules pass;
+    - no new entries from 15:29 IST onward.
+    """
     if str(mode or "LIVE").upper() != "LIVE":
         return {"applied": False, "action": "PASS", "allowed": True, "reason": "NON_LIVE_MODE"}
 
@@ -108,21 +127,56 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
             "active_direction": newest.get("direction"),
             "active_entry_timestamp": newest.get("entry_timestamp"),
             "active_trade_count": len(active),
-            "daily_limit": MAX_DAILY_TRADES,
+            "daily_trade_count": len(closed),
+            "max_daily_trades": MAX_DAILY_TRADES,
         }
 
     trade_count = len(closed)
+    direction_counts = _direction_counts(closed)
     if trade_count >= MAX_DAILY_TRADES:
-        return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "DAILY_TRADE_LIMIT", "daily_trade_count": trade_count, "max_daily_trades": MAX_DAILY_TRADES}
+        return {
+            "applied": True,
+            "action": "NO_TRADE",
+            "allowed": False,
+            "reason": "DAILY_TRADE_LIMIT",
+            "daily_trade_count": trade_count,
+            "max_daily_trades": MAX_DAILY_TRADES,
+            "direction_counts": direction_counts,
+        }
 
     strategy_name = _strategy_name(strategy, data)
     momentum = strategy_name in MOMENTUM_STRATEGIES or not strategy_name
-    direction_count = sum(1 for row in closed.values() if str(row.get("direction") or "").upper() == direction and (str(row.get("strategy") or "").strip().lower() in MOMENTUM_STRATEGIES or not str(row.get("strategy") or "").strip()))
-    if momentum and direction_count >= MAX_MOMENTUM_TRADES_PER_DIRECTION:
-        return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": f"{direction}_MOMENTUM_TRADE_LIMIT", "daily_trade_count": trade_count, "directional_trade_count": direction_count, "max_directional_trades": MAX_MOMENTUM_TRADES_PER_DIRECTION, "strategy": strategy_name or "UNSPECIFIED_MOMENTUM"}
+    direction_count = direction_counts[direction]
+    both_direction_slots_used = direction_counts["BULLISH"] >= 1 and direction_counts["BEARISH"] >= 1
+
+    # The first trade in each direction is its dedicated momentum slot. The
+    # third daily trade is a final cycle slot and is allowed only after the
+    # session has already covered both bullish and bearish momentum. This
+    # prevents repeated same-direction churn while still permitting a genuine
+    # second momentum leg after a confirmed reversal.
+    if momentum and direction_count >= MAX_MOMENTUM_TRADES_PER_DIRECTION and not (trade_count == 2 and both_direction_slots_used):
+        return {
+            "applied": True,
+            "action": "NO_TRADE",
+            "allowed": False,
+            "reason": f"{direction}_MOMENTUM_TRADE_LIMIT",
+            "daily_trade_count": trade_count,
+            "directional_trade_count": direction_count,
+            "max_directional_trades": MAX_MOMENTUM_TRADES_PER_DIRECTION,
+            "direction_counts": direction_counts,
+            "third_trade_available": both_direction_slots_used and trade_count == 2,
+        }
 
     if not closed:
-        return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "NO_PRIOR_TRADE_TODAY", "daily_trade_count": 0, "max_daily_trades": MAX_DAILY_TRADES}
+        return {
+            "applied": True,
+            "action": "TAKE_TRADE",
+            "allowed": True,
+            "reason": "NO_PRIOR_TRADE_TODAY",
+            "daily_trade_count": 0,
+            "max_daily_trades": MAX_DAILY_TRADES,
+            "direction_counts": direction_counts,
+        }
 
     latest = max(closed.values(), key=lambda row: str(row.get("exit_timestamp") or row.get("timestamp") or ""))
     exit_ts = _ts(latest.get("exit_timestamp") or latest.get("timestamp"))
@@ -132,11 +186,32 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     elapsed_seconds = max(0.0, (timestamp - exit_ts).total_seconds())
     cooldown_seconds = REENTRY_COOLDOWN_MINUTES * 60.0
     if elapsed_seconds < cooldown_seconds:
-        return {"applied": True, "action": "WAIT_CONFIRMATION", "allowed": False, "reason": "REENTRY_COOLDOWN", "last_trade_id": latest.get("trade_id"), "last_direction": latest.get("direction"), "elapsed_seconds": round(elapsed_seconds, 1), "remaining_seconds": round(cooldown_seconds - elapsed_seconds, 1), "cooldown_minutes": REENTRY_COOLDOWN_MINUTES, "daily_trade_count": trade_count}
+        return {
+            "applied": True,
+            "action": "WAIT_CONFIRMATION",
+            "allowed": False,
+            "reason": "REENTRY_COOLDOWN",
+            "last_trade_id": latest.get("trade_id"),
+            "last_direction": latest.get("direction"),
+            "elapsed_seconds": round(elapsed_seconds, 1),
+            "remaining_seconds": round(cooldown_seconds - elapsed_seconds, 1),
+            "cooldown_minutes": REENTRY_COOLDOWN_MINUTES,
+            "daily_trade_count": trade_count,
+            "direction_counts": direction_counts,
+        }
 
     last_direction = str(latest.get("direction") or "NEUTRAL").upper()
     if direction != last_direction:
-        return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "DIRECTION_CHANGE_AFTER_COOLDOWN", "last_trade_id": latest.get("trade_id"), "daily_trade_count": trade_count}
+        return {
+            "applied": True,
+            "action": "TAKE_TRADE",
+            "allowed": True,
+            "reason": "DIRECTION_CHANGE_AFTER_COOLDOWN",
+            "last_trade_id": latest.get("trade_id"),
+            "daily_trade_count": trade_count,
+            "direction_counts": direction_counts,
+            "third_trade": trade_count == 2 and both_direction_slots_used,
+        }
 
     exit_spot = _f(latest.get("exit_spot")); spot = _f(data.get("spot")); directional_displacement = None
     if exit_spot is not None and spot is not None:
@@ -153,9 +228,33 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     structural_ok = trend_state and structural_event
 
     if displacement_ok or structural_ok:
-        return {"applied": True, "action": "TAKE_TRADE", "allowed": True, "reason": "NEW_STRUCTURAL_EVIDENCE", "last_trade_id": latest.get("trade_id"), "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None, "structural_confirmation": structural_ok, "daily_trade_count": trade_count}
+        return {
+            "applied": True,
+            "action": "TAKE_TRADE",
+            "allowed": True,
+            "reason": "NEW_STRUCTURAL_EVIDENCE",
+            "last_trade_id": latest.get("trade_id"),
+            "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None,
+            "structural_confirmation": structural_ok,
+            "daily_trade_count": trade_count,
+            "direction_counts": direction_counts,
+            "third_trade": trade_count == 2 and both_direction_slots_used,
+        }
 
-    return {"applied": True, "action": "WAIT_CONFIRMATION", "allowed": False, "reason": "REENTRY_STRUCTURE_REQUIRED", "last_trade_id": latest.get("trade_id"), "last_direction": last_direction, "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None, "minimum_displacement_points": MIN_REENTRY_DISPLACEMENT_POINTS, "trend_state": trend_state, "structural_event": structural_event, "daily_trade_count": trade_count}
+    return {
+        "applied": True,
+        "action": "WAIT_CONFIRMATION",
+        "allowed": False,
+        "reason": "REENTRY_STRUCTURE_REQUIRED",
+        "last_trade_id": latest.get("trade_id"),
+        "last_direction": last_direction,
+        "directional_displacement_points": round(directional_displacement, 2) if directional_displacement is not None else None,
+        "minimum_displacement_points": MIN_REENTRY_DISPLACEMENT_POINTS,
+        "trend_state": trend_state,
+        "structural_event": structural_event,
+        "daily_trade_count": trade_count,
+        "direction_counts": direction_counts,
+    }
 
 
 __all__ = ["evaluate_paper_entry", "REENTRY_COOLDOWN_MINUTES", "MIN_REENTRY_DISPLACEMENT_POINTS", "MAX_DAILY_TRADES", "MAX_MOMENTUM_TRADES_PER_DIRECTION", "PAPER_ENTRY_CUTOFF_HOUR", "PAPER_ENTRY_CUTOFF_MINUTE", "MOMENTUM_STRATEGIES"]

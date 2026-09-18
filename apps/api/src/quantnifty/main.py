@@ -301,21 +301,39 @@ async def paper_live_monitor():
     ltp = num(option_item.get("live_price"))
     bid, ask = _quote_depth(option_item)
     trade = dict(live_paper._trade_view(cache.get("snapshot") or {}))
+    # Front-end display is option-native: current price is the provider LTP for the exact
+    # active contract.  Executable exit/P&L remain BID-marked, but are kept separate so
+    # a wide option spread can never make the UI look like it is showing another price.
+    current_ltp = round(ltp, 6) if ltp > 0 else None
+    executable_exit = round(bid, 6) if bid is not None else current_ltp
     trade["current_spot"] = round(spot, 4)
-    trade["current_ltp"] = round(ltp, 6) if ltp > 0 else None
+    trade["current_ltp"] = current_ltp
     trade["current_bid"] = round(bid, 6) if bid is not None else None
     trade["current_ask"] = round(ask, 6) if ask is not None else None
     trade["current_spread"] = round(ask - bid, 6) if bid is not None and ask is not None and ask >= bid else None
-    trade["current_price"] = round(bid, 6) if bid is not None else round(ltp, 6) if ltp > 0 else None
-    trade["mark_price"] = trade["current_price"]
-    trade["exit_price"] = trade["current_price"]
+    trade["current_price"] = current_ltp
+    trade["mark_price"] = current_ltp
+    trade["exit_price"] = executable_exit
     trade["exit_price_source"] = "BID" if bid is not None else "LTP"
-    trade["mark_source"] = trade["exit_price_source"]
-    trade["pnl"] = round((trade["current_price"] - trade["entry_price"]) * trade["quantity"], 4) if trade["current_price"] is not None else None
+    trade["mark_source"] = "LTP"
+    trade["pnl_mark_price"] = executable_exit
+    trade["pnl_mark_source"] = trade["exit_price_source"]
+    trade["pnl"] = round((executable_exit - trade["entry_price"]) * trade["quantity"], 4) if executable_exit is not None else None
     trade["unrealized_pnl"] = trade["pnl"]
-    trade["pnl_pct"] = round((trade["current_price"] - trade["entry_price"]) / trade["entry_price"] * 100.0, 4) if trade["current_price"] is not None and trade["entry_price"] else None
+    trade["pnl_pct"] = round((executable_exit - trade["entry_price"]) / trade["entry_price"] * 100.0, 4) if executable_exit is not None and trade["entry_price"] else None
     trade["unrealized_pnl_pct"] = trade["pnl_pct"]
-    trade["movement"] = "UP" if trade["current_price"] is not None and trade["current_price"] > trade["entry_price"] else "DOWN" if trade["current_price"] is not None and trade["current_price"] < trade["entry_price"] else "FLAT"
+    trade["movement"] = "UP" if current_ltp is not None and current_ltp > trade["entry_price"] else "DOWN" if current_ltp is not None and current_ltp < trade["entry_price"] else "FLAT"
+    # Keep the decision engine's risk budget, but expose the SL/target as option-premium
+    # values using the entry delta. They are no longer recalculated from the cached spot quote.
+    entry_risk = trade.get("entry_risk") if isinstance(trade.get("entry_risk"), dict) else {}
+    entry_delta = trade.get("entry_delta")
+    native_levels = _delta_premium_levels(trade["entry_price"], entry_delta, entry_risk)
+    trade["premium_sl"] = native_levels.get("premium_stop")
+    trade["premium_target"] = native_levels.get("premium_target")
+    trade["premium_sl_distance"] = native_levels.get("premium_stop_distance")
+    trade["premium_target_distance"] = native_levels.get("premium_target_distance")
+    trade["delta_risk_method"] = "ENTRY_PREMIUM_PLUS_ENTRY_DELTA_X_NIFTY_POINTS"
+    trade["option_price_source"] = "INDstocks /market/quotes/full live_price"
     trade["mark_timestamp"] = datetime.now(timezone.utc).isoformat()
     trade["quote_source"] = "INDstocks /market/quotes/full"
     trade["quote_quality"] = "OK" if ltp > 0 and (bid is None or ask is None or bid <= ask) else "INVALID_BOOK"

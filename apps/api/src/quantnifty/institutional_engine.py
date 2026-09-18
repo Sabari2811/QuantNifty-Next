@@ -85,7 +85,38 @@ def institutional_signal(data: dict[str, Any], previous: dict[str, Any] | None =
     if gamma["regime"] == "NEGATIVE" and base in {"BULLISH","BEARISH"}: raw[base] += 5
     winner = max((k for k in raw if k != "NEUTRAL"), key=lambda k: raw[k]); edge = raw[winner] - raw["NEUTRAL"]; confidence = min(99, max(0, 50 + edge * .55)); direction = winner if raw[winner] >= 50 and edge >= 15 else "NEUTRAL"
     if ev["probability_confidence"] >= 70 and abs(ev["bullish_probability"] - ev["bearish_probability"]) >= 35: direction = "BULLISH" if ev["bullish_probability"] > ev["bearish_probability"] else "BEARISH"; confidence = max(confidence, ev["probability_confidence"])
-    return {"direction": direction, "confidence": round(confidence, 1), "scores": {k: round(v, 1) for k, v in raw.items()}, "evidence": evidence, "gamma": gamma, "oi_flow": oi, "volatility": vol, "dealer": dealer, "historical_evidence": ev}
+    result = {"direction": direction, "confidence": round(confidence, 1), "scores": {k: round(v, 1) for k, v in raw.items()}, "evidence": evidence, "gamma": gamma, "oi_flow": oi, "volatility": vol, "dealer": dealer, "historical_evidence": ev}
+    result["context_alignment"] = _context_alignment(data, result)
+    return result
+
+
+def _context_alignment(data: dict[str, Any], signal: dict[str, Any]) -> dict[str, Any]:
+    """Measure independent context agreement before allowing a directional entry.
+
+    The brain may still form a directional thesis, but a thesis that conflicts
+    with broader context must wait for confirmation. This targets the observed
+    gamma-transition/positive-gamma failure mode without hard-coding one trade.
+    """
+    direction = str(signal.get("direction") or "NEUTRAL").upper()
+    if direction not in {"BULLISH", "BEARISH"}:
+        return {"direction": direction, "aligned": 0, "conflicting": 0, "signals": {}, "status": "NO_DIRECTION"}
+    oi = signal.get("oi_flow") if isinstance(signal.get("oi_flow"), dict) else {}
+    dealer = signal.get("dealer") if isinstance(signal.get("dealer"), dict) else {}
+    gamma = signal.get("gamma") if isinstance(signal.get("gamma"), dict) else {}
+    market_bias = str(data.get("bias") or "NEUTRAL").upper()
+    oi_bias = str(oi.get("bias") or "NEUTRAL").upper()
+    delta_pressure = str(dealer.get("delta_pressure") or "NEUTRAL").upper()
+    gamma_regime = str(gamma.get("regime") or "UNKNOWN").upper()
+    signals = {"market_bias": market_bias, "oi_flow": oi_bias, "dealer_delta": delta_pressure, "gamma_regime": gamma_regime}
+    aligned = sum(1 for value in (market_bias, oi_bias, delta_pressure) if value == direction)
+    conflicting = sum(1 for value in (market_bias, oi_bias, delta_pressure) if value in {"BULLISH", "BEARISH"} and value != direction)
+    if gamma_regime == "POSITIVE":
+        conflicting += 1
+    state = str(((data.get("intelligence") or {}).get("market_state") or {}).get("state") or "").upper()
+    transition = state in {"GAMMA_TRANSITION", "POSITIVE_GAMMA_RANGE"} or gamma_regime == "POSITIVE"
+    required = 2 if transition else 1
+    status = "CONFLICT" if conflicting >= 2 and transition else "ALIGNED" if aligned >= required else "WEAK"
+    return {"direction": direction, "aligned": aligned, "conflicting": conflicting, "signals": signals, "transition_context": transition, "required_aligned": required, "status": status}
 
 
 def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, signal: dict[str, Any], mode: str = "LIVE") -> dict[str, Any]:
@@ -94,12 +125,26 @@ def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, sign
     if preferred in {"BULLISH", "BEARISH"}:
         if direction == "NEUTRAL": direction = preferred; confidence = max(confidence, _f(selection.get("confidence")))
         elif direction != preferred: direction = "NEUTRAL"
-    adaptive = dict(signal); adaptive["direction"] = direction; adaptive["confidence"] = round(confidence, 1); adaptive["adaptive"] = {"regime": selection["regime"], "selected_strategy": selection["selected_strategy"], "preferred_direction": preferred, "readiness_pct": selection["confidence"], "reason": selection["reason"], "risk_profile": selection.get("risk_profile", "NORMAL"), "learning": selection.get("learning", {})}
+    context = signal.get("context_alignment") if isinstance(signal.get("context_alignment"), dict) else _context_alignment(data, signal)
+    selected_strategy = str(selection.get("selected_strategy") or "standby").lower()
+    reason = selection["reason"]
+    if context.get("status") == "CONFLICT" and selected_strategy not in {"cas_reentry"}:
+        direction = "NEUTRAL"
+        selected_strategy = "transition"
+        reason = "context conflict: wait for directional confirmation"
+    adaptive = dict(signal)
+    adaptive["direction"] = direction
+    adaptive["confidence"] = round(confidence, 1)
+    adaptive["context_alignment"] = context
+    adaptive["adaptive"] = {"regime": selection["regime"], "selected_strategy": selected_strategy, "preferred_direction": preferred, "readiness_pct": selection["confidence"], "reason": reason, "risk_profile": selection.get("risk_profile", "NORMAL"), "learning": selection.get("learning", {})}
     return adaptive
 
 
 def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
-    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; input_validation = validate_snapshot(data, mode); gates = {"direction": signal.get("direction") in {"BULLISH","BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK","COMPRESSION"}, "data_integrity": input_validation["valid"]}
+    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; input_validation = validate_snapshot(data, mode); context = signal.get("context_alignment") if isinstance(signal.get("context_alignment"), dict) else _context_alignment(data, signal); gates = {"direction": signal.get("direction") in {"BULLISH","BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK","COMPRESSION"}, "data_integrity": input_validation["valid"]}
+    # Learned guard: in transition/positive-gamma conditions, two or more independent
+    # opposing context signals invalidate a directional entry until confirmation arrives.
+    gates["context_alignment"] = not (signal.get("direction") in {"BULLISH", "BEARISH"} and context.get("transition_context") and int(context.get("conflicting") or 0) >= 2)
     selected = None
     if strategy == "gamma_blast": gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE"; gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
     elif strategy == "adaptive":
@@ -110,7 +155,7 @@ def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "d
         elif selected in {"range","breakout_watch","standby"}: gates["strategy_entry"] = False
         elif selected == "cas_reentry": gates["cas_reentry"] = True
     reasons = [k for k, ok in gates.items() if not ok]
-    return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast","early_accumulation"} else 1.0}
+    return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast","early_accumulation"} else 1.0, "context_alignment": context}
 
 
 def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str, Any]) -> dict[str, Any]:

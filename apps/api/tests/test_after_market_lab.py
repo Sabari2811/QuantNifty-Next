@@ -40,7 +40,8 @@ def test_after_market_persists_complete_training_record(monkeypatch):
     assert result["input_dataset"] == "RAW_MARKET_SNAPSHOTS"
     assert result["live_trade_data_accessed"] is False
     assert result["live_decision_data_accessed"] is False
-    assert result["live_outcome_data_accessed"] is False
+    assert result["live_outcome_data_accessed"] is True
+    assert result["live_outcome_access_mode"] == "CLOSED_PAPER_ONLY_AFTER_MARKET"
     assert result["counterfactual"] is True
     assert set(result["strategies"]) == set(RESEARCH_STRATEGIES)
     assert result["policy"]["policy_id"] == "policy-test"

@@ -29,7 +29,7 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           s=Path('apps/api/src/quantnifty/web/intelligence.html').read_text(encoding='utf-8')
-          required=['Current Brain Plan · Read Only','Live Paper Monitor · Provider Quote','normalizeTradeTelemetry','Risk view · entry anchored','Premium Target / SL']
+          required=['Current Brain Plan · Read Only','Live Paper Monitor · Provider Quote','normalizeTradeTelemetry','Risk view · entry anchored','Option Target / SL']
           missing=[x for x in required if x not in s]
           if missing: raise SystemExit('missing UI markers: '+repr(missing))
           if "trade.movement||'FLAT'" in s: raise SystemExit('stale backend movement rendering remains')

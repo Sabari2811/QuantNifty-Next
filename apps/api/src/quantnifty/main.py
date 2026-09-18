@@ -33,7 +33,7 @@ TOKEN = (os.getenv("INDSTOCKS_API_TOKEN") or os.getenv("INDSTOCKS_TOKEN") or "")
 NIFTY_ID = os.getenv("NIFTY_SECURITY_ID", "40000001")
 NIFTY_SCRIP_CODE = os.getenv("NIFTY_SCRIP_CODE", "NSE_40000001")
 EXPIRY = os.getenv("NIFTY_EXPIRY", "").strip()
-POLL_SECONDS = max(5.0, float(os.getenv("POLL_SECONDS", "15")))
+POLL_SECONDS = max(2.0, float(os.getenv("POLL_SECONDS", "2")))
 IST = ZoneInfo("Asia/Kolkata")
 
 app = FastAPI(title="QuantNifty Next", version="1.9.0")
@@ -69,9 +69,9 @@ def num(value: Any) -> float:
     try: return float(value or 0)
     except (TypeError, ValueError): return 0.0
 
-def norm_leg(leg: dict[str, Any], strike: float, side: str) -> dict[str, Any]:
+def norm_leg(leg: dict[str, Any], strike: float, side: str, expiry: str | None = None) -> dict[str, Any]:
     g = leg.get("greeks") or {}
-    return {"strike":float(strike),"side":side,"security_id":str(leg.get("security_id") or ""),"trading_symbol":str(leg.get("trading_symbol") or ""),"last_price":num(leg.get("last_price")),"previous_close":num(leg.get("previous_close_price",leg.get("previous_close"))),"oi":num(leg.get("oi")),"previous_oi":num(leg.get("previous_oi")),"volume":num(leg.get("volume")),"bid":num(leg.get("top_bid_price",leg.get("bid"))),"bid_qty":num(leg.get("top_bid_quantity",leg.get("bid_qty"))),"ask":num(leg.get("top_ask_price",leg.get("ask"))),"ask_qty":num(leg.get("top_ask_quantity",leg.get("ask_qty"))),"iv":num(leg.get("iv")),"delta":num(g.get("delta",leg.get("delta"))),"gamma":num(g.get("gamma",leg.get("gamma"))),"theta":num(g.get("theta",leg.get("theta"))),"vega":num(g.get("vega",leg.get("vega")))}
+    return {"strike":float(strike),"side":side,"expiry":str(leg.get("expiry") or expiry or ""),"security_id":str(leg.get("security_id") or ""),"trading_symbol":str(leg.get("trading_symbol") or ""),"last_price":num(leg.get("last_price")),"previous_close":num(leg.get("previous_close_price",leg.get("previous_close"))),"oi":num(leg.get("oi")),"previous_oi":num(leg.get("previous_oi")),"volume":num(leg.get("volume")),"bid":num(leg.get("top_bid_price",leg.get("bid"))),"bid_qty":num(leg.get("top_bid_quantity",leg.get("bid_qty"))),"ask":num(leg.get("top_ask_price",leg.get("ask"))),"ask_qty":num(leg.get("top_ask_quantity",leg.get("ask_qty"))),"iv":num(leg.get("iv")),"delta":num(g.get("delta",leg.get("delta"))),"gamma":num(g.get("gamma",leg.get("gamma"))),"theta":num(g.get("theta",leg.get("theta"))),"vega":num(g.get("vega",leg.get("vega")))}
 
 def flatten_chain(data: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
     root=data.get("data") or data; strikes=root.get("strikes") or root.get("option_chain") or {}; items=strikes.items() if isinstance(strikes,dict) else []; rows=[]
@@ -80,7 +80,7 @@ def flatten_chain(data: dict[str, Any]) -> tuple[float, list[dict[str, Any]]]:
         except (TypeError, ValueError): continue
         if not isinstance(value,dict): continue
         for leg,side in ((value.get("ce") or value.get("call") or value.get("CE") or {},"CE"),(value.get("pe") or value.get("put") or value.get("PE") or {},"PE")):
-            if leg: rows.append(norm_leg(leg,strike,side))
+            if leg: rows.append(norm_leg(leg,strike,side,str(root.get("expiry") or "")))
     spot=num(root.get("underlying_ltp",root.get("underlying_price"))); rows.sort(key=lambda r:(r["strike"],0 if r["side"]=="CE" else 1)); return spot,rows
 
 def max_pain(rows: list[dict[str, Any]]) -> float | None:
@@ -254,6 +254,73 @@ async def final_decision_api(strategy: str="directional"):
     except Exception as exc: raise HTTPException(status_code=503,detail=str(exc)) from exc
     result=final_decision(data,cache.get("previous_snapshot"),mode)
     return {"mode":"READ_ONLY","strategy":mode,"timestamp":data["timestamp"],"spot":data["spot"],"decision":result,"validation":validate_snapshot(data,"LIVE")}
+
+def _quote_depth(item: dict[str, Any]) -> tuple[float | None, float | None]:
+    depth = item.get("market_depth") if isinstance(item, dict) else {}
+    levels = depth.get("depth") if isinstance(depth, dict) else []
+    if not isinstance(levels, list) or not levels:
+        return None, None
+    first = levels[0] if isinstance(levels[0], dict) else {}
+    buy = first.get("buy") if isinstance(first.get("buy"), dict) else {}
+    sell = first.get("sell") if isinstance(first.get("sell"), dict) else {}
+    bid = num(buy.get("price")) if buy else None
+    ask = num(sell.get("price")) if sell else None
+    return (bid if bid and bid > 0 else None), (ask if ask and ask > 0 else None)
+
+
+def _live_quote_item(payload: dict[str, Any], code: str) -> dict[str, Any]:
+    data = payload.get("data") if isinstance(payload, dict) else {}
+    item = data.get(code) if isinstance(data, dict) else None
+    return item if isinstance(item, dict) else {}
+
+
+@app.get("/api/v1/paper/live-monitor")
+async def paper_live_monitor():
+    """Return the active paper trade marked from a fresh provider quote."""
+    if not is_live_market_session():
+        return {"mode": "READ_ONLY_PAPER", "status": "MARKET_CLOSED", "trade": None}
+    instrument = live_paper.instrument if isinstance(live_paper.instrument, dict) else None
+    codes = [NIFTY_SCRIP_CODE]
+    option_code = ""
+    if instrument:
+        security_id = str(instrument.get("security_id") or "").strip()
+        if security_id:
+            option_code = f"NFO_{security_id}"
+            codes.append(option_code)
+    try:
+        quotes = await api_get("/market/quotes/full", {"scrip-codes": ",".join(codes)})
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"live quote unavailable: {exc}") from exc
+    spot_item = _live_quote_item(quotes, NIFTY_SCRIP_CODE)
+    spot = num(spot_item.get("live_price"))
+    if spot <= 0:
+        raise HTTPException(status_code=503, detail="live NIFTY quote unavailable")
+    if not instrument:
+        return {"mode": "READ_ONLY_PAPER", "status": "NO_ACTIVE_TRADE", "spot": round(spot, 4), "timestamp": datetime.now(timezone.utc).isoformat(), "provider_timestamp": quotes.get("timestamp"), "quote_source": "INDstocks /market/quotes/full"}
+    option_item = _live_quote_item(quotes, option_code)
+    ltp = num(option_item.get("live_price"))
+    bid, ask = _quote_depth(option_item)
+    trade = dict(live_paper._trade_view(cache.get("snapshot") or {}))
+    trade["current_spot"] = round(spot, 4)
+    trade["current_ltp"] = round(ltp, 6) if ltp > 0 else None
+    trade["current_bid"] = round(bid, 6) if bid is not None else None
+    trade["current_ask"] = round(ask, 6) if ask is not None else None
+    trade["current_spread"] = round(ask - bid, 6) if bid is not None and ask is not None and ask >= bid else None
+    trade["current_price"] = round(bid, 6) if bid is not None else round(ltp, 6) if ltp > 0 else None
+    trade["mark_price"] = trade["current_price"]
+    trade["exit_price"] = trade["current_price"]
+    trade["exit_price_source"] = "BID" if bid is not None else "LTP"
+    trade["mark_source"] = trade["exit_price_source"]
+    trade["pnl"] = round((trade["current_price"] - trade["entry_price"]) * trade["quantity"], 4) if trade["current_price"] is not None else None
+    trade["unrealized_pnl"] = trade["pnl"]
+    trade["pnl_pct"] = round((trade["current_price"] - trade["entry_price"]) / trade["entry_price"] * 100.0, 4) if trade["current_price"] is not None and trade["entry_price"] else None
+    trade["unrealized_pnl_pct"] = trade["pnl_pct"]
+    trade["movement"] = "UP" if trade["current_price"] is not None and trade["current_price"] > trade["entry_price"] else "DOWN" if trade["current_price"] is not None and trade["current_price"] < trade["entry_price"] else "FLAT"
+    trade["mark_timestamp"] = datetime.now(timezone.utc).isoformat()
+    trade["quote_source"] = "INDstocks /market/quotes/full"
+    trade["quote_quality"] = "OK" if ltp > 0 and (bid is None or ask is None or bid <= ask) else "INVALID_BOOK"
+    trade["instrument"] = {**instrument, "expiry": instrument.get("expiry") or (cache.get("snapshot") or {}).get("expiry")}
+    return {"mode": "READ_ONLY_PAPER", "status": "OPEN", "spot": round(spot, 4), "timestamp": trade["mark_timestamp"], "provider_timestamp": quotes.get("timestamp"), "quote_source": trade["quote_source"], "trade": trade}
 
 @app.post("/api/v1/replay/decisions")
 async def replay_decisions_api(payload: dict[str,Any]):

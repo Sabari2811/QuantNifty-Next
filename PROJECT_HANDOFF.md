@@ -134,3 +134,10 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - No production trading/session implementation was weakened or changed to make the tests pass.
 - PR #2 (`Fix stale session lifecycle CI expectations`) was merged to `main` as commit `4497c0176a67a3de4c3b8e69f1392a5d25e329bc`.
 - Final PR CI run 596 completed successfully: **193 passed**, compile passed, and Intelligence UI telemetry validation passed.
+
+
+## 2026-09-18 Live Monitor Loading Fix
+- Fixed a JavaScript parse error in `apps/api/src/quantnifty/web/intelligence.html` that left Market Brain stuck on `Connecting...` and prevented all UI polling/rendering from starting.
+- Rebuilt the active paper-trade renderer with option-native LTP, BID exit, option SL/target, strike+expiry, and Brain Plan quote fields.
+- Updated the live-monitor UI test markers to match the option-native labels.
+- UI script syntax validated with `new Function(...)`; Render build succeeded and production deployment is live on commit `d43aee536925e8997713a4872c4a75e61f9163da`.

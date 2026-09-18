@@ -73,7 +73,7 @@ async function rawRun(){
  }catch(e){$('rawStatus').textContent='Raw test request failed: '+(e&&e.message?e.message:'network error')}
  finally{btn.disabled=false}
 }
-$('run').addEventListener('click',run);$('upload').addEventListener('click',upload);$('toggle').addEventListener('click',function(){$('drawer').classList.toggle('open')});
+$('run').addEventListener('click',run);$('upload').addEventListener('click',upload);$('rawRun').addEventListener('click',rawRun);$('toggle').addEventListener('click',function(){$('drawer').classList.toggle('open')});
 window.addEventListener('load',function(){fetch('/api/v1/recording/status').then(function(r){return r.json()}).then(function(s){if(busy)return;if(s.status==='AVAILABLE')setStatus('Recorded history available · '+s.bundles+' bundles');else setStatus('Upload a historical report to validate')}).catch(function(){if(!busy)setStatus('Upload a historical report to validate')});
 });
 })();

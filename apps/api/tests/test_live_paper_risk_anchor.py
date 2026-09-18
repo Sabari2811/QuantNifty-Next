@@ -1,4 +1,4 @@
-from quantnifty.live_paper_manager import DEFAULT_NIFTY_LOT_SIZE, _delta_premium_levels, _quantity, _risk_levels
+from quantnifty.live_paper_manager import DEFAULT_NIFTY_LOT_SIZE, _delta_premium_levels, _quantity, _quote_telemetry, _risk_levels
 
 
 def test_nifty_paper_defaults_to_one_full_lot():
@@ -45,3 +45,17 @@ def test_delta_is_required_for_delta_driven_entry_risk():
     assert unavailable["premium_stop"] is None
     assert unavailable["premium_target"] is None
     assert unavailable["method"] == "DELTA_UNAVAILABLE"
+
+
+def test_quote_telemetry_keeps_ltp_separate_from_executable_bid_ask():
+    quote = _quote_telemetry({"last_price": 185.35, "bid": 148.9, "ask": 186.0})
+    assert quote["current_ltp"] == 185.35
+    assert quote["current_bid"] == 148.9
+    assert quote["current_ask"] == 186.0
+    assert quote["current_spread"] == 37.1
+    assert quote["quote_quality"] == "OK"
+
+
+def test_quote_telemetry_flags_ltp_outside_top_of_book():
+    quote = _quote_telemetry({"last_price": 190.0, "bid": 148.9, "ask": 149.0})
+    assert quote["quote_quality"] == "LTP_OUTSIDE_TOP_OF_BOOK"

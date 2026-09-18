@@ -11,8 +11,10 @@ def test_live_monitor_shows_current_and_previous_trade_sections():
     for label in [
         "Active Paper Trade · Live P&amp;L",
         "Previous Trades Today",
-        "Option Premium",
+        "Option Premium · LTP",
         "Premium Target / SL",
+        "Sell mark (BID)",
+        "Current LTP",
         "Where price is moving now",
         "Entry Spot",
         "Current Spot",
@@ -45,3 +47,11 @@ def test_main_exposes_read_only_paper_ledger_router():
     text = MAIN_PY.read_text(encoding="utf-8")
     assert "from quantnifty.paper_ledger_api import router as paper_ledger_router" in text
     assert "app.include_router(paper_ledger_router)" in text
+
+
+def test_live_monitor_distinguishes_ltp_from_bid_ask_mark():
+    text = INTELLIGENCE_HTML.read_text(encoding="utf-8")
+    assert "current_ltp" in text
+    assert "current_bid" in text
+    assert "current_ask" in text
+    assert "P&amp;L marked to BID" in text

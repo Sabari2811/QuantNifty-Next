@@ -280,13 +280,23 @@ async def paper_live_monitor():
     if not is_live_market_session():
         return {"mode": "READ_ONLY_PAPER", "status": "MARKET_CLOSED", "trade": None}
     instrument = live_paper.instrument if isinstance(live_paper.instrument, dict) else None
+    snapshot_now = cache.get("snapshot") or {}
+    intelligence_now = snapshot_now.get("intelligence") if isinstance(snapshot_now.get("intelligence"), dict) else {}
+    execution_now = intelligence_now.get("execution_plan") if isinstance(intelligence_now.get("execution_plan"), dict) else {}
+    plan_instrument = execution_now.get("instrument") if isinstance(execution_now.get("instrument"), dict) else None
     codes = [NIFTY_SCRIP_CODE]
     option_code = ""
+    plan_option_code = ""
     if instrument:
         security_id = str(instrument.get("security_id") or "").strip()
         if security_id:
             option_code = f"NFO_{security_id}"
             codes.append(option_code)
+    if plan_instrument:
+        plan_security_id = str(plan_instrument.get("security_id") or "").strip()
+        if plan_security_id and plan_security_id != str((instrument or {}).get("security_id") or "").strip():
+            plan_option_code = f"NFO_{plan_security_id}"
+            codes.append(plan_option_code)
     try:
         quotes = await api_get("/market/quotes/full", {"scrip-codes": ",".join(codes)})
     except Exception as exc:
@@ -300,6 +310,8 @@ async def paper_live_monitor():
     option_item = _live_quote_item(quotes, option_code)
     ltp = num(option_item.get("live_price"))
     bid, ask = _quote_depth(option_item)
+    plan_item = _live_quote_item(quotes, plan_option_code) if plan_option_code else {}
+    plan_ltp = num(plan_item.get("live_price"))
     trade = dict(live_paper._trade_view(cache.get("snapshot") or {}))
     # Front-end display is option-native: current price is the provider LTP for the exact
     # active contract.  Executable exit/P&L remain BID-marked, but are kept separate so
@@ -337,7 +349,11 @@ async def paper_live_monitor():
     trade["mark_timestamp"] = datetime.now(timezone.utc).isoformat()
     trade["quote_source"] = "INDstocks /market/quotes/full"
     trade["quote_quality"] = "OK" if ltp > 0 and (bid is None or ask is None or bid <= ask) else "INVALID_BOOK"
-    trade["instrument"] = {**instrument, "expiry": instrument.get("expiry") or (cache.get("snapshot") or {}).get("expiry")}
+    trade["instrument"] = {**instrument, "expiry": instrument.get("expiry") or snapshot_now.get("expiry")}
+    if plan_instrument:
+        trade["brain_plan_instrument"] = {**plan_instrument, "expiry": plan_instrument.get("expiry") or snapshot_now.get("expiry")}
+        trade["brain_plan_ltp"] = round(plan_ltp, 6) if plan_ltp > 0 else None
+        trade["brain_plan_is_active_contract"] = str(plan_instrument.get("security_id") or "") == str(instrument.get("security_id") or "")
     return {"mode": "READ_ONLY_PAPER", "status": "OPEN", "spot": round(spot, 4), "timestamp": trade["mark_timestamp"], "provider_timestamp": quotes.get("timestamp"), "quote_source": trade["quote_source"], "trade": trade}
 
 @app.post("/api/v1/replay/decisions")

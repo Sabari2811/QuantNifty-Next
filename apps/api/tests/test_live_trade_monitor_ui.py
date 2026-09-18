@@ -9,7 +9,7 @@ MAIN_PY = ROOT / "src" / "quantnifty" / "main.py"
 def test_live_monitor_shows_current_and_previous_trade_sections():
     text = INTELLIGENCE_HTML.read_text(encoding="utf-8")
     for label in [
-        "Active Paper Trade · Live P&amp;L",
+        "Live Paper Monitor · Provider Quote",
         "Previous Trades Today",
         "Option Premium · LTP",
         "Premium Target / SL",

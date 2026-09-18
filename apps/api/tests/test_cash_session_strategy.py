@@ -54,11 +54,11 @@ def test_cas_policy_uses_deterministic_strategy_without_future_auction_result():
     assert policy["cash_strategy"]["strategy"] == "cas_reentry"
 
 
-def test_cas_entry_stops_at_cutoff_and_position_force_exits_at_1529():
-    previous = snapshot(datetime(2026, 9, 17, 15, 26, 30, tzinfo=IST).isoformat(), 23398.0, atm_iv=14.0, expected_move=90.0)
-    current = snapshot(datetime(2026, 9, 17, 15, 27, 0, tzinfo=IST).isoformat(), 23400.0, volume_multiplier=1.2)
+def test_cas_entry_stops_after_1527_and_position_force_exits_at_1529():
+    previous = snapshot(datetime(2026, 9, 17, 15, 27, 30, tzinfo=IST).isoformat(), 23398.0, atm_iv=14.0, expected_move=90.0)
+    current = snapshot(datetime(2026, 9, 17, 15, 28, 0, tzinfo=IST).isoformat(), 23400.0, volume_multiplier=1.2)
     policy = session_decision_policy(current, previous)
-    assert policy["phase"] == "CAS_REENTRY"
+    assert policy["phase"] == "CAS_EXIT_ONLY"
     assert policy["allow_new_trade"] is False
     assert policy["selected_strategy"] == "standby"
     assert session_close_required(datetime(2026, 9, 17, 15, 28, tzinfo=IST).isoformat()) is True

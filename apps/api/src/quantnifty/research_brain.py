@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from quantnifty.learning_store import load_events, trading_day
+from quantnifty.trade_learning import analyze_trade_lesson
 
 
 def _f(v: Any) -> float:
@@ -107,6 +108,9 @@ def adaptive_day_policy(snapshot: dict[str, Any], previous: dict[str, Any] | Non
         if row[2] >= 3 and row[0] >= anchor_row[0] + .08: chosen = row[1]; reason = f"learned override: {row[1]} outscored {anchor} for {regime}"; break
     if regime in {"LIQUIDITY_RISK", "POSITIVE_GAMMA_RANGE"}: chosen = "standby"; reason = f"risk-preserving regime policy: {regime}"
     if regime == "COMPRESSION": chosen = "breakout_watch"; reason = "compression: wait for release rather than chase"
+    conflict_losses = int((memory.get("failure_patterns") or {}).get("DIRECTIONAL_CONTEXT_CONFLICT", 0))
+    if regime == "GAMMA_TRANSITION" and conflict_losses >= 2 and chosen in {"directional", "gamma_blast"}:
+        chosen = "transition"; reason = "learned guard: repeated directional context conflicts in gamma transition"
     direction = base["preferred_direction"]
     if chosen in {"gamma_blast", "transition"} and direction not in {"BULLISH", "BEARISH"}: direction = str((memory.get("last_direction") or "NEUTRAL")).upper()
     recent = memory.get("recent_days") or []; loss_days = sum(_f(d.get("net_pnl")) < 0 for d in recent[-2:]); risk_profile = "DEFENSIVE" if loss_days >= 2 or _f((recent[-1] if recent else {}).get("net_pnl")) <= -1000 else "NORMAL"; readiness = _f(base.get("confidence")) - (10 if risk_profile == "DEFENSIVE" else 0); same_day_trades = int(memory.get("same_day_trades") or 0)
@@ -140,11 +144,42 @@ def _same_day_memory(snapshot: dict[str, Any]) -> dict[str, Any]:
     return memory
 
 
+def _historical_memory(snapshot: dict[str, Any]) -> dict[str, Any]:
+    day = trading_day(snapshot.get("timestamp"))
+    if not day:
+        return {}
+    memory: dict[str, Any] = {"same_day_trades": 0, "closed_trade_samples": 0, "failure_patterns": {}}
+    for event in load_events("outcomes"):
+        outcome = event.get("outcome") if isinstance(event, dict) else None
+        if not isinstance(outcome, dict) or str(outcome.get("status") or outcome.get("lifecycle") or "").upper() != "CLOSED":
+            continue
+        outcome_day = str(outcome.get("day") or trading_day(outcome.get("entry_timestamp")) or "")
+        if not outcome_day or outcome_day >= day:
+            continue
+        reasons = outcome.get("entry_reasons") if isinstance(outcome.get("entry_reasons"), dict) else {}
+        regime = str(reasons.get("adaptive_regime") or outcome.get("regime") or "UNKNOWN").upper()
+        strategy = str(outcome.get("strategy") or reasons.get("adaptive_selected_strategy") or "").strip().lower()
+        if not strategy or strategy == "standby":
+            continue
+        trade = {"net_pnl": outcome.get("realized_pnl", outcome.get("net_pnl", 0.0)), "direction": outcome.get("direction")}
+        memory = update_adaptive_memory(memory, trade, outcome_day, regime, strategy)
+        lesson = analyze_trade_lesson(outcome)
+        for pattern in lesson.get("patterns") or []:
+            memory["failure_patterns"][pattern] = int(memory["failure_patterns"].get(pattern, 0)) + 1
+        memory["closed_trade_samples"] += 1
+    memory["same_day_trades"] = 0
+    return memory
+
+
 def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
     runtime_memory = _same_day_memory(snapshot) if snapshot.get("_learning_runtime") is True else {}
+    historical_memory = _historical_memory(snapshot) if not runtime_memory.get("same_day_trades") else {}
     if runtime_memory.get("same_day_trades"):
         snapshot = dict(snapshot)
         snapshot["_adaptive_memory"] = runtime_memory
+    elif historical_memory.get("closed_trade_samples"):
+        snapshot = dict(snapshot)
+        snapshot["_adaptive_memory"] = historical_memory
     memory = snapshot.get("_adaptive_memory"); selected = adaptive_day_policy(snapshot, previous, memory) if isinstance(memory, dict) else _base_strategy_selection(snapshot, previous)
     research_strategy = str(snapshot.get("_research_strategy") or "").strip().lower()
     if research_strategy in {"directional", "gamma_blast", "early_accumulation", "transition", "range", "breakout_watch", "standby"}:

@@ -91,6 +91,6 @@ def decision_intelligence(data: dict[str, Any], previous: dict[str, Any] | None 
     base={"market_state":state,"events":events,"move_attribution":attribution,"signal_dna":dna,"pressure_map":pressures,"decision":{"status":"TRADE_CANDIDATE" if trade_ready else "NO_TRADE","trade_ready":trade_ready,"reasons":[k for k,ok in gates.items() if not ok],"bias":bias,"confidence":confidence,"execution":"DISABLED"},"institutional_signal":stack["signal"],"risk_engine":stack["risk"],"execution_plan":stack["execution_plan"]}
     base["entry_scenario"]=scenario_contract(adaptive.get("regime"),adaptive.get("selected_strategy"),stack["signal"].get("direction"))
     base["entry_scenarios"]={"schema":"entry-scenarios-v1","supported":True,"count":5,"scenarios":["EARLY_ACCUMULATION","DIRECTIONAL","NEGATIVE_GAMMA_EXPANSION","GAMMA_TRANSITION","CAS_REENTRY"],"non_entry_states":["LIQUIDITY_RISK","POSITIVE_GAMMA_RANGE","COMPRESSION","TRANSITION"]}
-    base["final_decision"]={"status":stack["status"],"authoritative":stack["authoritative"],"trading":stack["trading"]}
+    base["final_decision"]={"status":stack.get("decision_action") or stack["status"],"base_status":stack["status"],"authoritative":stack["authoritative"],"trading":stack["trading"]}
     base["latency"] = summarize_latency(stages)
     return base

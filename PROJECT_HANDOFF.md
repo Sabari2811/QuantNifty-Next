@@ -158,3 +158,14 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Adaptive brain now incorporates prior closed-trade outcomes into future regime/strategy memory. Repeated `DIRECTIONAL_CONTEXT_CONFLICT` patterns in `GAMMA_TRANSITION` require at least 2 historical occurrences before selecting the transition guard; one trade cannot change parameters by itself.
 - Risk parameters are not widened from a single loss; comparable observations must reach the explicit promotion threshold before changing risk/entry parameters.
 - Deployment `dep-damh52142hec7393e7ag` is LIVE.
+
+## 2026-09-18 Context Alignment + Raw Post-Market Testing
+- Added a deterministic context-alignment guard to the authoritative FinalDecision risk path.
+- In GAMMA_TRANSITION / positive-gamma context, a directional thesis with at least two independent opposing context signals is blocked until confirmation; the guard is exposed as `signal.context_alignment` and `risk.context_alignment`.
+- The guard directly addresses the observed failure mode: directional BEARISH thesis conflicting with BULLISH market bias/OI and positive gamma. It is generalized by context fields and is not hard-coded to the 23,400 PE trade.
+- Added regression tests for both conflict blocking and aligned-context approval.
+- Post-market lab now explicitly declares its stored live-session snapshot dataset as the raw-data research source and tests the configured research strategies with no orders.
+- Added read-only `POST /api/v1/research/raw-backtest` to run the post-market suite against stored live-session snapshots.
+- Added a Backtest UI control to run the raw post-market test and show strategy trade count, win rate, and net P&L.
+- Existing 15:30 IST after-market scheduler continues to invoke the lab and retry if incomplete.
+- All post-market testing remains counterfactual/research-only; no live decision or order path is enabled by the research runner.

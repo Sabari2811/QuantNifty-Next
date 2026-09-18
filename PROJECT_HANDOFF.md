@@ -112,3 +112,9 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - `apps/api/src/quantnifty/web/intelligence.html` had a JavaScript syntax error caused by the apostrophe in `Today's` inside a single-quoted HTML string.
 - This prevented the entire intelligence-page script from executing, leaving the initial `Connecting…`/waiting placeholders visible even though `/api/v1/market` was returning `200` with `LIVE_PROVIDER` data.
 - Fixed by replacing that apostrophe with a typographic apostrophe, syntax-checked the browser script, committed as `8d5dcbce15edd8d8d58c7d29b5ff78cc7d9996ca`, and deployed to Render deployment `dep-dambrf2jnfac73ei14lg`, which reached `live` at `2026-09-18T04:29:07Z`.
+
+
+## 2026-09-18 directional option-side guard
+- Fixed `institutional_engine.execution_plan()` so directional selection is strict: BULLISH may only map to CE and BEARISH may only map to PE; the previous fallback could select the first candidate of the opposite side when the requested side was absent.
+- Strengthened `decision_validation.validate_execution_plan()` to reject an approved directional plan with no instrument or with a mismatched option side.
+- Deployed commit `64d2c39eb8be7ea775a565fe86473045fd779bbd` as Render deployment `dep-dambti8u01pc73f3jmo0`; deployment reached `live` at `2026-09-18T04:33:50Z`.

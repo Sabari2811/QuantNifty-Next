@@ -24,11 +24,11 @@ def snapshot(ts: str, spot: float = 23400.0) -> dict:
     }
 
 
-def test_cas_window_and_derivatives_close_are_distinct():
+def test_cas_window_and_session_close_are_distinct():
     assert session_phase({"timestamp": datetime(2026, 9, 17, 15, 14, tzinfo=IST).isoformat()})["phase"] == "NORMAL_ADAPTIVE"
     assert session_phase({"timestamp": datetime(2026, 9, 17, 15, 15, tzinfo=IST).isoformat()})["phase"] == "CAS_REENTRY"
-    assert session_phase({"timestamp": datetime(2026, 9, 17, 15, 35, tzinfo=IST).isoformat()})["phase"] == "DERIVATIVES_CLOSE_ONLY"
-    assert session_phase({"timestamp": datetime(2026, 9, 17, 15, 40, tzinfo=IST).isoformat()})["phase"] == "CLOSED"
+    assert session_phase({"timestamp": datetime(2026, 9, 17, 15, 28, tzinfo=IST).isoformat()})["phase"] == "CAS_EXIT_ONLY"
+    assert session_phase({"timestamp": datetime(2026, 9, 17, 15, 29, tzinfo=IST).isoformat()})["phase"] == "CLOSED"
 
 
 def test_cas_strategy_is_deterministic_and_read_only():
@@ -54,11 +54,12 @@ def test_cas_policy_uses_deterministic_strategy_without_future_auction_result():
     assert policy["cash_strategy"]["strategy"] == "cas_reentry"
 
 
-def test_cas_entry_stops_before_matching_end_and_position_exits_before_derivatives_close():
-    previous = snapshot(datetime(2026, 9, 17, 15, 29, 30, tzinfo=IST).isoformat(), 23398.0)
-    current = snapshot(datetime(2026, 9, 17, 15, 30, 0, tzinfo=IST).isoformat(), 23400.0)
+def test_cas_entry_stops_at_cutoff_and_position_force_exits_at_1529():
+    previous = snapshot(datetime(2026, 9, 17, 15, 26, 30, tzinfo=IST).isoformat(), 23398.0)
+    current = snapshot(datetime(2026, 9, 17, 15, 27, 0, tzinfo=IST).isoformat(), 23400.0)
     policy = session_decision_policy(current, previous)
-    assert policy["selected_strategy"] == "standby"
+    assert policy["phase"] == "CAS_REENTRY"
     assert policy["allow_new_trade"] is False
-    assert session_close_required(datetime(2026, 9, 17, 15, 29, tzinfo=IST).isoformat()) is False
-    assert session_close_required(datetime(2026, 9, 17, 15, 39, tzinfo=IST).isoformat()) is True
+    assert policy["selected_strategy"] == "standby"
+    assert session_close_required(datetime(2026, 9, 17, 15, 28, tzinfo=IST).isoformat()) is False
+    assert session_close_required(datetime(2026, 9, 17, 15, 29, tzinfo=IST).isoformat()) is True

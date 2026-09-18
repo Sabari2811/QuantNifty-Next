@@ -91,10 +91,10 @@ def test_three_trade_cycle_allows_final_reversal_slot(monkeypatch):
     assert gate["allowed"] is True and gate["third_trade"] is True
 
 
-def test_no_new_entry_during_final_preclose_minute(monkeypatch):
+def test_no_new_entry_after_normal_session_cutoff(monkeypatch):
     monkeypatch.setattr(paper_entry_gate, "load_events", lambda *args, **kwargs: [])
     gate = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T09:59:30+00:00"), "BEARISH")
-    assert gate["action"] == "NO_TRADE" and gate["reason"] == "PAPER_ENTRY_CUTOFF"
+    assert gate["action"] == "NO_TRADE" and gate["reason"] == "NORMAL_SESSION_CLOSED_FOR_CASH_SESSION"
 
 
 def test_replay_never_reads_live_outcomes(monkeypatch):

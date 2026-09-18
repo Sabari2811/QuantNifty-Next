@@ -141,3 +141,11 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Rebuilt the active paper-trade renderer with option-native LTP, BID exit, option SL/target, strike+expiry, and Brain Plan quote fields.
 - Updated the live-monitor UI test markers to match the option-native labels.
 - UI script syntax validated with `new Function(...)`; Render build succeeded and production deployment is live on commit `d43aee536925e8997713a4872c4a75e61f9163da`.
+
+
+## 2026-09-18 UI Refresh Stability
+- Live Paper Monitor browser polling changed from 1 second to 10 seconds (`setInterval(refreshTradeSignal,10000)`).
+- Backend provider polling remains at `POLL_SECONDS` default 2 seconds; this was intentionally not changed, so market/provider processing remains independent and low-latency.
+- Added an in-flight guard so a slow monitor request cannot overlap the next UI refresh.
+- On transient live-monitor/ledger HTTP errors, the UI now retains the last successful monitor payload and shows `RETRYING` instead of replacing the live trade panel with an error page.
+- UI JavaScript syntax revalidated after the change. Render deployment `dep-damfhc2d0e5s73f8p0eg` is LIVE.

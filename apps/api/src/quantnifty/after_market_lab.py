@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from quantnifty.adaptive_policy import ANCHOR_STRATEGY
 from quantnifty.backtest import BacktestConfig
-from quantnifty.learning_store import load_snapshots, record_research
+from quantnifty.learning_store import load_snapshots, load_events, record_research
 from quantnifty.policy_runtime import validate_and_persist
 from quantnifty.research_strategy_runner import RESEARCH_STRATEGIES, run_research_strategy
 from quantnifty.scenario_engine import extract_scenarios

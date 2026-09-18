@@ -48,6 +48,8 @@ def analyze_trade_lesson(outcome: dict[str, Any]) -> dict[str, Any]:
     spot_stop_hit = stop_spot > 0 and ((exit_spot >= stop_spot) if direction == "BEARISH" else (exit_spot <= stop_spot))
     spot_target_hit = target_spot > 0 and ((exit_spot <= target_spot) if direction == "BEARISH" else (exit_spot >= target_spot))
     reason = str(outcome.get("exit_reason") or outcome.get("exit_reasons", {}).get("exit_reason") or "").upper()
+    exit_delta_risk = outcome.get("delta_risk_at_exit") if isinstance(outcome.get("delta_risk_at_exit"), dict) else {}
+    premium_stop_at_exit = _f(exit_delta_risk.get("premium_stop"))
     conflict = _directional_conflict(outcome)
     patterns: list[str] = []
     if conflict:
@@ -63,6 +65,8 @@ def analyze_trade_lesson(outcome: dict[str, Any]) -> dict[str, Any]:
         lessons.append("Require directional confirmation from at least two independent context signals before entering during gamma-transition/positive-gamma conditions.")
     if "PREMIUM_STOP_BEFORE_SPOT_INVALIDATION" in patterns:
         lessons.append("Keep the premium stop as a protection layer, but do not widen it from a single trade; compare at least three similar trades before changing the risk model.")
+    if reason == "DELTA_PREMIUM_STOP" and premium_stop_at_exit > 0:
+        lessons.append("Audit the stop using the live delta at exit: the runtime risk model recalculates the premium threshold from live delta, so the displayed entry-time premium SL can differ from the actual trigger level.")
     if "NO_FOLLOW_THROUGH" in patterns:
         lessons.append("A bearish thesis needs downside follow-through after entry; if spot remains above entry and the option premium deteriorates, invalidate the thesis rather than waiting for the spot stop.")
     return {
@@ -82,6 +86,7 @@ def analyze_trade_lesson(outcome: dict[str, Any]) -> dict[str, Any]:
         "entry_delta": round(entry_delta, 4) if entry_delta else None,
         "spot_stop_hit": spot_stop_hit,
         "spot_target_hit": spot_target_hit,
+        "premium_stop_at_exit": premium_stop_at_exit if premium_stop_at_exit > 0 else None,
         "exit_reason": reason,
         "patterns": patterns,
         "lessons": lessons,

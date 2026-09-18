@@ -149,3 +149,12 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Added an in-flight guard so a slow monitor request cannot overlap the next UI refresh.
 - On transient live-monitor/ledger HTTP errors, the UI now retains the last successful monitor payload and shows `RETRYING` instead of replacing the live trade panel with an error page.
 - UI JavaScript syntax revalidated after the change. Render deployment `dep-damfhc2d0e5s73f8p0eg` is LIVE.
+
+
+## 2026-09-18 Adaptive Trade Learning
+- Added `apps/api/src/quantnifty/trade_learning.py` to convert closed paper outcomes into explicit adaptive lessons.
+- Today's loss pattern is recorded as observation-only: directional context conflict, no bearish follow-through, and premium stop occurring before the NIFTY spot invalidation level.
+- After-market research now reads closed paper outcomes and persists a `trade_learning` artifact alongside counterfactual strategy research.
+- Adaptive brain now incorporates prior closed-trade outcomes into future regime/strategy memory. Repeated `DIRECTIONAL_CONTEXT_CONFLICT` patterns in `GAMMA_TRANSITION` require at least 2 historical occurrences before selecting the transition guard; one trade cannot change parameters by itself.
+- Risk parameters are not widened from a single loss; comparable observations must reach the explicit promotion threshold before changing risk/entry parameters.
+- Deployment `dep-damh52142hec7393e7ag` is LIVE.

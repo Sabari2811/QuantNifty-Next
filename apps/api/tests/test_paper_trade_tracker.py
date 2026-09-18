@@ -13,7 +13,7 @@ def test_paper_trade_tracks_mfe_mae_and_close():
     assert closed["execution"] == "NONE"
 
 
-def test_session_close_boundary_is_before_nse_close():
-    assert not session_close_required("2026-09-07T15:28:59+05:30")
-    assert session_close_required("2026-09-07T15:29:00+05:30")
+def test_session_close_boundary_is_before_derivatives_close():
+    assert not session_close_required("2026-09-07T15:27:59+05:30")
+    assert session_close_required("2026-09-07T15:28:00+05:30")
     assert session_close_required("2026-09-07T15:30:00+05:30")

@@ -22,8 +22,8 @@ def _snapshot(ts="2026-09-10T04:00:00+00:00", spot=23500, bid=110, ask=112):
 
 def test_trading_day_and_session_close():
     assert trading_day("2026-09-10T04:00:00+00:00") == "2026-09-10"
-    assert not session_close_required("2026-09-10T09:57:59+00:00")
-    assert session_close_required("2026-09-10T09:58:00+00:00")
+    assert not session_close_required("2026-09-10T09:44:59+00:00")
+    assert session_close_required("2026-09-10T09:45:00+00:00")
     assert session_close_required("2026-09-10T10:00:00+00:00")
 
 

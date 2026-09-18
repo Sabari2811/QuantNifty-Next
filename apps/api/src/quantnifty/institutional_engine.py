@@ -125,7 +125,18 @@ def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, sign
     if preferred in {"BULLISH", "BEARISH"}:
         if direction == "NEUTRAL": direction = preferred; confidence = max(confidence, _f(selection.get("confidence")))
         elif direction != preferred: direction = "NEUTRAL"
-    adaptive = dict(signal); adaptive["direction"] = direction; adaptive["confidence"] = round(confidence, 1); adaptive["adaptive"] = {"regime": selection["regime"], "selected_strategy": selection["selected_strategy"], "preferred_direction": preferred, "readiness_pct": selection["confidence"], "reason": selection["reason"], "risk_profile": selection.get("risk_profile", "NORMAL"), "learning": selection.get("learning", {})}
+    context = signal.get("context_alignment") if isinstance(signal.get("context_alignment"), dict) else _context_alignment(data, signal)
+    selected_strategy = str(selection.get("selected_strategy") or "standby").lower()
+    reason = selection["reason"]
+    if context.get("status") == "CONFLICT" and selected_strategy not in {"cas_reentry"}:
+        direction = "NEUTRAL"
+        selected_strategy = "transition"
+        reason = "context conflict: wait for directional confirmation"
+    adaptive = dict(signal)
+    adaptive["direction"] = direction
+    adaptive["confidence"] = round(confidence, 1)
+    adaptive["context_alignment"] = context
+    adaptive["adaptive"] = {"regime": selection["regime"], "selected_strategy": selected_strategy, "preferred_direction": preferred, "readiness_pct": selection["confidence"], "reason": reason, "risk_profile": selection.get("risk_profile", "NORMAL"), "learning": selection.get("learning", {})}
     return adaptive
 
 

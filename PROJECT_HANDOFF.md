@@ -125,5 +125,12 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Directional gate labels are rendered semantically: the existing 'support_breakdown_confirmation' key is shown as **Resistance breakout confirmation** for BULLISH and **Support breakdown confirmation** for BEARISH, avoiding a misleading bullish support-break label while preserving the existing gate contract.
 - 'apps/api/src/quantnifty/market_brain.py' now exposes 'validation.decision_action' as 'final_decision.status' while retaining the underlying base status as 'base_status'.
 - UI JavaScript syntax was validated from the committed HTML with the browser-equivalent 'new Function(...)' compile check.
-- GitHub CI for commit '4f1bb3dae11f1de0352fd21126fdd7d2d7a6554f' completed with 10 pre-existing session/paper-lifecycle test failures (183 passed); the failures are unrelated to these Market Brain display changes. Do not claim the full CI suite is green until those baseline failures are resolved.
+- GitHub CI for commit '4f1bb3dae11f1de0352fd21126fdd7d2d7a6554f' initially completed with 10 session/paper-lifecycle test failures (183 passed). Those baseline failures were stale regression expectations after the final 15:15-15:29 session-policy changes and a missing authoritative decision-action fixture field; they were resolved in PR #2. The final PR CI run completed with 193 passed and the intelligence UI telemetry validation passed.
 
+
+## 2026-09-18 session/paper lifecycle CI fix
+- Audited the 10 CI failures instead of masking them. The failures were in stale regression expectations around the final session policy plus one paper-manager fixture that did not include the required `decision_action`.
+- Updated `test_cash_session_strategy.py`, `test_paper_entry_gate.py`, `test_paper_ledger.py`, `test_paper_session_close.py`, `test_paper_trade_tracker.py`, and `test_session_policy.py` to assert the current deterministic policy: normal paper positions close at the 15:15 cash-session boundary, CAS re-entry is permitted through 15:27 inclusive, cash-session positions force-close at 15:29, and authoritative paper-entry decisions use `decision_action`.
+- No production trading/session implementation was weakened or changed to make the tests pass.
+- PR #2 (`Fix stale session lifecycle CI expectations`) was merged to `main` as commit `4497c0176a67a3de4c3b8e69f1392a5d25e329bc`.
+- Final PR CI run 596 completed successfully: **193 passed**, compile passed, and Intelligence UI telemetry validation passed.

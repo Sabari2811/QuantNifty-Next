@@ -24,4 +24,5 @@ def test_cash_position_can_hold_until_cash_force_exit(monkeypatch):
     monkeypatch.setattr("quantnifty.learning_store.load_events", lambda kind, day=None: open_event("cas_reentry"))
     assert session_close_required(ts(15, 15)) is False
     assert session_close_required(ts(15, 27)) is False
-    assert session_close_required(ts(15, 28)) is True
+    assert session_close_required(ts(15, 28)) is False
+    assert session_close_required(ts(15, 29)) is True

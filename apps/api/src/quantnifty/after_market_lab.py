@@ -12,11 +12,12 @@ STRATEGIES = ("directional", "gamma_blast", "adaptive")
 
 
 def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict[str, object]:
-    """Run an independent counterfactual test on today's raw market dataset.
+    """Run counterfactual research plus closed-paper trade learning after market close.
 
-    This function intentionally loads only raw snapshots. It does not load,
-    inspect, score, or rewrite live decisions, paper trades, or live outcomes.
-    The resulting P&L is a separate post-market learning track.
+    Counterfactual strategy testing remains independent from live decisions.
+    Closed paper outcomes are read only after the session to create adaptive
+    trade lessons. A single trade is observation-only and cannot promote a
+    strategy or risk parameter by itself.
     """
     snapshots = load_snapshots(day)
     if not snapshots:

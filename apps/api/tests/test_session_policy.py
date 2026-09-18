@@ -16,9 +16,10 @@ def test_adaptive_window_starts_at_0920():
 def test_cas_reentry_replaces_normal_brain_after_1515():
     result = session_decision_policy(snap("2026-09-07T09:45:00Z", {"direction": "BULLISH", "confidence": 85}))
     assert result["phase"] == "CAS_REENTRY"
-    assert result["selected_strategy"] == "cas_reentry"
-    assert result["preferred_direction"] == "BULLISH"
+    assert result["selected_strategy"] == "standby"
+    assert result["preferred_direction"] == "NEUTRAL"
     assert result["allow_normal_adaptive"] is False
+    assert result["allow_new_trade"] is False
 
 
 def test_cas_window_waits_without_valid_live_cas():

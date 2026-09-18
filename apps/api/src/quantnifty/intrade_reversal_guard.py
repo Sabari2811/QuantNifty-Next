@@ -97,5 +97,8 @@ def evaluate_intrade_reversal(
         "shock_threshold_points": round(shock_threshold, 2),
         "cumulative_adverse_pct": round(cumulative_adverse_pct, 4),
         "gamma_flip_crossed": bool(crossed_gamma_flip),
+        "normal_reversal": bool(normal_reversal),
+        "severe_reversal": bool(severe_reversal),
+        "warning": bool(warning),
         "guard": "INTRA_TRADE_REGIME_REVERSAL_V1",
     }

@@ -86,6 +86,41 @@ def _pnl_row(name: str, value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@router.post("/api/v1/research/raw-backtest")
+def raw_post_market_backtest(day: str | None = None):
+    """Run the post-market research suite against the stored live-session snapshots.
+
+    This route is research-only: it never submits orders and never feeds the
+    current run's observations back into the same run. The stored snapshots are
+    the raw market-session dataset; strategy results are counterfactual.
+    """
+    target = str(day or _today_ist()).strip()
+    try:
+        datetime.strptime(target, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(400, "day must be YYYY-MM-DD") from exc
+    research = run_after_market_lab(target)
+    if not isinstance(research, dict):
+        raise HTTPException(500, "post-market research returned an invalid result")
+    raw_test = research.get("raw_data_test") or {}
+    return {
+        "status": research.get("status", "UNKNOWN"),
+        "day": target,
+        "source": research.get("training_source", "STORED_DAY"),
+        "input_dataset": research.get("input_dataset", "RAW_MARKET_SNAPSHOTS"),
+        "raw_data_test": raw_test,
+        "observations": research.get("observations", 0),
+        "strategies": research.get("strategies") or {},
+        "strategy_coverage": research.get("strategy_coverage") or {},
+        "ranking_by_net_pnl": research.get("ranking_by_net_pnl") or [],
+        "trade_learning": research.get("trade_learning") or {},
+        "policy": research.get("policy") or {},
+        "orders_placed": 0,
+        "mode": "READ_ONLY_AFTER_MARKET",
+        "research_only": True,
+    }
+
+
 @router.get("/api/v1/research/results")
 def research_results(day: str | None = None, run_if_missing: bool = True):
     target = str(day or _today_ist()).strip()

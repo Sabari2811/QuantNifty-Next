@@ -24,7 +24,7 @@ from quantnifty.paper_ledger_api import router as paper_ledger_router
 from quantnifty.decision_validation import validate_snapshot
 from quantnifty.learning_store import learning_status, record_decision, record_snapshot
 from quantnifty.after_market_scheduler import after_market_loop
-from quantnifty.live_paper_manager import LivePaperManager
+from quantnifty.live_paper_manager import LivePaperManager, _delta_premium_levels
 from quantnifty.policy_runtime import load_future_policy
 from quantnifty.market_session import closed_payload, is_live_market_session, market_session_state, seconds_until_next_open
 

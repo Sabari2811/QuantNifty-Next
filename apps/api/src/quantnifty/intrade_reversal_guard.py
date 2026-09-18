@@ -3,16 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 
-def _f(value: Any) -> float:
+def _f(value: Any, default: float = 0.0) -> float:
     try:
-        return float(value or 0)
+        return float(value)
     except (TypeError, ValueError):
-        return 0.0
+        return default
 
 
-def opposite_direction(direction: str) -> str:
-    value = str(direction or "").upper()
-    return "BEARISH" if value == "BULLISH" else "BULLISH" if value == "BEARISH" else "NEUTRAL"
+def _opposite(direction: str) -> str:
+    return "BEARISH" if direction == "BULLISH" else "BULLISH" if direction == "BEARISH" else "NEUTRAL"
 
 
 def evaluate_intrade_reversal(
@@ -22,84 +21,84 @@ def evaluate_intrade_reversal(
     previous_snapshot: dict[str, Any] | None = None,
     opposite_confirmations: int = 0,
 ) -> dict[str, Any]:
-    """Detect a genuine thesis reversal while a paper position is open.
-
-    This is a hysteresis guard, not a one-tick signal flipper. A reversal normally
-    needs an opposite directional signal plus at least two independent context
-    confirmations. A large adverse price shock with opposite context can escalate
-    immediately. The result is observational and contains no order/execution logic.
-    """
-    direction = str(entry_direction or "NEUTRAL").upper()
-    expected = opposite_direction(direction)
-    signal = decision.get("signal") if isinstance(decision, dict) else {}
-    signal = signal if isinstance(signal, dict) else {}
-    current = str(signal.get("direction") or "NEUTRAL").upper()
+    entry_direction = str(entry_direction or "").upper()
+    opposite = _opposite(entry_direction)
+    signal = decision.get("signal") if isinstance(decision.get("signal"), dict) else {}
+    current_direction = str(signal.get("direction") or "NEUTRAL").upper()
     confidence = _f(signal.get("confidence"))
     alignment = signal.get("context_alignment") if isinstance(signal.get("context_alignment"), dict) else {}
-    aligned = int(alignment.get("aligned") or 0)
-    conflicting = int(alignment.get("conflicting") or 0)
-    transition = bool(alignment.get("transition_context"))
+    aligned = int(_f(alignment.get("aligned")))
+    market = decision.get("market") if isinstance(decision.get("market"), dict) else {}
+    intelligence = snapshot.get("intelligence") if isinstance(snapshot.get("intelligence"), dict) else {}
     market_state = str(
-        ((decision.get("market") or {}).get("state"))
-        or ((snapshot.get("intelligence") or {}).get("market_state") or {}).get("state")
+        market.get("state")
+        or ((intelligence.get("market_state") or {}).get("state") if isinstance(intelligence.get("market_state"), dict) else "")
         or ""
     ).upper()
+
     spot = _f(snapshot.get("spot"))
-    previous_spot = _f((previous_snapshot or {}).get("spot"))
-    move = spot - previous_spot if previous_spot else 0.0
-    adverse_move = move > 0 if direction == "BEARISH" else move < 0 if direction == "BULLISH" else False
-    entry_spot = _f((decision.get("paper_trade") or {}).get("entry_spot"))
-    if not entry_spot:
-        entry_spot = _f(snapshot.get("_active_trade_entry_spot"))
+    prev_spot = _f((previous_snapshot or {}).get("spot"))
+    spot_move = spot - prev_spot if prev_spot > 0 else 0.0
+    shock_threshold = max(18.0, spot * 0.0012) if spot > 0 else 18.0
+    adverse_move = (
+        spot_move >= shock_threshold if entry_direction == "BEARISH"
+        else spot_move <= -shock_threshold if entry_direction == "BULLISH"
+        else False
+    )
+
+    entry_spot = _f(snapshot.get("_active_trade_entry_spot"))
     cumulative_adverse_pct = 0.0
     if entry_spot > 0:
-        cumulative_adverse_pct = (
-            (spot - entry_spot) / entry_spot * 100.0
-            if direction == "BEARISH"
-            else (entry_spot - spot) / entry_spot * 100.0
-        )
-    volume = sum(_f(r.get("volume")) for r in snapshot.get("option_chain") or [] if isinstance(r, dict))
-    previous_volume = sum(_f(r.get("volume")) for r in (previous_snapshot or {}).get("option_chain") or [] if isinstance(r, dict))
-    volume_impulse_pct = ((volume - previous_volume) / previous_volume * 100.0) if previous_volume > 0 else 0.0
-    gamma = str((signal.get("gamma") or {}).get("regime") or "").upper()
-    gamma_flip = _f(snapshot.get("gamma_flip"))
-    old_flip = _f((previous_snapshot or {}).get("gamma_flip"))
-    crossed_gamma_flip = bool(previous_snapshot and gamma_flip and old_flip and
-                               ((previous_spot - old_flip) * (spot - gamma_flip) < 0))
-    shock_threshold = max(18.0, spot * 0.0012)
-    price_shock = abs(move) >= shock_threshold and adverse_move
-    opposite_context = current == expected and confidence >= 60 and aligned >= (2 if transition else 2)
-    severe_reversal = opposite_context and (price_shock or crossed_gamma_flip or cumulative_adverse_pct >= 0.35)
+        signed_move = (spot - entry_spot) / entry_spot * 100.0
+        cumulative_adverse_pct = signed_move if entry_direction == "BEARISH" else -signed_move
+
+    gamma = signal.get("gamma") if isinstance(signal.get("gamma"), dict) else {}
+    current_flip = gamma.get("gamma_flip")
+    previous_gamma = {}
+    if isinstance(previous_snapshot, dict):
+        previous_intel = previous_snapshot.get("intelligence")
+        if isinstance(previous_intel, dict):
+            previous_gamma = previous_intel.get("gamma") if isinstance(previous_intel.get("gamma"), dict) else {}
+    previous_flip = previous_gamma.get("gamma_flip", previous_snapshot.get("gamma_flip") if isinstance(previous_snapshot, dict) else None)
+    crossed_gamma_flip = False
+    if current_flip is not None and previous_flip is not None and prev_spot > 0 and spot > 0:
+        crossed_gamma_flip = (prev_spot - _f(previous_flip)) * (spot - _f(current_flip)) < 0
+
+    opposite_context = current_direction == opposite and confidence >= 60.0 and aligned >= 2
+    severe_reversal = opposite_context and (adverse_move or crossed_gamma_flip or cumulative_adverse_pct >= 0.35)
     normal_reversal = opposite_context and opposite_confirmations >= 2
-    warning = current == expected and confidence >= 55 and (aligned >= 1 or conflicting >= 2)
-    action = "EXIT_REVERSAL" if severe_reversal or normal_reversal else "WARN_REVERSAL" if warning else "HOLD"
+    warning = current_direction == opposite and confidence >= 55.0 and (aligned >= 1 or market_state in {"GAMMA_TRANSITION", "POSITIVE_GAMMA_RANGE"})
+
+    if severe_reversal:
+        action = "EXIT_REVERSAL"
+        reason = "opposite signal plus adverse price shock/gamma-flip reversal"
+    elif normal_reversal:
+        action = "EXIT_REVERSAL"
+        reason = "opposite directional signal confirmed by independent context"
+    elif warning:
+        action = "WARN_REVERSAL"
+        reason = "opposite signal detected; waiting for confirmation"
+    else:
+        action = "HOLD"
+        reason = "active thesis remains valid"
+
     return {
-        "active_direction": direction,
-        "opposite_direction": expected,
-        "current_direction": current,
-        "confidence": round(confidence, 2),
-        "opposite_confirmations": opposite_confirmations,
-        "context_aligned": aligned,
-        "context_conflicting": conflicting,
-        "transition_context": transition,
-        "market_state": market_state,
-        "spot_move_points": round(move, 2),
-        "cumulative_adverse_pct": round(cumulative_adverse_pct, 4),
-        "volume_impulse_pct": round(volume_impulse_pct, 2),
-        "price_shock": price_shock,
-        "crossed_gamma_flip": crossed_gamma_flip,
-        "gamma_regime": gamma,
-        "severe_reversal": severe_reversal,
-        "normal_reversal": normal_reversal,
-        "warning": warning,
         "action": action,
-        "reason": (
-            "opposite directional signal confirmed by independent context"
-            if normal_reversal else
-            "opposite signal plus adverse price shock/gamma-flip reversal"
-            if severe_reversal else
-            "opposite signal detected; waiting for confirmation"
-            if warning else
-            "active thesis remains valid"
-        ),
+        "reason": reason,
+        "entry_direction": entry_direction,
+        "current_direction": current_direction,
+        "opposite_direction": opposite,
+        "confidence": round(confidence, 2),
+        "opposite_confirmations": int(opposite_confirmations),
+        "aligned_context": aligned,
+        "market_state": market_state,
+        "spot_move_points": round(spot_move, 2),
+        "price_shock": bool(adverse_move),
+        "shock_threshold_points": round(shock_threshold, 2),
+        "cumulative_adverse_pct": round(cumulative_adverse_pct, 4),
+        "gamma_flip_crossed": bool(crossed_gamma_flip),
+        "normal_reversal": bool(normal_reversal),
+        "severe_reversal": bool(severe_reversal),
+        "warning": bool(warning),
+        "guard": "INTRA_TRADE_REGIME_REVERSAL_V1",
     }

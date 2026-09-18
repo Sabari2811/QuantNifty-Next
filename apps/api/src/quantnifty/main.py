@@ -333,6 +333,7 @@ async def paper_live_monitor():
     trade["pnl"] = round((executable_exit - trade["entry_price"]) * trade["quantity"], 4) if executable_exit is not None else None
     trade["unrealized_pnl"] = trade["pnl"]
     trade["pnl_pct"] = round((executable_exit - trade["entry_price"]) / trade["entry_price"] * 100.0, 4) if executable_exit is not None and trade["entry_price"] else None
+    trade["reversal_guard"] = dict(getattr(live_paper, "last_reversal_state", {}) or {})
     trade["unrealized_pnl_pct"] = trade["pnl_pct"]
     trade["movement"] = "UP" if current_ltp is not None and current_ltp > trade["entry_price"] else "DOWN" if current_ltp is not None and current_ltp < trade["entry_price"] else "FLAT"
     # Keep the decision engine's risk budget, but expose the SL/target as option-premium

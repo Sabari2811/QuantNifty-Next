@@ -12,6 +12,7 @@ from quantnifty.backtest import (
 )
 from quantnifty.historical import historical_data_status
 from quantnifty.institutional_engine import final_decision
+from quantnifty.intrade_reversal_guard import evaluate_intrade_reversal
 from quantnifty.research_brain import adaptive_exit_state, update_adaptive_memory
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -151,6 +152,7 @@ def run_position_hold_backtest(snapshots: list[dict[str, Any]], strategy: str = 
         exit_j = i + 1
         reason = "SESSION_CLOSE"
         peak_favorable = 0.0
+        opposite_confirmations = 0
         for j in range(i + 1, len(ordered)):
             ts = _timestamp(ordered[j])
             if entry_day is not None and ts is not None and ts.astimezone(IST).date() != entry_day:
@@ -181,6 +183,22 @@ def run_position_hold_backtest(snapshots: list[dict[str, Any]], strategy: str = 
                     if (direction == "BULLISH" and spot <= trail_level) or (direction == "BEARISH" and spot >= trail_level):
                         exit_j, reason = j, "ADAPTIVE_TRAIL"
                         break
+            live_decision = final_decision(dict(ordered[j]), ordered[j-1], "adaptive" if mode == "adaptive" else mode, "BACKTEST")
+            current_signal = _thesis_direction(live_decision)
+            if current_signal == ("BEARISH" if direction == "BULLISH" else "BULLISH" if direction == "BEARISH" else "NEUTRAL"):
+                opposite_confirmations += 1
+            else:
+                opposite_confirmations = 0
+            reversal = evaluate_intrade_reversal(
+                direction,
+                {**ordered[j], "_active_trade_entry_spot": entry_spot},
+                live_decision,
+                ordered[j-1],
+                opposite_confirmations,
+            )
+            if reversal.get("action") == "EXIT_REVERSAL":
+                exit_j, reason = j, "OPPOSITE_REGIME_REVERSAL"
+                break
             if not _thesis_still_valid(ordered[j], ordered[j-1], direction):
                 exit_j, reason = j, "THESIS_INVALIDATED"
                 break

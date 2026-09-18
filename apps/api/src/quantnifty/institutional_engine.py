@@ -5,6 +5,7 @@ from typing import Any
 from quantnifty.decision_validation import validate_decision, validate_snapshot
 from quantnifty.research_brain import adaptive_exit_state, strategy_selector
 from quantnifty.session_policy import session_decision_policy
+from quantnifty.trade_level_engine import derive_trade_levels
 
 
 def _f(v: Any) -> float:
@@ -158,22 +159,65 @@ def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "d
     return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast","early_accumulation"} else 1.0, "context_alignment": context}
 
 
+
 def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str, Any]) -> dict[str, Any]:
-    approved = bool(risk.get("approved")); direction = signal.get("direction", "NEUTRAL"); adaptive = signal.get("adaptive") or {}; selected_strategy = str(adaptive.get("selected_strategy") or risk.get("selected_strategy") or "").lower(); selections = data.get("strike_selection") or []; selections = selections.get("candidates") or selections.get("strikes") or [] if isinstance(selections, dict) else selections; chosen = None
+    approved = bool(risk.get("approved"))
+    direction = str(signal.get("direction") or "NEUTRAL").upper()
+    adaptive = signal.get("adaptive") or {}
+    selected_strategy = str(adaptive.get("selected_strategy") or risk.get("selected_strategy") or "").lower()
+    selections = data.get("strike_selection") or []
+    selections = selections.get("candidates") or selections.get("strikes") or [] if isinstance(selections, dict) else selections
+    chosen = None
     if selections:
         wanted = "CE" if direction == "BULLISH" else "PE" if direction == "BEARISH" else ""
         if wanted:
             # Directional option selection is strict: never fall back to the opposite side.
-            # A BULLISH signal can only produce CE; a BEARISH signal can only produce PE.
-            chosen = next((item for item in selections if str(item.get("side") or item.get("option_type") or "").upper() == wanted), None)
+            chosen = next(
+                (item for item in selections
+                 if str(item.get("side") or item.get("option_type") or "").upper() == wanted),
+                None,
+            )
         else:
             chosen = selections[0]
-    spot = _f(data.get("spot")); em = _f((data.get("expected_move") or {}).get("move")); stop = max(em * .35, spot * .002) if em else spot * .002
-    entry = "WAIT_FOR_TRIGGER" if approved else None; entry_mode = "STANDARD_CONFIRMATION"
-    if selected_strategy == "early_accumulation": entry = "EARLY_ACCUMULATION_CONFIRMATION"; entry_mode = "ACCUMULATION_THEN_BREAKOUT_CONFIRMATION"
-    if selected_strategy == "cas_reentry": entry = "CAS_CONFIRMED_REENTRY"; entry_mode = "CAS_REENTRY_CONFIRMATION"
-    exit_policy = {"mode": "ADAPTIVE_EXHAUSTION_TRAIL", "initial_stop_pct": .5 if selected_strategy == "early_accumulation" else 1.25, "target_rr": 2.0, "profit_action": "TRAIL_ON_EXHAUSTION", "exit_signals": ["volume_decay","gamma_reversal","pressure_failure"]}
-    return {"status": "APPROVED_READ_ONLY" if approved else "BLOCKED", "execution_enabled": False, "direction": direction, "instrument": chosen, "entry": entry, "entry_mode": entry_mode, "stop_points": round(stop, 2) if approved else None, "target_points": round(stop * 2, 2) if approved else None, "risk_reward": 2.0 if approved else None, "exit_policy": exit_policy, "order_action": "DISABLED", "note": "Plan only. No broker order can be submitted by this engine."}
+
+    levels = derive_trade_levels(data, direction) if direction in {"BULLISH", "BEARISH"} else {
+        "source": "UNAVAILABLE", "support": None, "resistance": None,
+        "stop_spot": None, "target_spot": None, "stop_points": None,
+        "target_points": None, "risk_reward": None,
+    }
+    entry = "WAIT_FOR_TRIGGER" if approved else None
+    entry_mode = "STANDARD_CONFIRMATION"
+    if selected_strategy == "early_accumulation":
+        entry = "EARLY_ACCUMULATION_CONFIRMATION"
+        entry_mode = "ACCUMULATION_THEN_BREAKOUT_CONFIRMATION"
+    if selected_strategy == "cas_reentry":
+        entry = "CAS_CONFIRMED_REENTRY"
+        entry_mode = "CAS_REENTRY_CONFIRMATION"
+
+    exit_policy = {
+        "mode": "ADAPTIVE_EXHAUSTION_TRAIL",
+        "initial_stop_pct": .5 if selected_strategy == "early_accumulation" else 1.25,
+        "target_rr": 2.0,
+        "profit_action": "TRAIL_ON_EXHAUSTION",
+        "exit_signals": ["volume_decay", "gamma_reversal", "pressure_failure"],
+    }
+    return {
+        "status": "APPROVED_READ_ONLY" if approved else "BLOCKED",
+        "execution_enabled": False,
+        "direction": direction,
+        "instrument": chosen,
+        "entry": entry,
+        "entry_mode": entry_mode,
+        "stop_points": levels.get("stop_points") if approved else None,
+        "target_points": levels.get("target_points") if approved else None,
+        "risk_reward": levels.get("risk_reward") if approved else None,
+        "stop_spot": levels.get("stop_spot") if approved else None,
+        "target_spot": levels.get("target_spot") if approved else None,
+        "trade_levels": levels,
+        "exit_policy": exit_policy,
+        "order_action": "DISABLED",
+        "note": "Plan only. No broker order can be submitted by this engine.",
+    }
 
 
 def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None, strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:

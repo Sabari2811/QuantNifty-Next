@@ -6,6 +6,7 @@ from quantnifty.learning_store import load_snapshots, record_research
 from quantnifty.policy_runtime import validate_and_persist
 from quantnifty.research_strategy_runner import RESEARCH_STRATEGIES, run_research_strategy
 from quantnifty.scenario_engine import extract_scenarios
+from quantnifty.trade_learning import analyze_trade_lesson, summarize_trade_lessons
 
 STRATEGIES = ("directional", "gamma_blast", "adaptive")
 
@@ -62,9 +63,17 @@ def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict
         "counterfactual": True,
         "live_trade_data_accessed": False,
         "live_decision_data_accessed": False,
-        "live_outcome_data_accessed": False,
+        "live_outcome_data_accessed": True,
+        "live_outcome_access_mode": "CLOSED_PAPER_ONLY_AFTER_MARKET",
     }
     research["scenarios"] = extract_scenarios(research)
+    closed_outcomes = []
+    for event in load_events("outcomes", day):
+        outcome = event.get("outcome") if isinstance(event, dict) else None
+        if isinstance(outcome, dict) and str(outcome.get("status") or outcome.get("lifecycle") or "").upper() == "CLOSED":
+            closed_outcomes.append(outcome)
+    lessons = [analyze_trade_lesson(outcome) for outcome in closed_outcomes]
+    research["trade_learning"] = summarize_trade_lessons(lessons)
     anchor_metrics = results.get(ANCHOR_STRATEGY, {}).get("metrics") or {}
     candidate_metrics = {name: value.get("metrics") or {} for name, value in results.items() if name != ANCHOR_STRATEGY and value.get("status") == "TESTED"}
     policy_event = validate_and_persist(day, "DAY_AGGREGATE", anchor_metrics, candidate_metrics)

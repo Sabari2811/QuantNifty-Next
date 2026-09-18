@@ -8,6 +8,7 @@ from quantnifty.learning_store import claim_paper_trade_lock, load_events, load_
 from quantnifty.paper_control import activate_kill_switch, current_day, kill_switch_state
 from quantnifty.paper_entry_gate import evaluate_paper_entry
 from quantnifty.paper_trade_tracker import PaperTrade, make_trade_id, same_trading_day, session_close_required, trading_day
+from quantnifty.intrade_reversal_guard import evaluate_intrade_reversal
 
 IST = ZoneInfo("Asia/Kolkata")
 DEFAULT_NIFTY_LOT_SIZE = 65
@@ -137,7 +138,7 @@ class LivePaperManager:
     def __init__(self) -> None:
         self.sequence = 0; self.active: PaperTrade | None = None; self.entry_price = 0.0; self.entry_quantity = DEFAULT_NIFTY_LOT_SIZE; self.instrument: dict[str, Any] | None = None; self.entry_reasons: dict[str, Any] = {}; self.entry_decision: dict[str, Any] = {}
         self.entry_risk: dict[str, Any] = {}; self.entry_trigger: str | None = None; self.entry_mode: str | None = None; self.exit_policy: dict[str, Any] = {}; self.entry_delta: float | None = None
-        self.kill_switch_day = current_day(); self.kill_switch_active = bool(kill_switch_state(self.kill_switch_day).get("active"))
+        self.kill_switch_day = current_day(); self.kill_switch_active = bool(kill_switch_state(self.kill_switch_day).get("active")); self.monitor_previous_snapshot: dict[str, Any] | None = None; self.opposite_confirmations = 0; self.last_reversal_state: dict[str, Any] = {}
         self._recover()
 
     def _refresh_kill_switch(self) -> bool:
@@ -273,12 +274,44 @@ class LivePaperManager:
         current_price = _f(trade_view.get("current_price")); premium_sl = _f(trade_view.get("premium_sl")); premium_target = _f(trade_view.get("premium_target"))
         hit_sl = premium_sl > 0 and current_price > 0 and current_price <= premium_sl
         hit_target = premium_target > 0 and current_price >= premium_target
-        should_close = session_close_required(timestamp) or not same_day or hit_sl or hit_target
+
+        active_direction = str(self.active.direction or "").upper()
+        opposite = "BEARISH" if active_direction == "BULLISH" else "BULLISH" if active_direction == "BEARISH" else "NEUTRAL"
+        current_signal = str((decision.get("signal") or {}).get("direction") or "NEUTRAL").upper()
+        if current_signal == opposite:
+            self.opposite_confirmations += 1
+        else:
+            self.opposite_confirmations = 0
+
+        # Re-evaluate the thesis on every live snapshot. Two consecutive opposite
+        # confirmations normally exit; a confirmed opposite signal plus an adverse
+        # price shock or gamma-flip cross exits immediately.
+        reversal_snapshot = dict(snapshot)
+        reversal_snapshot["_active_trade_entry_spot"] = self.active.entry_spot
+        reversal = evaluate_intrade_reversal(
+            active_direction, reversal_snapshot, decision,
+            self.monitor_previous_snapshot, self.opposite_confirmations,
+        )
+        self.last_reversal_state = reversal
+        self.monitor_previous_snapshot = dict(snapshot)
+
+        should_close = session_close_required(timestamp) or not same_day or hit_sl or hit_target or reversal.get("action") == "EXIT_REVERSAL"
         if should_close:
-            reason = "SESSION_CLOSE" if session_close_required(timestamp) else "OVERNIGHT_GUARD" if not same_day else "DELTA_PREMIUM_STOP" if hit_sl else "DELTA_PREMIUM_TARGET"
+            reason = (
+                "SESSION_CLOSE" if session_close_required(timestamp) else
+                "OVERNIGHT_GUARD" if not same_day else
+                "DELTA_PREMIUM_STOP" if hit_sl else
+                "DELTA_PREMIUM_TARGET" if hit_target else
+                "OPPOSITE_REGIME_REVERSAL"
+            )
             outcome = self._close(snapshot, decision, reason)
-            return {"status": "CLOSED", "outcome": outcome}
-        return {"status": "OPEN", "trade": trade_view}
+            if outcome is not None:
+                outcome["reversal_guard"] = reversal
+            self.opposite_confirmations = 0
+            self.monitor_previous_snapshot = None
+            return {"status": "CLOSED", "outcome": outcome, "reversal_guard": reversal}
+        trade_view["reversal_guard"] = reversal
+        return {"status": "OPEN", "trade": trade_view, "reversal_guard": reversal}
 
     def process(self, snapshot: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
         if self._refresh_kill_switch():
@@ -293,6 +326,7 @@ class LivePaperManager:
         plan = decision.get("execution_plan") or {}
         if bool((decision.get("risk") or {}).get("approved")) and plan.get("instrument") and str(decision.get("decision_action") or "") == "TAKE_TRADE":
             if self._open(snapshot, decision):
+                self.monitor_previous_snapshot = dict(snapshot); self.opposite_confirmations = 0; self.last_reversal_state = {}
                 return {"status": "OPEN", "trade": self._trade_view(snapshot)}
             return {"status": "NO_TRADE", "reason": "ENTRY_CAP_OR_ACTIVE_TRADE_LOCK_OR_ENTRY_DATA_INVALID"}
         return {"status": str(decision.get("decision_action") or "NO_TRADE"), "reason": ((decision.get("risk") or {}).get("reasons") or ["ENTRY_NOT_APPROVED"])[-1]}

@@ -9,6 +9,7 @@ from quantnifty.paper_trade_tracker import session_close_required, trading_day
 def _decision(approved=True):
     return {
         "strategy": "adaptive",
+        "decision_action": "TAKE_TRADE" if approved else "NO_TRADE",
         "signal": {"direction": "BULLISH", "confidence": 82, "evidence": ["market structure BULLISH", "OI flow BULLISH"], "rationale": ["gamma support"], "adaptive": {"regime": "TREND", "selected_strategy": "directional", "preferred_direction": "BULLISH", "readiness_pct": 82, "reason": "aligned evidence"}},
         "risk": {"approved": approved, "gates": {"direction": True, "confidence": True}, "reasons": [] if approved else ["confidence"]},
         "execution_plan": {"instrument": {"security_id": "123", "trading_symbol": "NIFTY-23500-CE", "strike": 23500, "side": "CE", "lot_size": 65}, "quantity": 65, "stop_points": 80, "target_points": 160, "risk_reward": 2.0},
@@ -21,8 +22,8 @@ def _snapshot(ts="2026-09-10T04:00:00+00:00", spot=23500, bid=110, ask=112):
 
 def test_trading_day_and_session_close():
     assert trading_day("2026-09-10T04:00:00+00:00") == "2026-09-10"
-    assert not session_close_required("2026-09-10T09:58:59+00:00")
-    assert session_close_required("2026-09-10T09:59:00+00:00")
+    assert not session_close_required("2026-09-10T09:57:59+00:00")
+    assert session_close_required("2026-09-10T09:58:00+00:00")
     assert session_close_required("2026-09-10T10:00:00+00:00")
 
 

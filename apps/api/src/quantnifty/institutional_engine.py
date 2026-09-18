@@ -116,7 +116,13 @@ def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "d
 def execution_plan(data: dict[str, Any], signal: dict[str, Any], risk: dict[str, Any]) -> dict[str, Any]:
     approved = bool(risk.get("approved")); direction = signal.get("direction", "NEUTRAL"); adaptive = signal.get("adaptive") or {}; selected_strategy = str(adaptive.get("selected_strategy") or risk.get("selected_strategy") or "").lower(); selections = data.get("strike_selection") or []; selections = selections.get("candidates") or selections.get("strikes") or [] if isinstance(selections, dict) else selections; chosen = None
     if selections:
-        wanted = "CE" if direction == "BULLISH" else "PE" if direction == "BEARISH" else ""; chosen = next((item for item in selections if wanted and str(item.get("side") or item.get("option_type") or "").upper() == wanted), None) if wanted else selections[0]; chosen = chosen or selections[0]
+        wanted = "CE" if direction == "BULLISH" else "PE" if direction == "BEARISH" else ""
+        if wanted:
+            # Directional option selection is strict: never fall back to the opposite side.
+            # A BULLISH signal can only produce CE; a BEARISH signal can only produce PE.
+            chosen = next((item for item in selections if str(item.get("side") or item.get("option_type") or "").upper() == wanted), None)
+        else:
+            chosen = selections[0]
     spot = _f(data.get("spot")); em = _f((data.get("expected_move") or {}).get("move")); stop = max(em * .35, spot * .002) if em else spot * .002
     entry = "WAIT_FOR_TRIGGER" if approved else None; entry_mode = "STANDARD_CONFIRMATION"
     if selected_strategy == "early_accumulation": entry = "EARLY_ACCUMULATION_CONFIRMATION"; entry_mode = "ACCUMULATION_THEN_BREAKOUT_CONFIRMATION"

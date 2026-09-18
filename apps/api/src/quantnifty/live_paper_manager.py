@@ -54,6 +54,34 @@ def _price(row: dict[str, Any] | None, action: str) -> float:
     return bid if bid > 0 else last if last > 0 else ask
 
 
+def _quote_telemetry(row: dict[str, Any] | None) -> dict[str, Any]:
+    """Expose LTP and top-of-book separately so UI/P&L never conflates them."""
+    if not isinstance(row, dict):
+        return {
+            "current_ltp": None,
+            "current_bid": None,
+            "current_ask": None,
+            "current_spread": None,
+            "quote_quality": "UNAVAILABLE",
+        }
+    ltp, bid, ask = _f(row.get("last_price")), _f(row.get("bid")), _f(row.get("ask"))
+    spread = ask - bid if bid > 0 and ask > 0 and ask >= bid else None
+    quality = "OK"
+    if bid > 0 and ask > 0 and bid > ask:
+        quality = "INVALID_BOOK"
+    elif ltp <= 0:
+        quality = "LTP_UNAVAILABLE"
+    elif bid > 0 and ask > 0 and (ltp < bid or ltp > ask):
+        quality = "LTP_OUTSIDE_TOP_OF_BOOK"
+    return {
+        "current_ltp": round(ltp, 6) if ltp > 0 else None,
+        "current_bid": round(bid, 6) if bid > 0 else None,
+        "current_ask": round(ask, 6) if ask > 0 else None,
+        "current_spread": round(spread, 6) if spread is not None else None,
+        "quote_quality": quality,
+    }
+
+
 def _delta(row: dict[str, Any] | None) -> float | None:
     if not isinstance(row, dict):
         return None
@@ -185,9 +213,10 @@ class LivePaperManager:
     def _trade_view(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         spot = _f(snapshot.get("spot")); leg = _leg(snapshot, self.instrument); current_price = _price(leg, "SELL")
         if current_price <= 0: current_price = _price(leg, "BUY")
+        quote = _quote_telemetry(leg)
         current_delta = _delta(leg); pnl = (current_price - self.entry_price) * self.entry_quantity if current_price > 0 and self.entry_price > 0 else 0.0; pnl_pct = ((current_price - self.entry_price) / self.entry_price * 100.0) if current_price > 0 and self.entry_price > 0 else 0.0
         movement = "UP" if current_price > self.entry_price else "DOWN" if current_price < self.entry_price else "FLAT"; favorable = pnl_pct; invested = self.entry_price * self.entry_quantity; risk = self.entry_risk or {}; delta_risk = _delta_premium_levels(self.entry_price, current_delta, risk)
-        return {**asdict(self.active), "entry_price": self.entry_price, "entry_spot": self.active.entry_spot, "quantity": self.entry_quantity, "lots": self.entry_quantity / DEFAULT_NIFTY_LOT_SIZE, "lots_label": "1 lot", "qty_label": str(self.entry_quantity), "instrument": self.instrument, "entry_reasons": self.entry_reasons, "entry_trigger": self.entry_trigger, "entry_mode": self.entry_mode, "entry_risk": risk, "stop_points": risk.get("stop_points"), "target_points": risk.get("target_points"), "risk_reward": risk.get("risk_reward"), "sl_spot": risk.get("stop_spot"), "target_spot": risk.get("target_spot"), "entry_delta": self.entry_delta, "current_delta": current_delta, "delta_risk": delta_risk, "premium_sl": delta_risk.get("premium_stop"), "premium_target": delta_risk.get("premium_target"), "premium_sl_distance": delta_risk.get("premium_stop_distance"), "premium_target_distance": delta_risk.get("premium_target_distance"), "delta_risk_method": delta_risk.get("method"), "exit_policy": self.exit_policy, "risk_anchor": "ENTRY_PREMIUM_WITH_LIVE_DELTA", "current_price": round(current_price, 6), "mark_price": round(current_price, 6) if current_price > 0 else None, "mark_timestamp": snapshot.get("timestamp"), "current_spot": round(spot, 4), "pnl": round(pnl, 4), "unrealized_pnl": round(pnl, 4), "pnl_pct": round(pnl_pct, 4), "unrealized_pnl_pct": round(pnl_pct, 4), "movement": movement, "favorable_move_pct": round(favorable, 4), "invested_amount": round(invested, 4), "mark_source": "BID_THEN_LAST_THEN_ASK"}
+        return {**asdict(self.active), "entry_price": self.entry_price, "entry_spot": self.active.entry_spot, "quantity": self.entry_quantity, "lots": self.entry_quantity / DEFAULT_NIFTY_LOT_SIZE, "lots_label": "1 lot", "qty_label": str(self.entry_quantity), "instrument": self.instrument, "entry_reasons": self.entry_reasons, "entry_trigger": self.entry_trigger, "entry_mode": self.entry_mode, "entry_risk": risk, "stop_points": risk.get("stop_points"), "target_points": risk.get("target_points"), "risk_reward": risk.get("risk_reward"), "sl_spot": risk.get("stop_spot"), "target_spot": risk.get("target_spot"), "entry_delta": self.entry_delta, "current_delta": current_delta, "delta_risk": delta_risk, "premium_sl": delta_risk.get("premium_stop"), "premium_target": delta_risk.get("premium_target"), "premium_sl_distance": delta_risk.get("premium_stop_distance"), "premium_target_distance": delta_risk.get("premium_target_distance"), "delta_risk_method": delta_risk.get("method"), "exit_policy": self.exit_policy, "risk_anchor": "ENTRY_PREMIUM_WITH_LIVE_DELTA", "current_price": round(current_price, 6), "mark_price": round(current_price, 6) if current_price > 0 else None, "mark_timestamp": snapshot.get("timestamp"), "current_spot": round(spot, 4), "pnl": round(pnl, 4), "unrealized_pnl": round(pnl, 4), "pnl_pct": round(pnl_pct, 4), "unrealized_pnl_pct": round(pnl_pct, 4), "movement": movement, "favorable_move_pct": round(favorable, 4), "invested_amount": round(invested, 4), "mark_source": "BID_THEN_LAST_THEN_ASK", **quote}
 
     def _open(self, snapshot: dict[str, Any], decision: dict[str, Any]) -> bool:
         signal = decision.get("signal") or {}; plan = decision.get("execution_plan") or {}; instrument = plan.get("instrument"); leg = _leg(snapshot, instrument); timestamp = str(snapshot.get("timestamp") or ""); spot = _f(snapshot.get("spot")); direction = str(signal.get("direction") or "NEUTRAL"); price = _price(leg, "BUY"); delta = _delta(leg)

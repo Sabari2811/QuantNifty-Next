@@ -92,11 +92,15 @@ def validate_execution_plan(plan: dict[str, Any], signal: dict[str, Any], risk: 
         errors.append("plan_status_mismatch")
     direction = str(signal.get("direction") or "NEUTRAL").upper()
     instrument = plan.get("instrument")
-    if instrument and direction in {"BULLISH", "BEARISH"}:
-        side = str(instrument.get("side") or instrument.get("option_type") or "").upper()
+    if direction in {"BULLISH", "BEARISH"}:
         expected_side = "CE" if direction == "BULLISH" else "PE"
-        if side and side != expected_side:
-            errors.append("instrument_direction_mismatch")
+        if not instrument:
+            if approved:
+                errors.append("missing_directional_instrument")
+        else:
+            side = str(instrument.get("side") or instrument.get("option_type") or "").upper()
+            if side != expected_side:
+                errors.append("instrument_direction_mismatch")
     if approved and plan.get("status") != "HOLD_ACTIVE_TRADE":
         for field in ("stop_points", "target_points", "risk_reward"):
             if not _num(plan.get(field)) or float(plan.get(field) or 0) <= 0:

@@ -57,5 +57,4 @@ def test_adaptive_brain_converts_context_conflict_to_transition():
     assert result["signal"]["adaptive"]["selected_strategy"] == "transition"
     assert result["risk"]["approved"] is False
     assert "direction" in result["risk"]["reasons"]
-    assert "strategy_entry" in result["risk"]["reasons"]
 

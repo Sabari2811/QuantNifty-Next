@@ -96,7 +96,7 @@ def select_strikes(
             else "ITM"
         )
         ranked.append({
-            "side": row.get("side"), "strike": _num(row.get("strike")), "classification": classification,
+            "side": row.get("side"), "strike": _num(row.get("strike")), "expiry": str(row.get("expiry") or ""), "classification": classification,
             "security_id": row.get("security_id", ""), "trading_symbol": row.get("trading_symbol", ""),
             "premium": _num(row.get("last_price")), "delta": _num(row.get("delta")), "gamma": _num(row.get("gamma")),
             "theta": _num(row.get("theta")), "iv": _num(row.get("iv")), "volume": _num(row.get("volume")),

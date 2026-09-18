@@ -106,3 +106,9 @@ Always follow:
 `inspect -> identify gaps -> implement -> test -> commit -> deploy -> validate -> update PROJECT_HANDOFF.md`
 
 Never redesign the architecture without an explicit requirement. Never enable real trading. Never carry paper positions overnight. Never use future market outcomes in live decisions. Keep post-market research independent. Keep PostgreSQL available. Suspend/resume the **actual Render application service**, not merely the Python process. Never modify `data/instruments/fno.csv`.
+
+
+## 2026-09-18 UI runtime fix
+- `apps/api/src/quantnifty/web/intelligence.html` had a JavaScript syntax error caused by the apostrophe in `Today's` inside a single-quoted HTML string.
+- This prevented the entire intelligence-page script from executing, leaving the initial `Connecting…`/waiting placeholders visible even though `/api/v1/market` was returning `200` with `LIVE_PROVIDER` data.
+- Fixed by replacing that apostrophe with a typographic apostrophe, syntax-checked the browser script, committed as `8d5dcbce15edd8d8d58c7d29b5ff78cc7d9996ca`, and deployed to Render deployment `dep-dambrf2jnfac73ei14lg`, which reached `live` at `2026-09-18T04:29:07Z`.

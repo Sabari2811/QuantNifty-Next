@@ -180,6 +180,7 @@ def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None 
     elif historical_memory.get("closed_trade_samples"):
         snapshot = dict(snapshot)
         snapshot["_adaptive_memory"] = historical_memory
+    historical_learning = bool(historical_memory.get("closed_trade_samples"))
     memory = snapshot.get("_adaptive_memory"); selected = adaptive_day_policy(snapshot, previous, memory) if isinstance(memory, dict) else _base_strategy_selection(snapshot, previous)
     research_strategy = str(snapshot.get("_research_strategy") or "").strip().lower()
     if research_strategy in {"directional", "gamma_blast", "early_accumulation", "transition", "range", "breakout_watch", "standby"}:
@@ -188,7 +189,7 @@ def strategy_selector(snapshot: dict[str, Any], previous: dict[str, Any] | None 
         if research_strategy == "standby": selected["preferred_direction"] = "NEUTRAL"
     policy = snapshot.get("_adaptive_policy")
     same_day_trades = int((runtime_memory or {}).get("same_day_trades") or 0)
-    if isinstance(policy, dict) and same_day_trades == 0:
+    if isinstance(policy, dict) and same_day_trades == 0 and not historical_learning:
         p = policy.get("policy") or {}
         strategy = str(p.get("strategy") or "").lower()
         if p.get("created_day") and str(p.get("created_day")) < str(snapshot.get("policy_target_day") or "9999-99-99") and p.get("status") in {"VALIDATED", "FALLBACK"} and strategy in {"directional", "gamma_blast", "early_accumulation", "transition", "range", "breakout_watch", "standby", "adaptive"}:

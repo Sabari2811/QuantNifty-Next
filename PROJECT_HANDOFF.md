@@ -118,3 +118,12 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Fixed `institutional_engine.execution_plan()` so directional selection is strict: BULLISH may only map to CE and BEARISH may only map to PE; the previous fallback could select the first candidate of the opposite side when the requested side was absent.
 - Strengthened `decision_validation.validate_execution_plan()` to reject an approved directional plan with no instrument or with a mismatched option side.
 - Deployed commit `64d2c39eb8be7ea775a565fe86473045fd779bbd` as Render deployment `dep-dambti8u01pc73f3jmo0`; deployment reached `live` at `2026-09-18T04:33:50Z`.
+
+## 2026-09-18 Market Brain UI semantic/risk display fix
+- Fixed 'apps/api/src/quantnifty/web/intelligence.html' so a BLOCKED plan with 'stop_points=null' / 'target_points=null' no longer converts JavaScript 'Number(null)' into zero and incorrectly displays the current spot as both Spot SL and Spot Target. Blocked plans now show '—' until a valid risk plan exists.
+- Decision Intelligence now displays the authoritative validation action ('TAKE_TRADE', 'WAIT_CONFIRMATION', 'HOLD_ACTIVE_TRADE', or 'NO_TRADE') instead of only the coarse market-intelligence 'trade_ready' status.
+- Directional gate labels are rendered semantically: the existing 'support_breakdown_confirmation' key is shown as **Resistance breakout confirmation** for BULLISH and **Support breakdown confirmation** for BEARISH, avoiding a misleading bullish support-break label while preserving the existing gate contract.
+- 'apps/api/src/quantnifty/market_brain.py' now exposes 'validation.decision_action' as 'final_decision.status' while retaining the underlying base status as 'base_status'.
+- UI JavaScript syntax was validated from the committed HTML with the browser-equivalent 'new Function(...)' compile check.
+- GitHub CI for commit '4f1bb3dae11f1de0352fd21126fdd7d2d7a6554f' completed with 10 pre-existing session/paper-lifecycle test failures (183 passed); the failures are unrelated to these Market Brain display changes. Do not claim the full CI suite is green until those baseline failures are resolved.
+

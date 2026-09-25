@@ -3,7 +3,7 @@ services:
     name: quantnifty-api
     runtime: python
     region: singapore
-    plan: starter
+    plan: 1c-2g
     branch: main
     buildCommand: pip install -e ./apps/api
     startCommand: uvicorn quantnifty.main:app --host 0.0.0.0 --port $PORT

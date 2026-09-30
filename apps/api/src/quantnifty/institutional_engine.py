@@ -6,6 +6,7 @@ from quantnifty.decision_validation import validate_decision, validate_snapshot
 from quantnifty.research_brain import adaptive_exit_state, strategy_selector
 from quantnifty.session_policy import session_decision_policy
 from quantnifty.trade_level_engine import derive_trade_levels
+from quantnifty.trade_confirmation_engine import trade_confirmation
 
 
 def _f(v: Any) -> float:
@@ -142,10 +143,11 @@ def _adaptive_signal(data: dict[str, Any], previous: dict[str, Any] | None, sign
 
 
 def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "directional", mode: str = "LIVE") -> dict[str, Any]:
-    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; input_validation = validate_snapshot(data, mode); context = signal.get("context_alignment") if isinstance(signal.get("context_alignment"), dict) else _context_alignment(data, signal); gates = {"direction": signal.get("direction") in {"BULLISH","BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK","COMPRESSION"}, "data_integrity": input_validation["valid"]}
+    strategy = str(strategy or "directional").lower(); state = ((data.get("intelligence") or {}).get("market_state") or {}).get("state") or ""; input_validation = validate_snapshot(data, mode); context = signal.get("context_alignment") if isinstance(signal.get("context_alignment"), dict) else _context_alignment(data, signal); confirmation = trade_confirmation(data, data.get("_previous_snapshot") if isinstance(data.get("_previous_snapshot"), dict) else None, signal, strategy if strategy != "adaptive" else str((signal.get("adaptive") or {}).get("selected_strategy") or "standby")); gates = {"direction": signal.get("direction") in {"BULLISH","BEARISH"}, "confidence": _f(signal.get("confidence")) >= 60, "liquidity": _f(data.get("liquidity_score")) >= 50, "market_state": state not in {"LIQUIDITY_RISK","COMPRESSION"}, "data_integrity": input_validation["valid"]}
     # Learned guard: in transition/positive-gamma conditions, two or more independent
     # opposing context signals invalidate a directional entry until confirmation arrives.
     gates["context_alignment"] = not (signal.get("direction") in {"BULLISH", "BEARISH"} and context.get("transition_context") and int(context.get("conflicting") or 0) >= 2)
+    gates["trade_confirmation"] = bool(confirmation.get("take_trade"))
     selected = None
     if strategy == "gamma_blast": gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE"; gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
     elif strategy == "adaptive":
@@ -156,7 +158,7 @@ def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "d
         elif selected in {"range","breakout_watch","standby"}: gates["strategy_entry"] = False
         elif selected == "cas_reentry": gates["cas_reentry"] = True
     reasons = [k for k, ok in gates.items() if not ok]
-    return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast","early_accumulation"} else 1.0, "context_alignment": context}
+    return {"strategy": strategy, "mode": mode.upper(), "selected_strategy": selected, "gates": gates, "approved": not reasons, "reasons": reasons, "max_risk_pct": .5 if strategy == "gamma_blast" or selected in {"gamma_blast","early_accumulation"} else 1.0, "context_alignment": context, "confirmation": confirmation}
 
 
 
@@ -233,7 +235,8 @@ def final_decision(data: dict[str, Any], previous: dict[str, Any] | None = None,
             signal = _adaptive_signal(data, previous, signal, mode)
         else:
             signal = dict(signal); signal["direction"] = "NEUTRAL"; signal["adaptive"] = {"regime": session["phase"], "selected_strategy": "standby", "preferred_direction": "NEUTRAL", "readiness_pct": 0.0, "reason": session["reason"], "risk_profile": "CLOSED"}
-    risk = risk_engine(data, signal, requested, mode); risk["session"] = session
+    decision_input = dict(data); decision_input["_previous_snapshot"] = previous
+    risk = risk_engine(decision_input, signal, requested, mode); risk["session"] = session
     plan = execution_plan(data, signal, risk)
     result = {"signal": signal, "risk": risk, "execution_plan": plan, "strategy": requested, "status": "TRADE_CANDIDATE" if risk["approved"] else "NO_TRADE", "authoritative": "FINAL_DECISION", "trading": "DISABLED", "mode": mode.upper(), "session": session}
     validation = validate_decision(data, result, mode)

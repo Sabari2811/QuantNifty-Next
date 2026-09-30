@@ -23,6 +23,7 @@ from quantnifty.research_api import router as research_router
 from quantnifty.paper_ledger_api import router as paper_ledger_router
 from quantnifty.decision_validation import validate_snapshot
 from quantnifty.learning_store import learning_status, record_decision, record_snapshot
+from quantnifty.paper_trade_audit_api import router as paper_trade_audit_router
 from quantnifty.after_market_scheduler import after_market_loop
 from quantnifty.live_paper_manager import LivePaperManager, _delta_premium_levels
 from quantnifty.paper_control import kill_switch_state
@@ -43,6 +44,7 @@ cache: dict[str, Any] = {"snapshot": None, "previous_snapshot": None, "updated_a
 app.include_router(recording_router)
 app.include_router(research_router)
 app.include_router(paper_ledger_router)
+app.include_router(paper_trade_audit_router)
 live_paper = LivePaperManager()
 active_policy: dict[str, Any] | None = None
 

@@ -60,6 +60,33 @@ def analyze_trade_lesson(outcome: dict[str, Any]) -> dict[str, Any]:
         patterns.append("NO_FOLLOW_THROUGH")
     if direction in {"BULLISH", "BEARISH"} and entry_delta > 0:
         patterns.append("DIRECTIONAL_OPTION_DELTA_EXPOSURE")
+    pnl = premium_change * _f(outcome.get("quantity") or 0.0)
+    if pnl > 0:
+        outcome_class = "PROFIT"
+        drivers = []
+        if adverse_spot <= 0:
+            drivers.append("FAVORABLE_SPOT_FOLLOW_THROUGH")
+        if spot_target_hit:
+            drivers.append("SPOT_TARGET_REACHED")
+        if premium_change > 0:
+            drivers.append("OPTION_PREMIUM_EXPANSION")
+        if not drivers:
+            drivers.append("POSITIVE_OPTION_PNL")
+    elif pnl < 0:
+        outcome_class = "LOSS"
+        drivers = []
+        if adverse_spot > 0:
+            drivers.append("ADVERSE_SPOT_MOVE")
+        if reason == "DELTA_PREMIUM_STOP":
+            drivers.append("DELTA_PREMIUM_STOP")
+        if not spot_target_hit and adverse_spot > 0:
+            drivers.append("NO_FOLLOW_THROUGH")
+        if not drivers:
+            drivers.append("NEGATIVE_OPTION_PNL")
+    else:
+        outcome_class = "FLAT"
+        drivers = ["NO_REALIZED_PREMIUM_CHANGE"]
+
     lessons = []
     if "DIRECTIONAL_CONTEXT_CONFLICT" in patterns:
         lessons.append("Require directional confirmation from at least two independent context signals before entering during gamma-transition/positive-gamma conditions.")
@@ -88,6 +115,9 @@ def analyze_trade_lesson(outcome: dict[str, Any]) -> dict[str, Any]:
         "spot_target_hit": spot_target_hit,
         "premium_stop_at_exit": premium_stop_at_exit if premium_stop_at_exit > 0 else None,
         "exit_reason": reason,
+        "outcome_class": outcome_class,
+        "outcome_drivers": drivers,
+        "realized_pnl_recomputed": round(pnl, 2),
         "patterns": patterns,
         "lessons": lessons,
         "sample_policy": "ONE_TRADE_IS_OBSERVATION_ONLY; NO_AUTOMATIC_PARAMETER_PROMOTION",

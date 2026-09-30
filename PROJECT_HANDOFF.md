@@ -195,3 +195,12 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Runtime validation caveat: Render logs after the deployment show an existing unrelated `NameError: name '_f' is not defined` in `main.py:209` inside `_live_provider_connected`; this was not introduced by the kill-switch changes. The same runtime window also returned HTTP 200 for `/api/v1/paper/live-monitor`. Do not attribute the `_f` error to this task or modify that unrelated path without a separate requirement.
 - GitHub Actions status for commit `355f3ac5` was not exposed by the available GitHub connector at validation time, so CI is **not claimed as passed**. The repository workflow remains configured to run compile, `pytest -q apps/api/tests`, and the Intelligence UI integrity check on pushes to `main`.
 - The production kill switch was **not manually activated** during validation; therefore the production state was not mutated merely for testing. Real trading remains permanently disabled/read-only.
+
+## 2026-09-30 Paper Trade Audit implementation
+- Added read-only `GET /api/v1/paper/trade-audit?day=YYYY-MM-DD` via `apps/api/src/quantnifty/paper_trade_audit_api.py`.
+- The endpoint is IST-day scoped and reads the existing `quantnifty_learning_events` `outcomes` and `decisions` streams through the same application learning-store abstraction; it does not submit orders or alter trading state.
+- Each recorded trade exposes the stored entry decision, signal direction/confidence/evidence/rationale, risk approval/gates/reasons, execution plan, paper-entry reasons, instrument/strike, delta-based risk anchor, exit decision/reasons, stop/target, exit reason, and realized P&L.
+- It also reports a nearest persisted decision-event match to the entry timestamp for auditability.
+- Added regression coverage in `apps/api/tests/test_paper_trade_audit_api.py` for logic-trace extraction, P&L aggregation, decision matching, and invalid-day rejection.
+- Commits: `8d8c1b2` (route wiring), `27ceb20` (audit API), `262d1d6` (tests).
+- Real trading remains permanently disabled/read-only. No changes to `data/instruments/fno.csv`, broker execution, or unrelated repositories.

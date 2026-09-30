@@ -102,3 +102,33 @@ def test_replay_never_reads_live_outcomes(monkeypatch):
     monkeypatch.setattr(paper_entry_gate, "load_events", fail)
     gate = paper_entry_gate.evaluate_paper_entry(_data(), "BEARISH", "BACKTEST")
     assert gate["applied"] is False and gate["allowed"] is True
+
+
+def test_persistent_kill_switch_blocks_entry_before_other_gates(monkeypatch):
+    monkeypatch.setattr(
+        paper_entry_gate,
+        "kill_switch_state",
+        lambda day: {
+            "day": day,
+            "active": True,
+            "new_entries_blocked": True,
+            "open_positions_must_close": True,
+        },
+    )
+    gate = paper_entry_gate.evaluate_paper_entry(_data(), "BEARISH")
+    assert gate["action"] == "NO_TRADE"
+    assert gate["allowed"] is False
+    assert gate["reason"] == "PAPER_KILL_SWITCH_ACTIVE"
+    assert gate["kill_switch"]["active"] is True
+
+
+def test_kill_switch_is_ist_day_scoped(monkeypatch):
+    monkeypatch.setattr(
+        paper_entry_gate,
+        "kill_switch_state",
+        lambda day: {"day": day, "active": day == "2026-09-17"},
+    )
+    active_day = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-17T05:40:00+00:00"), "BEARISH")
+    next_day = paper_entry_gate.evaluate_paper_entry(_data(timestamp="2026-09-18T05:40:00+00:00"), "BEARISH")
+    assert active_day["reason"] == "PAPER_KILL_SWITCH_ACTIVE"
+    assert next_day["reason"] == "NO_PRIOR_TRADE_TODAY"

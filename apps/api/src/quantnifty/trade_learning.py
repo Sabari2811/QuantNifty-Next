@@ -60,7 +60,7 @@ def analyze_trade_lesson(outcome: dict[str, Any]) -> dict[str, Any]:
         patterns.append("NO_FOLLOW_THROUGH")
     if direction in {"BULLISH", "BEARISH"} and entry_delta > 0:
         patterns.append("DIRECTIONAL_OPTION_DELTA_EXPOSURE")
-    pnl = premium_change * _f(outcome.get("quantity") or 0.0)
+    pnl = _f(outcome.get("realized_pnl", outcome.get("net_pnl", premium_change * _f(outcome.get("quantity") or outcome.get("entry_quantity") or 0.0))))
     if pnl > 0:
         outcome_class = "PROFIT"
         drivers = []

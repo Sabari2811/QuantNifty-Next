@@ -201,15 +201,22 @@ def backtest_page():
     path=os.path.join(os.path.dirname(__file__),"web","backtest.html"); return FileResponse(path)
 
 @app.get("/health")
+def _live_provider_connected() -> bool:
+    cached = cache.get("snapshot")
+    if not isinstance(cached, dict):
+        return False
+    return str(cached.get("data_integrity") or "").upper() == "LIVE_PROVIDER" and _f(cache.get("updated_at")) > 0
+
+@app.get("/health")
 def health():
     state=market_session_state()
-    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"market_session":state,"live_provider_connected":False,"timestamp":datetime.now(timezone.utc).isoformat()}
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"market_session":state,"live_provider_connected":_live_provider_connected(),"timestamp":datetime.now(timezone.utc).isoformat()}
 @app.get("/api/v1/health")
 def api_health(): return health()
 @app.get("/api/v1/status")
 def status():
     state=market_session_state()
-    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None and bool(state["open"]),"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"market_session":state,"live_provider_connected":False,"trading":"DISABLED","learning":learning_status(),"active_future_policy":(active_policy or {}).get("policy"),"live_paper_status":("OPEN" if live_paper.active is not None else "IDLE"),"analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION","LIVE_LEARNING_RECORDER","PAPER_OUTCOME_TRACKER","AFTER_MARKET_LAB","ADAPTIVE_POLICY"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
+    return {"status":"ok","provider":"INDstocks","provider_configured":bool(TOKEN),"cached":cache["snapshot"] is not None and bool(state["open"]),"updated_at":cache["updated_at"],"refresh_interval_seconds":POLL_SECONDS,"market_session":state,"live_provider_connected":_live_provider_connected(),"trading":"DISABLED","learning":learning_status(),"active_future_policy":(active_policy or {}).get("policy"),"live_paper_status":("OPEN" if live_paper.active is not None else "IDLE"),"analytics":["OI_FLOW","PCR","GEX","DEX","VANNA_PROXY","IV_SKEW","GAMMA_FLIP","GAMMA_WALLS","MAX_PAIN","EXPECTED_MOVE","MARKET_STRUCTURE","DEALER_FLOW","LIQUIDITY","DIRECTION_SCORE","STRIKE_SELECTION","MARKET_STATE","EVENT_DETECTION","MOVE_ATTRIBUTION","SIGNAL_DNA","PRESSURE_MAP","NO_TRADE_INTELLIGENCE","INSTITUTIONAL_SIGNAL","RISK_ENGINE","FINAL_DECISION","EXECUTION_PLAN","BACKTEST_ENGINE","OOS_VALIDATION","COST_MODEL","REGIME_VALIDATION","LIVE_LEARNING_RECORDER","PAPER_OUTCOME_TRACKER","AFTER_MARKET_LAB","ADAPTIVE_POLICY"],"replay":"AVAILABLE","backtest":"AVAILABLE"}
 
 @app.get("/api/v1/learning/status")
 def learning_status_api(): return learning_status()
@@ -276,46 +283,98 @@ def _live_quote_item(payload: dict[str, Any], code: str) -> dict[str, Any]:
 
 @app.get("/api/v1/paper/live-monitor")
 async def paper_live_monitor():
-    """Return the active paper trade marked from a fresh provider quote."""
+    """Return the active paper trade marked from live provider quotes."""
     if not is_live_market_session():
         return {"mode": "READ_ONLY_PAPER", "status": "MARKET_CLOSED", "trade": None}
+
+    snapshot_now = cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None
+    if snapshot_now is None:
+        try:
+            snapshot_now = await snapshot()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"live market snapshot unavailable: {exc}") from exc
+
     instrument = live_paper.instrument if isinstance(live_paper.instrument, dict) else None
-    snapshot_now = cache.get("snapshot") or {}
+    live_spot = num(snapshot_now.get("spot"))
+    provider_timestamp = snapshot_now.get("timestamp")
+    if live_spot <= 0:
+        raise HTTPException(status_code=503, detail="live NIFTY snapshot unavailable")
+
+    # No open paper position: the monitor should not depend on the per-contract
+    # quote endpoint. The continuous LIVE_PROVIDER option-chain snapshot is enough.
+    if not instrument or live_paper.active is None:
+        return {
+            "mode": "READ_ONLY_PAPER",
+            "status": "NO_ACTIVE_TRADE",
+            "spot": round(live_spot, 4),
+            "timestamp": provider_timestamp or datetime.now(timezone.utc).isoformat(),
+            "provider_timestamp": provider_timestamp,
+            "quote_source": "LIVE_PROVIDER_OPTION_CHAIN_SNAPSHOT",
+            "quote_quality": "OK",
+            "trade": None,
+        }
+
     intelligence_now = snapshot_now.get("intelligence") if isinstance(snapshot_now.get("intelligence"), dict) else {}
     execution_now = intelligence_now.get("execution_plan") if isinstance(intelligence_now.get("execution_plan"), dict) else {}
     plan_instrument = execution_now.get("instrument") if isinstance(execution_now.get("instrument"), dict) else None
-    codes = [NIFTY_SCRIP_CODE]
-    option_code = ""
-    plan_option_code = ""
-    if instrument:
-        security_id = str(instrument.get("security_id") or "").strip()
-        if security_id:
-            option_code = f"NFO_{security_id}"
-            codes.append(option_code)
-    if plan_instrument:
-        plan_security_id = str(plan_instrument.get("security_id") or "").strip()
-        if plan_security_id and plan_security_id != str((instrument or {}).get("security_id") or "").strip():
-            plan_option_code = f"NFO_{plan_security_id}"
-            codes.append(plan_option_code)
+    security_id = str(instrument.get("security_id") or "").strip()
+    option_code = f"NFO_{security_id}" if security_id else ""
+    plan_security_id = str(plan_instrument.get("security_id") or "").strip() if plan_instrument else ""
+    plan_option_code = f"NFO_{plan_security_id}" if plan_security_id and plan_security_id != security_id else ""
+
+    quotes: dict[str, Any] | None = None
+    quote_error: str | None = None
+    codes = [NIFTY_SCRIP_CODE] + ([option_code] if option_code else []) + ([plan_option_code] if plan_option_code else [])
     try:
         quotes = await api_get("/market/quotes/full", {"scrip-codes": ",".join(codes)})
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"live quote unavailable: {exc}") from exc
-    spot_item = _live_quote_item(quotes, NIFTY_SCRIP_CODE)
-    spot = num(spot_item.get("live_price"))
-    if spot <= 0:
-        raise HTTPException(status_code=503, detail="live NIFTY quote unavailable")
-    if not instrument:
-        return {"mode": "READ_ONLY_PAPER", "status": "NO_ACTIVE_TRADE", "spot": round(spot, 4), "timestamp": datetime.now(timezone.utc).isoformat(), "provider_timestamp": quotes.get("timestamp"), "quote_source": "INDstocks /market/quotes/full"}
-    option_item = _live_quote_item(quotes, option_code)
+        quote_error = str(exc)
+
+    spot = live_spot
+    option_item: dict[str, Any] = {}
+    plan_item: dict[str, Any] = {}
+    quote_source = "INDstocks /market/quotes/full"
+    quote_quality = "OK"
+    if quotes is not None:
+        spot_item = _live_quote_item(quotes, NIFTY_SCRIP_CODE)
+        quoted_spot = num(spot_item.get("live_price"))
+        if quoted_spot > 0:
+            spot = quoted_spot
+        if option_code:
+            option_item = _live_quote_item(quotes, option_code)
+        if plan_option_code:
+            plan_item = _live_quote_item(quotes, plan_option_code)
+
+    # If the full-quote endpoint is temporarily unavailable, fall back to the
+    # same contract in the continuously refreshed LIVE_PROVIDER option chain.
+    if not option_item:
+        chain_row = _leg(snapshot_now, instrument)
+        if chain_row is not None:
+            option_item = {
+                "live_price": chain_row.get("last_price"),
+                "market_depth": {
+                    "depth": [{
+                        "buy": {"price": chain_row.get("bid")} if num(chain_row.get("bid")) > 0 else {},
+                        "sell": {"price": chain_row.get("ask")} if num(chain_row.get("ask")) > 0 else {},
+                    }]
+                },
+            }
+            quote_source = "LIVE_PROVIDER_OPTION_CHAIN_SNAPSHOT"
+            quote_quality = "DEGRADED"
+        elif quote_error:
+            raise HTTPException(status_code=503, detail=f"active option quote unavailable: {quote_error}") from None
+
     ltp = num(option_item.get("live_price"))
     bid, ask = _quote_depth(option_item)
-    plan_item = _live_quote_item(quotes, plan_option_code) if plan_option_code else {}
+    if ltp <= 0:
+        chain_row = _leg(snapshot_now, instrument)
+        ltp = num(chain_row.get("last_price")) if chain_row else 0.0
+        if ltp > 0:
+            quote_source = "LIVE_PROVIDER_OPTION_CHAIN_SNAPSHOT"
+            quote_quality = "DEGRADED"
     plan_ltp = num(plan_item.get("live_price"))
-    trade = dict(live_paper._trade_view(cache.get("snapshot") or {}))
-    # Front-end display is option-native: current price is the provider LTP for the exact
-    # active contract.  Executable exit/P&L remain BID-marked, but are kept separate so
-    # a wide option spread can never make the UI look like it is showing another price.
+
+    trade = dict(live_paper._trade_view(snapshot_now))
     current_ltp = round(ltp, 6) if ltp > 0 else None
     executable_exit = round(bid, 6) if bid is not None else current_ltp
     trade["current_spot"] = round(spot, 4)
@@ -336,8 +395,6 @@ async def paper_live_monitor():
     trade["reversal_guard"] = dict(getattr(live_paper, "last_reversal_state", {}) or {})
     trade["unrealized_pnl_pct"] = trade["pnl_pct"]
     trade["movement"] = "UP" if current_ltp is not None and current_ltp > trade["entry_price"] else "DOWN" if current_ltp is not None and current_ltp < trade["entry_price"] else "FLAT"
-    # Keep the decision engine's risk budget, but expose the SL/target as option-premium
-    # values using the entry delta. They are no longer recalculated from the cached spot quote.
     entry_risk = trade.get("entry_risk") if isinstance(trade.get("entry_risk"), dict) else {}
     entry_delta = trade.get("entry_delta")
     native_levels = _delta_premium_levels(trade["entry_price"], entry_delta, entry_risk)
@@ -346,16 +403,27 @@ async def paper_live_monitor():
     trade["premium_sl_distance"] = native_levels.get("premium_stop_distance")
     trade["premium_target_distance"] = native_levels.get("premium_target_distance")
     trade["delta_risk_method"] = "ENTRY_PREMIUM_PLUS_ENTRY_DELTA_X_NIFTY_POINTS"
-    trade["option_price_source"] = "INDstocks /market/quotes/full live_price"
+    trade["option_price_source"] = quote_source
     trade["mark_timestamp"] = datetime.now(timezone.utc).isoformat()
-    trade["quote_source"] = "INDstocks /market/quotes/full"
-    trade["quote_quality"] = "OK" if ltp > 0 and (bid is None or ask is None or bid <= ask) else "INVALID_BOOK"
+    trade["quote_source"] = quote_source
+    trade["quote_quality"] = quote_quality if ltp > 0 and (bid is None or ask is None or bid <= ask) else "INVALID_BOOK"
     trade["instrument"] = {**instrument, "expiry": instrument.get("expiry") or snapshot_now.get("expiry")}
     if plan_instrument:
         trade["brain_plan_instrument"] = {**plan_instrument, "expiry": plan_instrument.get("expiry") or snapshot_now.get("expiry")}
         trade["brain_plan_ltp"] = round(plan_ltp, 6) if plan_ltp > 0 else None
         trade["brain_plan_is_active_contract"] = str(plan_instrument.get("security_id") or "") == str(instrument.get("security_id") or "")
-    return {"mode": "READ_ONLY_PAPER", "status": "OPEN", "spot": round(spot, 4), "timestamp": trade["mark_timestamp"], "provider_timestamp": quotes.get("timestamp"), "quote_source": trade["quote_source"], "trade": trade}
+    return {
+        "mode": "READ_ONLY_PAPER",
+        "status": "OPEN",
+        "spot": round(spot, 4),
+        "timestamp": trade["mark_timestamp"],
+        "provider_timestamp": (quotes or {}).get("timestamp") or provider_timestamp,
+        "quote_source": quote_source,
+        "quote_quality": trade["quote_quality"],
+        "quote_degraded": quote_quality == "DEGRADED",
+        "quote_error": quote_error if quote_quality == "DEGRADED" else None,
+        "trade": trade,
+    }
 
 @app.post("/api/v1/replay/decisions")
 async def replay_decisions_api(payload: dict[str,Any]):

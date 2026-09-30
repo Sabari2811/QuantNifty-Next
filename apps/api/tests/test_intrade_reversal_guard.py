@@ -44,3 +44,28 @@ def test_opposite_signal_plus_adverse_price_shock_exits_immediately():
     )
     assert result["action"] == "EXIT_REVERSAL"
     assert result["price_shock"] is True
+
+
+def test_gamma_flip_cross_without_opposite_direction_holds():
+    # A gamma-flip cross alone is not a directional reversal. This protects
+    # the behavior observed on 2026-09-30, where the bearish thesis remained
+    # bearish while gamma transitioned from negative to positive.
+    previous = {"spot": 22697.8, "gamma_flip": 22716.27}
+    current = {"spot": 22723.75, "gamma_flip": 22719.76}
+    result = evaluate_intrade_reversal(
+        "BEARISH", current, _decision("BEARISH"), previous, opposite_confirmations=0
+    )
+    assert result["gamma_flip_crossed"] is True
+    assert result["action"] == "HOLD"
+    assert result["severe_reversal"] is False
+
+
+def test_opposite_direction_plus_gamma_flip_cross_exits():
+    previous = {"spot": 22697.8, "gamma_flip": 22716.27}
+    current = {"spot": 22723.75, "gamma_flip": 22719.76}
+    result = evaluate_intrade_reversal(
+        "BEARISH", current, _decision("BULLISH"), previous, opposite_confirmations=1
+    )
+    assert result["gamma_flip_crossed"] is True
+    assert result["action"] == "EXIT_REVERSAL"
+    assert result["severe_reversal"] is True

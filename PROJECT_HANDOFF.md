@@ -251,3 +251,12 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Therefore the absence of a new paper trade is currently a safety gate, not evidence that the engine is broken. The next browser refresh should show the current confirmation trace after the new deployment is queried.
 - Render runtime evidence immediately after deployment confirmed the production PostgreSQL database is reachable and `trading=DISABLED`; no broker execution was enabled.
 - GitHub reported no workflow runs for `ab9e415`; CI is not claimed as passed. Render build/deploy completed successfully.
+
+
+## 2026-09-30 Confirmation V2 hardening
+- Hardened `trade_confirmation_engine.py` so a key-level break is measured against the previous snapshot's support/resistance. This prevents the current level from moving with price and creating a false post-hoc break.
+- Hardened volume confirmation to use the selected directional option contract rather than summing the entire option chain. Option-chain volume is cumulative, so whole-chain short-interval percentage changes were not a reliable participation signal.
+- Kept microstructure/depth confirmation out of the authoritative entry gate because the current LIVE_PROVIDER snapshot does not expose a stable aggregate order-book/microstructure series. Existing bid/ask/depth data remains usable where available for execution/quote monitoring; no synthetic microstructure signal is inferred.
+- Added regression tests for frozen trigger levels, avoiding repeated breaks when price was already beyond the level, and selected-contract volume confirmation.
+- Commits: `4234029` (confirmation hardening), `3decd60` (tests).
+- Real trading remains permanently disabled/read-only; no broker execution or instrument-file changes.

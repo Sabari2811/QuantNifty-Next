@@ -241,3 +241,13 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Commits: `16975c2` (entry/hold separation), `81ee72a`, `df642e5` (outcome attribution), `353df90` (tests).
 - A recurring hourly paper-trade monitor is now enabled to report new/changed/closed paper trades for the current IST trading day and attribute profit/loss drivers without changing parameters from one observation.
 - Real trading remains permanently disabled/read-only.
+
+
+## 2026-09-30 Runtime deployment + no-trade diagnosis
+- Render service `quantnifty-api` was behind `main`: the previous LIVE deploy was commit `2e545c0`, while `main` had advanced to `ab9e415` with the Confirmation V2, hold-path safety, and trade-outcome attribution changes.
+- Triggered Render deployment `dep-dauc8lo93c1s73dlpm20` for `ab9e415`; Render reported the deployment `live` at 2026-09-30T08:13:00Z.
+- The screenshot supplied before this deployment showed the older runtime blocking on `gamma_regime`, `volatility`, and `BEARISH_MOMENTUM_TRADE_LIMIT`. Those labels are not part of the current authoritative `risk_engine()` on `main`; the current entry-quality contract is `trade_confirmation`.
+- Current Confirmation V2 deliberately prevents a directional paper entry until a relevant support/resistance level is broken and the move has sufficient displacement/persistence plus independent volume/OI/dealer/option-premium confirmation. A strong bearish thesis alone is not sufficient.
+- Therefore the absence of a new paper trade is currently a safety gate, not evidence that the engine is broken. The next browser refresh should show the current confirmation trace after the new deployment is queried.
+- Render runtime evidence immediately after deployment confirmed the production PostgreSQL database is reachable and `trading=DISABLED`; no broker execution was enabled.
+- GitHub reported no workflow runs for `ab9e415`; CI is not claimed as passed. Render build/deploy completed successfully.

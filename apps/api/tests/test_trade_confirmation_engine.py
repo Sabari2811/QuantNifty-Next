@@ -79,3 +79,31 @@ def test_cas_reentry_keeps_its_existing_authoritative_confirmation():
     assert result["confirmed"]
     assert result["take_trade"]
     assert result["status"] == "CONFIRMED"
+
+
+def test_level_break_uses_previous_frozen_level_not_moving_current_level():
+    previous = _snapshot(spot=22660.0, premium=175.0, volume=1000000, support=22650.0)
+    # Current support moved down after price moved. The break must still be
+    # evaluated against the previous 22650 level.
+    current = _snapshot(spot=22645.0, premium=182.0, volume=1100000, support=22630.0)
+    result = trade_confirmation(current, previous, _signal(), "early_accumulation")
+    assert result["level"] == 22650.0
+    assert result["gates"]["key_level_break"]
+    assert result["take_trade"]
+
+
+def test_level_does_not_count_as_new_break_if_price_was_already_beyond_it():
+    previous = _snapshot(spot=22640.0, premium=175.0, volume=1000000, support=22650.0)
+    current = _snapshot(spot=22635.0, premium=182.0, volume=1100000, support=22630.0)
+    result = trade_confirmation(current, previous, _signal(), "early_accumulation")
+    assert not result["gates"]["key_level_break"]
+    assert "KEY_LEVEL_NOT_BROKEN" in result["reasons"]
+
+
+def test_volume_confirmation_uses_selected_directional_contract():
+    previous = _snapshot(spot=22660.0, premium=175.0, volume=1000000, support=22650.0)
+    current = _snapshot(spot=22645.0, premium=175.0, volume=1005000, support=22630.0)
+    # Aggregate chain volume is irrelevant; the selected PE contract is what
+    # confirms participation.
+    result = trade_confirmation(current, previous, _signal(), "early_accumulation")
+    assert result["gates"]["volume_expansion"]

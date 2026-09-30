@@ -36,10 +36,18 @@ def _selected_strategy(decision: dict[str, Any]) -> str:
 
 
 def _thesis_still_valid(snapshot: dict[str, Any], previous: dict[str, Any] | None, direction: str) -> bool:
+    """Validate an existing thesis without re-running the entry confirmation gate.
+
+    Confirmation is an ENTRY contract. Requiring a fresh level break/volume/premium
+    response on every holding bar would incorrectly turn normal consolidation into
+    thesis invalidation. Other risk/context failures remain authoritative.
+    """
     decision = final_decision(dict(snapshot), previous, "BACKTEST", "BACKTEST")
     if _thesis_direction(decision) != direction:
         return False
-    return bool((decision.get("risk") or {}).get("approved"))
+    risk = decision.get("risk") or {}
+    reasons = [str(reason) for reason in risk.get("reasons") or [] if str(reason) != "trade_confirmation"]
+    return not reasons and bool((risk.get("gates") or {}).get("direction", True))
 
 
 def _spot_atr_points(ordered: list[dict[str, Any]], index: int, period: int = 20) -> float:

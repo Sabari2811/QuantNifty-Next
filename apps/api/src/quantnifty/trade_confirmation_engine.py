@@ -134,14 +134,17 @@ def trade_confirmation(
     min_displacement = max(8.0, min(25.0, expected_move * 0.07 if expected_move > 0 else 12.0))
     displacement = move_points >= min_displacement
 
-    support = _f(snapshot.get("support"))
-    resistance = _f(snapshot.get("resistance"))
+    # Freeze the trigger level from the previous snapshot. Using the current
+    # support/resistance can let the level move with price and manufacture a
+    # break after the fact.
+    previous_support = _f((previous or {}).get("support"))
+    previous_resistance = _f((previous or {}).get("resistance"))
     if direction == "BULLISH":
-        level = resistance
-        level_break = level > 0 and spot >= level
+        level = previous_resistance
+        level_break = level > 0 and prev_spot < level and spot >= level
     else:
-        level = support
-        level_break = level > 0 and spot <= level
+        level = previous_support
+        level_break = level > 0 and prev_spot > level and spot <= level
 
     previous_bias = _direction(previous.get("bias"))
     current_bias = _direction(snapshot.get("bias"))
@@ -153,10 +156,35 @@ def trade_confirmation(
     flow_confirmed = _direction(oi.get("bias")) == direction
     dealer_confirmed = _direction(dealer.get("delta_pressure")) == direction and _direction(dealer.get("alignment")) == "CONFIRMED"
 
-    previous_volume = sum(_f(r.get("volume")) for r in previous.get("option_chain") or [] if isinstance(r, dict))
-    current_volume = sum(_f(r.get("volume")) for r in snapshot.get("option_chain") or [] if isinstance(r, dict))
-    volume_change = ((current_volume - previous_volume) / previous_volume * 100.0) if previous_volume > 0 else 0.0
-    volume_confirmed = volume_change >= 10.0
+    # Option-chain volume is cumulative. Compare the selected directional
+    # contract instead of summing the whole chain across a short poll interval.
+    selections = snapshot.get("strike_selection") or []
+    if isinstance(selections, dict):
+        selections = selections.get("candidates") or selections.get("strikes") or []
+    wanted = "CE" if direction == "BULLISH" else "PE"
+    volume_candidate = next(
+        (
+            row for row in selections
+            if isinstance(row, dict)
+            and _direction(row.get("side") or row.get("option_type")) == wanted
+        ),
+        None,
+    )
+    current_leg = _find_leg(snapshot, volume_candidate) if isinstance(volume_candidate, dict) else None
+    previous_leg = _find_leg(previous, volume_candidate) if isinstance(volume_candidate, dict) else None
+    previous_volume = _f((previous_leg or {}).get("volume"))
+    current_volume = _f((current_leg or {}).get("volume"))
+    volume_change = (
+        (current_volume - previous_volume) / previous_volume * 100.0
+        if previous_volume > 0
+        else 0.0
+    )
+    # A meaningful selected-contract increase is sufficient for volume
+    # participation. Premium response remains an independent alternative.
+    volume_confirmed = (
+        current_volume > previous_volume
+        and (volume_change >= 1.0 or current_volume - previous_volume >= 1000.0)
+    )
 
     premium_confirmed, premium_change = _option_response(snapshot, previous, direction)
 

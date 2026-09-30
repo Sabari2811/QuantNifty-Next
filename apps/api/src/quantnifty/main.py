@@ -427,7 +427,8 @@ async def paper_live_monitor():
 
 @app.get("/api/v1/paper/kill-switch")
 def paper_kill_switch_status():
-    return live_paper._refresh_kill_switch() and {"active": True, "state": __import__("quantnifty.paper_control", fromlist=["kill_switch_state"]).kill_switch_state()} or {"active": False, "state": __import__("quantnifty.paper_control", fromlist=["kill_switch_state"]).kill_switch_state()}
+    active = live_paper._refresh_kill_switch()
+    return {"active": bool(active), "state": kill_switch_state()}
 
 @app.post("/api/v1/paper/kill-switch")
 def paper_kill_switch():

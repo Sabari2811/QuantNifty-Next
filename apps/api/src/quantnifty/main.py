@@ -425,6 +425,15 @@ async def paper_live_monitor():
         "trade": trade,
     }
 
+@app.get("/api/v1/paper/kill-switch")
+def paper_kill_switch_status():
+    return live_paper._refresh_kill_switch() and {"active": True, "state": __import__("quantnifty.paper_control", fromlist=["kill_switch_state"]).kill_switch_state()} or {"active": False, "state": __import__("quantnifty.paper_control", fromlist=["kill_switch_state"]).kill_switch_state()}
+
+@app.post("/api/v1/paper/kill-switch")
+def paper_kill_switch():
+    state = live_paper.activate_daily_kill_switch(cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None)
+    return {"active": True, "state": state}
+
 @app.post("/api/v1/replay/decisions")
 async def replay_decisions_api(payload: dict[str,Any]):
     snapshots=payload.get("snapshots")

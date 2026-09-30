@@ -204,3 +204,14 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Added regression coverage in `apps/api/tests/test_paper_trade_audit_api.py` for logic-trace extraction, P&L aggregation, decision matching, and invalid-day rejection.
 - Commits: `8d8c1b2` (route wiring), `27ceb20` (audit API), `262d1d6` (tests).
 - Real trading remains permanently disabled/read-only. No changes to `data/instruments/fno.csv`, broker execution, or unrelated repositories.
+
+## 2026-09-30 Exit logic audit
+- Audited `apps/api/src/quantnifty/live_paper_manager.py` and `apps/api/src/quantnifty/intrade_reversal_guard.py` against the 2026-09-30 paper trade `paper-20260930T035300.7293010000-0001`.
+- The entry delta was `-0.55`, entry premium `177.50`, and spot-risk budget `25.0` NIFTY points. The authoritative delta-based premium stop is **177.50 - (0.55 × 25.0) = 163.75**.
+- The actual exit premium was `161.10`, so the `DELTA_PREMIUM_STOP` condition was genuinely satisfied. The NIFTY exit spot `22723.75` also exceeded the frozen spot stop `22722.80`.
+- The premium loss was `(161.10 - 177.50) × 65 = -1066.00`, matching the persisted realized P&L.
+- The exit decision simultaneously showed a negative-to-positive gamma-flip transition, but the directional signal remained **BEARISH**. `evaluate_intrade_reversal()` intentionally treats a gamma-flip cross as an immediate reversal trigger only when paired with an opposite directional signal/adverse context; a gamma flip by itself does not close the trade. Therefore today's recorded exit was caused by the delta-premium stop, not a reversal-guard exit.
+- No production trading logic was changed during this audit because the observed exit behavior matches the implemented risk rules. The `exit_policy.exit_signals` metadata includes `gamma_reversal`, but the authoritative runtime trigger remains the reversal guard's explicit conditions plus the delta premium stop/target and session guards.
+- Added regression tests in `apps/api/tests/test_intrade_reversal_guard.py` covering (a) gamma-flip crossing without an opposite directional signal remains `HOLD`, and (b) an opposite directional signal plus a gamma-flip cross exits immediately.
+- Test-only commit: `e8e4972d827f200f515d0d1ff6537373e55cb65c`.
+- The available GitHub connector did not expose a workflow run or status result for this new commit at validation time, so CI is **not claimed as passed**. No Render deployment was triggered because this commit changes regression tests only and does not change production runtime behavior; real trading remains permanently disabled/read-only.

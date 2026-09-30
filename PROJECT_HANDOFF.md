@@ -169,3 +169,16 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Added a Backtest UI control to run the raw post-market test and show strategy trade count, win rate, and net P&L.
 - Existing 15:30 IST after-market scheduler continues to invoke the lab and retry if incomplete.
 - All post-market testing remains counterfactual/research-only; no live decision or order path is enabled by the research runner.
+
+
+## 2026-09-30 Continuation / cost-control / UI control status
+- This handoff is the continuation source for a new chat. Preserve the existing architecture and history above; do not restart the project from scratch.
+- Current repository: `Sabari2811/QuantNifty-Next`, branch `main`.
+- Current known production deployment from the latest validated sequence: commit `ec2ca1baaf09676757f3f98c7d71ef8cacc0f384` (PR #7 merge). Workflow-only cost-control commits followed: resume workflow `916916070b6e84be22e599d1394621b3b89aaa6d`; suspend workflow `78ff1b39b380b93c387fa4e45f0b28ec9ed8f197`.
+- Render workspace: `quantnifty-next` (`tea-dad5cr0n74is73dbho3g`).
+- Current Render state verified on 2026-09-30: `quantnifty-api` (paid 1c-2g) is **suspended by user**; `quantnifty-production` (paid basic_256mb PostgreSQL) is **suspended by user**; `quantnifty-live-worker` PostgreSQL is also suspended. The free `quantnifty-learning` PostgreSQL remains available and expires 2026-10-07.
+- The scheduled GitHub Actions are configured to resume the paid API and production PostgreSQL at 09:00 IST weekdays and suspend both at 16:00 IST weekdays. The workflow configuration has been committed, but manual workflow dispatch was not independently executed/verified in this continuation; do not claim that the schedule has been end-to-end tested.
+- The production runtime/database mismatch remains an open certification item: prior runtime evidence showed `quantnifty_learning`, while the intended durable production database is `quantnifty_production`. Do not claim reconciliation until the Render service environment is explicitly inspected/updated and runtime diagnostics are revalidated.
+- Real trading remains permanently disabled/read-only. Current execution is paper-only; one NIFTY option lot, one active position, maximum 3 paper trades/day.
+- User requested a **Kill Switch control positioned prominently near/on top of the Live Monitor**. At the time of this handoff update, this is a **PENDING IMPLEMENTATION** request, not a completed feature. Do not tell the user it is already available. Desired behavior: persistent paper-only kill-switch state, prominent control near Live Monitor, clear HALTED/DISABLED status, block new paper entries and automatic flips while active, and safely handle any existing paper position according to the project's fail-closed policy. Implement backend state/control first, then UI, tests, deploy, and validate.
+- Important: the user asked to continue this project in a new chat without losing progress. Start from this handoff and the current `main` branch; do not duplicate or reimplement features already listed above.

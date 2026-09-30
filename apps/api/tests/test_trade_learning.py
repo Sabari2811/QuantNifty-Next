@@ -29,6 +29,9 @@ def test_trade_lesson_captures_directional_conflict_and_premium_stop():
     assert lesson["adverse_spot_points"] == 65.1
     assert lesson["premium_change"] == -47.2
     assert lesson["spot_stop_hit"] is False
+    assert lesson["outcome_class"] == "LOSS"
+    assert "ADVERSE_SPOT_MOVE" in lesson["outcome_drivers"]
+    assert "DELTA_PREMIUM_STOP" in lesson["outcome_drivers"]
 
 
 def test_trade_lesson_requires_multiple_observations_before_parameter_change():

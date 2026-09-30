@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from quantnifty.learning_store import load_events, trading_day
 from quantnifty.market_session import market_session_state
+from quantnifty.paper_control import kill_switch_state
 
 IST = ZoneInfo("Asia/Kolkata")
 REENTRY_COOLDOWN_MINUTES = 5
@@ -109,6 +110,16 @@ def evaluate_paper_entry(data: dict[str, Any], direction: str, mode: str = "LIVE
     day = trading_day(data.get("timestamp"))
     if timestamp is None or not day:
         return {"applied": True, "action": "NO_TRADE", "allowed": False, "reason": "TIMESTAMP_REQUIRED_FOR_PAPER_ENTRY"}
+
+    kill_switch = kill_switch_state(day)
+    if bool(kill_switch.get("active")):
+        return {
+            "applied": True,
+            "action": "NO_TRADE",
+            "allowed": False,
+            "reason": "PAPER_KILL_SWITCH_ACTIVE",
+            "kill_switch": kill_switch,
+        }
 
     local_time = timestamp.astimezone(IST).time()
     session = market_session_state(timestamp.astimezone(timezone.utc))

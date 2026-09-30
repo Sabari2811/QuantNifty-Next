@@ -231,3 +231,13 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Profitability is not guaranteed by this change. The correct acceptance criterion is out-of-sample research showing improved expectancy/quality metrics versus the prior entry logic; the new confirmation layer is designed to prevent premature entries, not to guarantee profitable trades.
 
 - Follow-up cleanup commit `ce0a62f4`: removed the old early-accumulation confidence/liquidity gate because it duplicated the new authoritative confirmation gate. The confirmation engine is now the single entry-quality gate; strategy-specific logic remains only where it adds a distinct condition (e.g. gamma/volatility or CAS).
+
+
+## 2026-09-30 Trade outcome attribution + hold-path safety
+- Refined `trade_learning.py` so every closed paper outcome is explicitly classified as `PROFIT`, `LOSS`, or `FLAT` with concrete outcome drivers (favorable/adverse spot movement, target/stop behavior, option-premium expansion, delta-premium stop, and no-follow-through where applicable).
+- This attribution is observational: a single trade still cannot promote entry/risk parameters. Existing promotion rules remain in force (minimum comparable observations and research validation).
+- Fixed an important Confirmation V2 interaction in `position_hold_backtest.py`: entry confirmation is evaluated only when opening a position. An already-open thesis is no longer forced to re-break a level or re-show entry volume/premium confirmation on every bar. Existing direction/context/risk invalidation remains authoritative for exits.
+- Added regression coverage to the existing trade-learning tests for loss-driver classification.
+- Commits: `16975c2` (entry/hold separation), `81ee72a`, `df642e5` (outcome attribution), `353df90` (tests).
+- A recurring hourly paper-trade monitor is now enabled to report new/changed/closed paper trades for the current IST trading day and attribute profit/loss drivers without changing parameters from one observation.
+- Real trading remains permanently disabled/read-only.

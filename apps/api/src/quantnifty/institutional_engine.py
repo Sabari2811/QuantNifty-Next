@@ -154,7 +154,6 @@ def risk_engine(data: dict[str, Any], signal: dict[str, Any], strategy: str = "d
         selected = ((signal.get("adaptive") or {}).get("selected_strategy") or "standby").lower()
         if selected == "gamma_blast": gates["gamma_regime"] = signal.get("gamma", {}).get("regime") == "NEGATIVE"; gates["volatility"] = signal.get("volatility", {}).get("regime") == "VOL_EXPANSION"
         elif selected == "transition": gates["gamma_transition"] = ((signal.get("adaptive") or {}).get("regime") == "GAMMA_TRANSITION")
-        elif selected == "early_accumulation": gates["accumulation_entry"] = signal.get("direction") in {"BULLISH","BEARISH"} and _f(signal.get("confidence")) >= 60 and _f(data.get("liquidity_score")) >= 60
         elif selected in {"range","breakout_watch","standby"}: gates["strategy_entry"] = False
         elif selected == "cas_reentry": gates["cas_reentry"] = True
     reasons = [k for k, ok in gates.items() if not ok]

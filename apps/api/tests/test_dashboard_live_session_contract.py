@@ -28,5 +28,5 @@ def test_intelligence_does_not_open_live_socket_when_market_is_closed():
     assert "if(window.qnMarketClosed||qnSocketConnected)return" in html
     assert "const payload=await r.json();safeRender(payload);if(!window.qnMarketClosed)connect();return" in html
     assert "window.qnMarketClosed=false;" in html
-    assert "initial();refreshTradeSignal();setInterval(refreshTradeSignal,10000)" in html
+    assert "initial();refreshTradeSignal();setInterval(loadKillSwitch,10000);setInterval(refreshTradeSignal,10000)" in html
     assert "if(!window.qnMarketClosed)connect();return" in html

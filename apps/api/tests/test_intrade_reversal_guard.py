@@ -40,7 +40,7 @@ def test_opposite_signal_plus_adverse_price_shock_exits_immediately():
     previous = {"spot": 23300, "gamma_flip": 23200, "option_chain": [{"volume": 100}]}
     current = {"spot": 23350, "gamma_flip": 23200, "option_chain": [{"volume": 300}]}
     result = evaluate_intrade_reversal(
-        "BEARISH", current, _decision("BULLISH"), previous, opposite_confirmations=1
+        "BEARISH", current, _decision("BULLISH", gamma_flip=current["gamma_flip"]), previous, opposite_confirmations=1
     )
     assert result["action"] == "EXIT_REVERSAL"
     assert result["price_shock"] is True

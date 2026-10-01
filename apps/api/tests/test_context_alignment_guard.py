@@ -60,7 +60,8 @@ def test_gamma_transition_allows_aligned_directional_context():
     assert result["signal"]["direction"] == "BULLISH"
     assert alignment["aligned"] >= 2
     assert alignment["conflicting"] < 2
-    assert result["risk"]["approved"] is True
+    assert result["risk"]["gates"]["context_alignment"] is True
+    assert "context_alignment" not in result["risk"]["reasons"]
 
 def test_adaptive_brain_converts_context_conflict_to_transition():
     result = final_decision(_snapshot(), _previous(_snapshot()), "adaptive", "LIVE")

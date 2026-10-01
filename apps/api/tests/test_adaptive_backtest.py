@@ -50,7 +50,8 @@ def test_adaptive_final_decision_uses_regime_and_can_select_bearish():
     assert result["signal"]["adaptive"]["preferred_direction"] == "BEARISH"
     assert result["signal"]["direction"] == "BEARISH"
     assert result["risk"]["strategy"] == "adaptive"
-    assert result["risk"]["approved"] is True
+    assert result["risk"]["approved"] is False
+    assert "trade_confirmation" in result["risk"]["reasons"]
     assert result["execution_plan"]["instrument"]["side"] == "PE"
     assert result["trading"] == "DISABLED"
 

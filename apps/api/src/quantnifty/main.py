@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import time
@@ -47,6 +48,13 @@ app.include_router(paper_ledger_router)
 app.include_router(paper_trade_audit_router)
 live_paper = LivePaperManager()
 active_policy: dict[str, Any] | None = None
+last_decision_evidence_at = 0.0
+INTELLIGENCE_SCHEMA_VERSION = "market-intelligence-v2"
+INTELLIGENCE_REQUIRED_FIELDS = (
+    "market_state", "events", "move_attribution", "signal_dna", "pressure_map",
+    "decision", "institutional_signal", "risk_engine", "execution_plan",
+    "entry_scenario", "entry_scenarios", "final_decision", "latency",
+)
 
 async def api_get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     if not TOKEN: raise RuntimeError("INDSTOCKS_API_TOKEN is not configured")
@@ -136,6 +144,44 @@ def analytics(spot: float, rows: list[dict[str, Any]], expiry: str | None = None
     score=max(0.0,min(100.0,score)); bias="BULLISH" if score>=60 else "BEARISH" if score<=40 else "NEUTRAL"; confidence=50.0 if bias=="NEUTRAL" else min(99.0,50.0+abs(score-50.0)); expected_move=expected_move_value(spot,atm_iv,expiry)
     return {"spot":spot,"pcr":pcr,"call_oi":call_oi,"put_oi":put_oi,"call_oi_change":call_doi,"put_oi_change":put_doi,"gex":gex,"dex":dex,"vanna_proxy":vanna_proxy,"iv_skew":iv_skew,"atm_iv":atm_iv,"gamma_flip":gamma_flip,"gamma_walls":walls,"max_pain":max_pain(rows),"expected_move":{"move":expected_move,"lower":spot-expected_move,"upper":spot+expected_move} if expected_move else None,"support":support,"resistance":resistance,"structure":structure,"dealer_flow":dealer_flow,"liquidity_score":round(liquidity,1),"bullish_score":round(score,1),"bearish_score":round(100-score,1),"bias":bias,"confidence":round(confidence,1),"rationale":reasons,"strike_selection":select_strikes(spot,rows,bias,expected_move=expected_move),"data_integrity":"LIVE_PROVIDER","rows":len(rows),"option_chain":rows,"timestamp":datetime.now(timezone.utc).isoformat()}
 
+def intelligence_contract(intelligence: dict[str, Any] | None) -> dict[str, Any]:
+    value = intelligence if isinstance(intelligence, dict) else {}
+    missing = [field for field in INTELLIGENCE_REQUIRED_FIELDS if field not in value]
+    return {
+        "schema_version": INTELLIGENCE_SCHEMA_VERSION,
+        "status": "OK" if not missing else "INCOMPLETE",
+        "missing": missing,
+    }
+
+
+def decision_evidence(data: dict[str, Any], decision: dict[str, Any]) -> dict[str, Any]:
+    risk = decision.get("risk") if isinstance(decision.get("risk"), dict) else {}
+    confirmation = risk.get("confirmation") if isinstance(risk.get("confirmation"), dict) else {}
+    signal = decision.get("signal") if isinstance(decision.get("signal"), dict) else {}
+    adaptive = signal.get("adaptive") if isinstance(signal.get("adaptive"), dict) else {}
+    return {
+        "timestamp": data.get("timestamp"),
+        "spot": data.get("spot"),
+        "status": decision.get("status"),
+        "decision_action": decision.get("validation", {}).get("decision_action") if isinstance(decision.get("validation"), dict) else None,
+        "direction": signal.get("direction"),
+        "confidence": signal.get("confidence"),
+        "selected_strategy": adaptive.get("selected_strategy"),
+        "risk_approved": risk.get("approved"),
+        "risk_reasons": risk.get("reasons") or [],
+        "confirmation": {
+            "take_trade": confirmation.get("take_trade"),
+            "status": confirmation.get("status"),
+            "reasons": confirmation.get("reasons") or [],
+            "level": confirmation.get("level"),
+            "displacement_points": confirmation.get("displacement_points"),
+            "supporting_confirmations": confirmation.get("supporting_confirmations"),
+        },
+        "intelligence_contract": data.get("intelligence_contract"),
+        "trading": decision.get("trading"),
+    }
+
+
 async def snapshot() -> dict[str, Any]:
     if not is_live_market_session():
         raise RuntimeError("NSE live market session is closed; live provider access is disabled")
@@ -147,12 +193,27 @@ async def snapshot() -> dict[str, Any]:
     raw=await api_get("/market/option-chain",{"exchange":"NSE","segment":"INDEX","underlying-scrip":NIFTY_ID,"expiry":expiry,"strike_count":20}); spot,rows=flatten_chain(raw)
     if spot<=0: raise RuntimeError("provider returned invalid NIFTY spot")
     if len(rows)<2: raise RuntimeError("provider returned an empty or incomplete option chain")
+
+    # Build the complete intelligence payload before publishing it to the shared
+    # cache. This prevents websocket/API consumers from ever observing a partially
+    # constructed LIVE_PROVIDER snapshot.
+    previous = cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None
     result=analytics(spot,rows,expiry); result["expiry"]=expiry
-    if cache.get("snapshot") is not None: cache["previous_snapshot"]=cache["snapshot"]
-    cache["snapshot"],cache["updated_at"]=result,time.time(); result["intelligence"]=decision_intelligence(result,cache.get("previous_snapshot")); return result
+    intelligence = decision_intelligence(result, previous)
+    result["intelligence"] = intelligence
+    result["intelligence_contract"] = intelligence_contract(intelligence)
+    contract = result["intelligence_contract"]
+    if contract["status"] != "OK":
+        raise RuntimeError("intelligence payload contract incomplete: " + ",".join(contract["missing"]))
+
+    if previous is not None:
+        cache["previous_snapshot"] = previous
+    cache["snapshot"] = result
+    cache["updated_at"] = time.time()
+    return result
 
 async def continuous_market_refresh():
-    global active_policy
+    global active_policy, last_decision_evidence_at
     while True:
         if not is_live_market_session():
             await asyncio.sleep(min(POLL_SECONDS, seconds_until_next_open()))
@@ -169,10 +230,17 @@ async def continuous_market_refresh():
                     record_snapshot(data)
                     record_decision(data, decision)
                     live_paper.process(data, decision)
-                except Exception:
+                    now = time.monotonic()
+                    if now - last_decision_evidence_at >= 30.0:
+                        print("QUANTNIFTY_DECISION_EVIDENCE " + json.dumps(decision_evidence(data, decision), separators=(",", ":"), default=str), flush=True)
+                        last_decision_evidence_at = now
+                except Exception as exc:
+                    # Preserve the snapshot even when the decision/paper layer has
+                    # a transient failure, and make the failure visible in Render.
                     record_snapshot(data)
-        except Exception:
-            pass
+                    print("QUANTNIFTY_DECISION_ERROR " + json.dumps({"timestamp": data.get("timestamp"), "error": str(exc)}, separators=(",", ":"), default=str), flush=True)
+        except Exception as exc:
+            print("QUANTNIFTY_SNAPSHOT_ERROR " + json.dumps({"error": str(exc)}, separators=(",", ":"), default=str), flush=True)
         await asyncio.sleep(POLL_SECONDS)
 
 @app.on_event("startup")
@@ -203,12 +271,21 @@ def intelligence_page():
 def backtest_page():
     path=os.path.join(os.path.dirname(__file__),"web","backtest.html"); return FileResponse(path)
 
-@app.get("/health")
 def _live_provider_connected() -> bool:
     cached = cache.get("snapshot")
+    updated_at = cache.get("updated_at")
     if not isinstance(cached, dict):
         return False
-    return str(cached.get("data_integrity") or "").upper() == "LIVE_PROVIDER" and _f(cache.get("updated_at")) > 0
+    try:
+        updated = float(updated_at or 0)
+    except (TypeError, ValueError):
+        updated = 0.0
+    contract = cached.get("intelligence_contract") if isinstance(cached.get("intelligence_contract"), dict) else {}
+    return (
+        str(cached.get("data_integrity") or "").upper() == "LIVE_PROVIDER"
+        and updated > 0
+        and str(contract.get("status") or "").upper() == "OK"
+    )
 
 @app.get("/health")
 def health():

@@ -89,7 +89,9 @@ def test_level_break_uses_previous_frozen_level_not_moving_current_level():
     result = trade_confirmation(current, previous, _signal(), "early_accumulation")
     assert result["level"] == 22650.0
     assert result["gates"]["key_level_break"]
-    assert result["take_trade"]
+    assert not result["take_trade"]
+    assert result["status"] == "SETUP"
+    assert "INSUFFICIENT_DISPLACEMENT" in result["reasons"]
 
 
 def test_level_does_not_count_as_new_break_if_price_was_already_beyond_it():

@@ -305,3 +305,11 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Hardened the Market Brain Decision Evidence panel to prioritize authoritative risk.reasons when explaining why the engine is blocked. This prevents the UI from falling back to an ambiguous "No active blocker" message when a risk gate such as PAPER_KILL_SWITCH_ACTIVE is the actual blocker.
 - The existing reversible paper kill switch remains unchanged: it can halt/resume paper entries for the current IST trading day, while real broker execution remains permanently disabled/read-only.
 - No changes were made to data/instruments/fno.csv, broker execution, QuantNifty, or TechGeek.
+
+
+## 2026-10-01 Kill-switch release stale-state hardening
+- Fixed LivePaperManager._refresh_kill_switch() so the in-memory kill-switch flag is never authoritative. Every refresh now reconciles against the durable current-IST-day paper_controls state.
+- This prevents a release handled by one Render instance from being overwritten by a stale KILL_SWITCH_ON state held by another instance during subsequent status/market ticks.
+- Added runtime regression tests for both durable release and durable activation synchronization.
+- The intelligence UI now refreshes kill-switch status every 10 seconds from the backend, so the displayed HALT/ENABLED state follows the authoritative control state.
+- Real trading remains permanently disabled/read-only; this change only fixes paper kill-switch state synchronization.

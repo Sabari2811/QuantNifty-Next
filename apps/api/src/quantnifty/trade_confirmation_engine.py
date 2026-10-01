@@ -193,9 +193,11 @@ def trade_confirmation(
         if value
     )
     # A directional trade is never released from a setup solely because the
-    # thesis is strong. A real price-level break is mandatory; three additional
-    # independent confirmations are required to avoid duplicate/redundant gates.
-    confirmed = level_break and supporting >= 4
+    # thesis is strong. A real price-level break AND the minimum displacement
+    # are mandatory; three additional independent confirmations are required.
+    # This keeps the status/reasons contract coherent: INSUFFICIENT_DISPLACEMENT
+    # can never coexist with TAKE_TRADE.
+    confirmed = level_break and displacement and supporting >= 4
     take_trade = confirmed and persistence and (volume_confirmed or premium_confirmed) and (flow_confirmed or dealer_confirmed)
 
     reasons: list[str] = []

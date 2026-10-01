@@ -327,3 +327,12 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Production post-deploy logs at 09:00 UTC show market-intelligence-v2 contract OK, bearish intelligence at NIFTY ~22,324, and trading=DISABLED.
 - The durable kill switch was still reported active after deployment. Its exact originating control event was not directly queried because the production PostgreSQL external IP allowlist blocks the available Render database connection path. Do not attribute the activation to market processing without a control-event record.
 - Direct outbound HTTP/DNS from the current execution environment is unavailable, so the release POST could not be executed from here. The UI explicit release action remains the supported path.
+
+
+## 2026-10-01 One-way daily kill switch
+- Changed the paper kill switch to a one-way daily HALT control. There is no manual release action/API anymore.
+- The control is IST-day scoped. Once activated, it remains active for that trading day and automatically ceases to block entries when the next valid trading day begins because no prior-day control event is treated as current-day state.
+- Intelligence UI now shows KILL SWITCH ACTIVE / TRADING HALTED / RESETS NEXT TRADING DAY. When inactive it shows PAPER ENGINE ENABLED / READ ONLY.
+- API rejects any request other than explicit enabled=true with HTTP 400. Repeated activation on the same day is idempotent.
+- Commits: 5d78ac63ebd38022ffbfe09ad411bfc019b854ff, 06c1ada90f47a334f76b8e2154ff25beae6a8914, c0f883f9439fec1c8dcc6c86f7740efc6c84257c.
+- Real broker trading remains permanently disabled/read-only.

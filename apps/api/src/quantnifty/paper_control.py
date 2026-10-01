@@ -24,6 +24,10 @@ def kill_switch_state(day: str | None = None) -> dict[str, Any]:
             active = True
             activated_at = str(event.get("timestamp") or event.get("stored_at") or "") or activated_at
             reason = str(event.get("reason") or "MANUAL_KILL_SWITCH")
+        elif action == "KILL_SWITCH_OFF":
+            active = False
+            activated_at = None
+            reason = str(event.get("reason") or "MANUAL_KILL_SWITCH_RELEASED")
     return {
         "day": selected_day,
         "active": active,
@@ -50,5 +54,24 @@ def activate_kill_switch(reason: str = "MANUAL_KILL_SWITCH") -> dict[str, Any]:
         "scope": "CURRENT_IST_TRADING_DAY_ONLY",
         "new_entries_blocked": True,
         "open_positions_must_close": True,
+    })
+    return kill_switch_state(day)
+
+
+def deactivate_kill_switch(reason: str = "MANUAL_KILL_SWITCH_RELEASED") -> dict[str, Any]:
+    day = current_day()
+    existing = kill_switch_state(day)
+    if not existing["active"]:
+        return existing
+    timestamp = datetime.now(IST).isoformat()
+    record_control({
+        "timestamp": timestamp,
+        "day": day,
+        "action": "KILL_SWITCH_OFF",
+        "enabled": False,
+        "reason": reason,
+        "scope": "CURRENT_IST_TRADING_DAY_ONLY",
+        "new_entries_blocked": False,
+        "open_positions_must_close": False,
     })
     return kill_switch_state(day)

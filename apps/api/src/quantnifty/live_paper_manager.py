@@ -5,7 +5,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from quantnifty.learning_store import claim_paper_trade_lock, load_events, load_snapshots, reconcile_paper_trade_lock, record_outcome, release_paper_trade_lock
-from quantnifty.paper_control import activate_kill_switch, current_day, kill_switch_state
+from quantnifty.paper_control import activate_kill_switch, deactivate_kill_switch, current_day, kill_switch_state
 from quantnifty.paper_entry_gate import evaluate_paper_entry
 from quantnifty.paper_trade_tracker import PaperTrade, make_trade_id, same_trading_day, session_close_required, trading_day
 from quantnifty.intrade_reversal_guard import evaluate_intrade_reversal
@@ -250,6 +250,14 @@ class LivePaperManager:
             release_paper_trade_lock(trade_day, trade_id)
         self.active = None; self.entry_price = 0.0; self.entry_quantity = DEFAULT_NIFTY_LOT_SIZE; self.instrument = None; self.entry_reasons = {}; self.entry_decision = {}; self.entry_risk = {}; self.entry_delta = None; self.entry_trigger = None; self.entry_mode = None; self.exit_policy = {}
         return outcome
+
+    def set_daily_kill_switch(self, enabled: bool, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not enabled:
+            state = deactivate_kill_switch()
+            self.kill_switch_day = str(state["day"])
+            self.kill_switch_active = False
+            return {**state, "closed_open_positions": False}
+        return self.activate_daily_kill_switch(snapshot)
 
     def activate_daily_kill_switch(self, snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
         state = activate_kill_switch("MANUAL_KILL_SWITCH")

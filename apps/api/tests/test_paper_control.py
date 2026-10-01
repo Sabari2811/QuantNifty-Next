@@ -37,3 +37,25 @@ def test_activation_is_idempotent(monkeypatch):
     assert first["active"] is True
     assert second["active"] is True
     assert len(events) == 1
+
+
+def test_kill_switch_release_turns_off(monkeypatch):
+    events = []
+    monkeypatch.setattr(paper_control, "load_events", lambda kind, day=None: events if kind == "paper_controls" else [])
+    monkeypatch.setattr(paper_control, "current_day", lambda: "2026-09-17")
+    monkeypatch.setattr(paper_control, "record_control", lambda control: events.append(control) or control)
+    paper_control.activate_kill_switch()
+    released = paper_control.deactivate_kill_switch()
+    assert released["active"] is False
+    assert released["new_entries_blocked"] is False
+    assert [event["action"] for event in events] == ["KILL_SWITCH_ON", "KILL_SWITCH_OFF"]
+
+
+def test_latest_control_event_wins(monkeypatch):
+    events = [
+        {"action": "KILL_SWITCH_ON", "timestamp": "2026-09-17T10:00:00+05:30"},
+        {"action": "KILL_SWITCH_OFF", "timestamp": "2026-09-17T10:05:00+05:30"},
+    ]
+    monkeypatch.setattr(paper_control, "load_events", lambda kind, day=None: events)
+    state = paper_control.kill_switch_state("2026-09-17")
+    assert state["active"] is False

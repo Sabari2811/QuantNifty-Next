@@ -512,8 +512,12 @@ def paper_kill_switch_status():
 
 @app.post("/api/v1/paper/kill-switch")
 def paper_kill_switch():
-    state = live_paper.activate_daily_kill_switch(cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None)
-    return {"active": True, "state": state}
+    current = bool(live_paper._refresh_kill_switch())
+    state = live_paper.set_daily_kill_switch(
+        not current,
+        cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None,
+    )
+    return {"active": bool(state.get("active")), "state": state}
 
 @app.post("/api/v1/replay/decisions")
 async def replay_decisions_api(payload: dict[str,Any]):

@@ -274,3 +274,17 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - The old pre-deploy instance emitted the known `'failure_patterns'` error during zero-downtime handoff, but those errors stopped once the old instance was drained; no `QUANTNIFTY_SNAPSHOT_ERROR` was observed on the new instance after the adaptive-memory fix.
 - Tests: GitHub Actions compile passed. The current CI run on this commit reports **222 passed, 7 failed**. The 7 failures are pre-existing/stale expectations in adaptive/context/historical/reversal/trade-learning tests plus one dashboard string expectation; they are not caused by the new intelligence contract or adaptive-memory preservation test. The new live-intelligence regression tests pass. CI is therefore not claimed as fully green.
 - No changes to real-trading execution, broker integration, `data/instruments/fno.csv`, `QuantNifty`, or `TechGeek`.
+
+
+## 2026-10-01 Decision-edge evidence + UI/backend completion
+- Implemented a separate descriptive **decision-edge analysis** layer in `apps/api/src/quantnifty/edge_lab.py`.
+- The layer records, per stored same-day decision: entry spot/direction/strategy, confirmation key level, displacement, supporting confirmations, blockers, selected option strike/side/delta/IV/premium, and 5/15/30-minute plus end-of-day subsequent behavior.
+- It explicitly separates **ENTER_CANDIDATE**, **DO_NOT_ENTER_SETUP**, and **OBSERVATION**. A blocked setup that later moves in the thesis direction is labeled **COUNTERFACTUAL_FOLLOW_THROUGH**, not a live trade and not proof that the engine should have entered.
+- Repeated evidence patterns are surfaced only after **>=3 observations**. This is descriptive research; it does not automatically alter entry/risk parameters.
+- `after_market_lab.py` now stores `edge_analysis` with the existing post-market research artifact. Future prices are used only for after-market outcome labeling; decision-time evidence remains immutable.
+- Added `GET /api/v1/research/edge` for the application and backtest UI.
+- **Application UI:** Intelligence now shows a live **Decision Evidence · Current Cycle** panel with action, direction, confidence, strategy, risk state, confirmation status, key level, displacement, supporting-confirmation count, gate PASS/WAIT state, and explicit blockers.
+- **Backtest UI:** Post-Market Raw Data Strategy Test now also renders decision-edge counts and repeated evidence patterns (minimum 3 observations).
+- Added regression coverage for edge-analysis labeling and the three-observation promotion threshold. Updated stale test fixtures so the existing suite explicitly satisfies the authoritative Confirmation V2 contract instead of testing pre-Confirmation-V2 assumptions.
+- Real trading remains permanently disabled/read-only. No broker execution, `data/instruments/fno.csv`, `QuantNifty`, or `TechGeek` changes are included.
+- This continuation is being pushed and deployed immediately; it does not wait for the normal application schedule/cycle.

@@ -15,11 +15,12 @@ def bearish_snapshot(spot: float, option: float) -> dict:
         "option_chain": [{
             "strike": 25000, "side": "PE", "security_id": "PE1", "trading_symbol": "NIFTYPE",
             "last_price": option, "bid": option - 0.5, "ask": option + 0.5, "oi": 1000, "previous_oi": 1000,
-            "volume": 5000,
+            "volume": 5000, "previous_volume": 4000, "previous_oi": 900, "previous_close": 95,
         }],
         "strike_selection": [{"strike": 25000, "side": "PE", "security_id": "PE1"}],
         "expected_move": {"move": 100, "lower": spot - 100, "upper": spot + 100},
         "gamma_flip": 24900,
+        "support": 25000,
         "gex": 100,
         "dex": -100,
         "atm_iv": 10,
@@ -29,8 +30,21 @@ def bearish_snapshot(spot: float, option: float) -> dict:
     }
 
 
+def bearish_previous_snapshot() -> dict:
+    return {
+        "timestamp": "2026-09-01T09:14:00+00:00", "spot": 25050,
+        "bias": "BEARISH", "support": 25020, "resistance": 25100,
+        "liquidity_score": 90, "data_integrity": "LIVE_PROVIDER",
+        "expected_move": {"move": 100}, "gamma_flip": 24900,
+        "gex": -100, "dex": -100, "atm_iv": 10, "iv_skew": 0,
+        "option_chain": [{"strike": 25000, "side": "PE", "security_id": "PE1", "last_price": 95, "previous_close": 94, "oi": 900, "previous_oi": 800, "volume": 4000}],
+        "strike_selection": [{"strike": 25000, "side": "PE", "security_id": "PE1"}],
+        "intelligence": {"market_state": {"state": "TREND_DOWN"}},
+    }
+
+
 def test_adaptive_final_decision_uses_regime_and_can_select_bearish():
-    result = final_decision(bearish_snapshot(25000, 100), None, "adaptive", "BACKTEST")
+    result = final_decision(bearish_snapshot(25000, 100), bearish_previous_snapshot(), "adaptive", "BACKTEST")
     assert result["strategy"] == "adaptive"
     assert result["signal"]["adaptive"]["selected_strategy"] == "directional"
     assert result["signal"]["adaptive"]["preferred_direction"] == "BEARISH"

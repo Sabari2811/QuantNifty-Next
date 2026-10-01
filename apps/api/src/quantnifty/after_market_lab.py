@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from quantnifty.adaptive_policy import ANCHOR_STRATEGY
+from quantnifty.edge_lab import build_edge_analysis
 from quantnifty.backtest import BacktestConfig
 from quantnifty.learning_store import load_snapshots, load_events, record_research
 from quantnifty.policy_runtime import validate_and_persist
@@ -78,6 +79,11 @@ def run_after_market_lab(day: str, config: BacktestConfig | None = None) -> dict
         "live_outcome_access_mode": "CLOSED_PAPER_ONLY_AFTER_MARKET",
     }
     research["scenarios"] = extract_scenarios(research)
+    # Edge analysis is a separate descriptive layer: decision-time fields are
+    # taken only from stored same-day snapshots/decisions; future prices are
+    # used only after market close to label counterfactual follow-through.
+    decision_events = load_events("decisions", day)
+    research["edge_analysis"] = build_edge_analysis(snapshots, decision_events)
     closed_outcomes = []
     for event in load_events("outcomes", day):
         outcome = event.get("outcome") if isinstance(event, dict) else None

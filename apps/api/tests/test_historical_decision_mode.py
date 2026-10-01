@@ -11,6 +11,7 @@ def test_recorded_historical_requires_explicit_replay_mode():
         "recorded_oi_flow_bias": "BULLISH",
         "liquidity_score": 90,
         "gamma_flip": 24900,
+        "resistance": 24950,
         "gex": 100,
         "dex": 100,
         "vanna_proxy": 10,
@@ -29,7 +30,17 @@ def test_recorded_historical_requires_explicit_replay_mode():
         }],
     }
     live_like = final_decision(data)
-    replay = final_decision(data, mode="REPLAY")
+    previous = dict(data)
+    previous["timestamp"] = "2026-09-01T09:14:00+00:00"
+    previous["spot"] = 24880
+    previous["resistance"] = 24950
+    previous["option_chain"] = [dict(row, last_price=95, volume=4000, oi=900, previous_oi=800) for row in data["option_chain"]]
+    data["resistance"] = 24950
+    data["option_chain"][0]["volume"] = 5000
+    data["option_chain"][0]["oi"] = 1000
+    data["option_chain"][0]["previous_oi"] = 900
+    data["option_chain"][0]["previous_close"] = 95
+    replay = final_decision(data, previous=previous, mode="REPLAY")
     assert live_like["risk"]["gates"]["data_integrity"] is False
     assert replay["risk"]["gates"]["data_integrity"] is True
     assert replay["risk"]["approved"] is True

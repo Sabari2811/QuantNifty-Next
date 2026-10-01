@@ -48,6 +48,8 @@ def test_intelligence_ui_fails_closed_when_contract_is_incomplete():
     assert 'intelligence_contract' in html
     assert 'INTELLIGENCE CONTRACT INCOMPLETE' in html
     assert 'No trade decision is displayed.' in html
+    assert 'Decision Evidence · Current Cycle' in html
+    assert 'Confirmation gates' in html
 
 
 def test_adaptive_memory_preserves_failure_patterns_across_trade_updates():

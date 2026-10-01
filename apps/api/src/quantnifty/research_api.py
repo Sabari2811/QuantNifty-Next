@@ -121,6 +121,36 @@ def raw_post_market_backtest(day: str | None = None):
     }
 
 
+@router.get("/api/v1/research/edge")
+def research_edge(day: str | None = None, run_if_missing: bool = True):
+    """Return descriptive decision-edge evidence from stored day snapshots.
+
+    Decision-time evidence is never rewritten using future prices. Future
+    snapshots are used only by this after-market endpoint to label
+    counterfactual follow-through, false setups, and repeated evidence patterns.
+    """
+    target = str(day or _today_ist()).strip()
+    try:
+        datetime.strptime(target, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(400, "day must be YYYY-MM-DD") from exc
+    research = _latest(target)
+    if research is None and run_if_missing:
+        research = run_after_market_lab(target)
+    if research is None:
+        return {"status": "NO_DATA", "day": target, "research_only": True, "observations": []}
+    edge = research.get("edge_analysis") or {}
+    return {
+        "status": edge.get("status", "NO_DATA"),
+        "day": target,
+        "source": "STORED_DAY_DECISIONS_AND_RAW_MARKET_SNAPSHOTS",
+        "edge_analysis": edge,
+        "orders_placed": 0,
+        "mode": "READ_ONLY_AFTER_MARKET",
+        "research_only": True,
+    }
+
+
 @router.get("/api/v1/research/results")
 def research_results(day: str | None = None, run_if_missing: bool = True):
     target = str(day or _today_ist()).strip()

@@ -142,12 +142,19 @@ class LivePaperManager:
         self._recover()
 
     def _refresh_kill_switch(self) -> bool:
+        """Synchronize local state with the durable IST-day kill-switch state.
+
+        The kill switch is shared across Render instances, so the in-memory flag
+        cannot be treated as authoritative. A release may be handled by one
+        instance while a subsequent market tick or status request is routed to
+        another instance that still has the old in-memory value. Always reconcile
+        against the durable control event so a released switch cannot resurrect
+        HALT state on a different instance.
+        """
         day = current_day()
-        if day != self.kill_switch_day:
-            self.kill_switch_day = day
-            self.kill_switch_active = False
-        if not self.kill_switch_active:
-            self.kill_switch_active = bool(kill_switch_state(day).get("active"))
+        state = kill_switch_state(day)
+        self.kill_switch_day = day
+        self.kill_switch_active = bool(state.get("active"))
         return self.kill_switch_active
 
     def _restore(self, outcome: dict[str, Any]) -> None:

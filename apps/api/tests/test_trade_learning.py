@@ -13,6 +13,7 @@ def _outcome():
         "exit_price": 108.7,
         "entry_delta": -0.64,
         "exit_reason": "DELTA_PREMIUM_STOP",
+        "quantity": 65,
         "entry_risk": {"stop_spot": 23380.6, "target_spot": 23134.3},
         "entry_reasons": {"adaptive_regime": "GAMMA_TRANSITION"},
         "entry_decision": {

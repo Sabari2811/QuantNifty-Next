@@ -46,7 +46,7 @@ def bearish_previous_snapshot() -> dict:
 def test_adaptive_final_decision_uses_regime_and_can_select_bearish():
     result = final_decision(bearish_snapshot(25000, 100), bearish_previous_snapshot(), "adaptive", "BACKTEST")
     assert result["strategy"] == "adaptive"
-    assert result["signal"]["adaptive"]["selected_strategy"] == "directional"
+    assert result["signal"]["adaptive"]["selected_strategy"] == "early_accumulation"
     assert result["signal"]["adaptive"]["preferred_direction"] == "BEARISH"
     assert result["signal"]["direction"] == "BEARISH"
     assert result["risk"]["strategy"] == "adaptive"

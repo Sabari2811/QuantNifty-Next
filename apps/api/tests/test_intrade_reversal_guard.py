@@ -1,7 +1,7 @@
 from quantnifty.intrade_reversal_guard import evaluate_intrade_reversal
 
 
-def _decision(direction="BULLISH", confidence=80, aligned=2):
+def _decision(direction="BULLISH", confidence=80, aligned=2, gamma_flip=None):
     return {
         "signal": {
             "direction": direction,
@@ -11,7 +11,7 @@ def _decision(direction="BULLISH", confidence=80, aligned=2):
                 "conflicting": 0,
                 "transition_context": True,
             },
-            "gamma": {"regime": "NEGATIVE"},
+            "gamma": {"regime": "NEGATIVE", **({"gamma_flip": gamma_flip} if gamma_flip is not None else {})},
         },
         "market": {"state": "TREND_UP"},
     }
@@ -31,7 +31,7 @@ def test_single_opposite_tick_only_warns():
     previous = {"spot": 23300, "gamma_flip": 23200, "option_chain": [{"volume": 100}]}
     current = {"spot": 23305, "gamma_flip": 23200, "option_chain": [{"volume": 102}]}
     result = evaluate_intrade_reversal(
-        "BEARISH", current, _decision("BULLISH"), previous, opposite_confirmations=1
+        "BEARISH", current, _decision("BULLISH", gamma_flip=current["gamma_flip"]), previous, opposite_confirmations=1
     )
     assert result["action"] == "WARN_REVERSAL"
 
@@ -53,7 +53,7 @@ def test_gamma_flip_cross_without_opposite_direction_holds():
     previous = {"spot": 22697.8, "gamma_flip": 22716.27}
     current = {"spot": 22723.75, "gamma_flip": 22719.76}
     result = evaluate_intrade_reversal(
-        "BEARISH", current, _decision("BEARISH"), previous, opposite_confirmations=0
+        "BEARISH", current, _decision("BEARISH", gamma_flip=current["gamma_flip"]), previous, opposite_confirmations=0
     )
     assert result["gamma_flip_crossed"] is True
     assert result["action"] == "HOLD"

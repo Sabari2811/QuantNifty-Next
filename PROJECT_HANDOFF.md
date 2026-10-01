@@ -297,3 +297,11 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Render service remained `not_suspended`, one active instance, and resource metrics continued updating after the deployment. Public HTTP metrics are not exposed in the current workspace metric response, so content-level endpoint validation was performed through deployment/runtime health rather than a fabricated HTTP result.
 - The production deploy was triggered immediately after the final push; it did not wait for the normal 09:00/16:00 application schedule.
 - Final code path remains read-only/paper-only; no broker order path was enabled.
+
+
+## 2026-10-01 Confirmation displacement + UI blocker hardening
+- Fixed the live Confirmation V2 semantic gap found in production evidence: TAKE_TRADE could previously coexist with INSUFFICIENT_DISPLACEMENT because displacement was one of six scored confirmations rather than a mandatory gate. A directional confirmation now requires both the frozen key-level break and minimum expected-move-derived displacement, in addition to the existing independent confirmation requirements.
+- Added a regression test proving that a key-level break with positive persistence, volume, OI flow, dealer pressure, and option-premium response still remains SETUP when displacement is below the mandatory threshold.
+- Hardened the Market Brain Decision Evidence panel to prioritize authoritative risk.reasons when explaining why the engine is blocked. This prevents the UI from falling back to an ambiguous "No active blocker" message when a risk gate such as PAPER_KILL_SWITCH_ACTIVE is the actual blocker.
+- The existing reversible paper kill switch remains unchanged: it can halt/resume paper entries for the current IST trading day, while real broker execution remains permanently disabled/read-only.
+- No changes were made to data/instruments/fno.csv, broker execution, QuantNifty, or TechGeek.

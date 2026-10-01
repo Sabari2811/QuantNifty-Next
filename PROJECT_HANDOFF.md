@@ -313,3 +313,17 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Added runtime regression tests for both durable release and durable activation synchronization.
 - The intelligence UI now refreshes kill-switch status every 10 seconds from the backend, so the displayed HALT/ENABLED state follows the authoritative control state.
 - Real trading remains permanently disabled/read-only; this change only fixes paper kill-switch state synchronization.
+
+
+## 2026-10-01 Kill-switch control hardening
+- Fixed the paper kill-switch API so it no longer behaves as an implicit toggle.
+- POST /api/v1/paper/kill-switch now requires an explicit boolean enabled field and fails with HTTP 400 when the field is missing/invalid. This prevents stale tabs, duplicate requests, retries, or load-balanced clients from accidentally inverting the durable state.
+- The endpoint is idempotent when the requested state already matches the durable state.
+- Added QUANTNIFTY_KILL_SWITCH_CONTROL structured audit logging with requested state, previous state, resulting state, reason, day and idempotency.
+- Updated the Intelligence UI wording so the active action is explicitly RELEASE KILL SWITCH and the non-active state says PAPER ENTRIES ENABLED · READ ONLY.
+- Added apps/api/tests/test_kill_switch_api_contract.py to guard the explicit API contract and UI behavior.
+- Commits: d1e12ef3c410af3c5f92111b867792fa1d2983cd, 0bf3c9b5522e51183fcf2232fa1dabff392d9bfb, 07e50e2da73406f36491675bbd445faee3472aa7.
+- Production deployment: Render dep-dav225942hec73ciqh90, live at 2026-10-01T09:00:56Z, running the exact 07e50e2da73406f36491675bbd445faee3472aa7 main commit.
+- Production post-deploy logs at 09:00 UTC show market-intelligence-v2 contract OK, bearish intelligence at NIFTY ~22,324, and trading=DISABLED.
+- The durable kill switch was still reported active after deployment. Its exact originating control event was not directly queried because the production PostgreSQL external IP allowlist blocks the available Render database connection path. Do not attribute the activation to market processing without a control-event record.
+- Direct outbound HTTP/DNS from the current execution environment is unavailable, so the release POST could not be executed from here. The UI explicit release action remains the supported path.

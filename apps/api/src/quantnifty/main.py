@@ -512,31 +512,33 @@ def paper_kill_switch_status():
 
 @app.post("/api/v1/paper/kill-switch")
 def paper_kill_switch(payload: dict[str, Any] = Body(...)):
-    # This endpoint is intentionally explicit, not a toggle. A stale browser tab,
-    # duplicate POST, retry, or load-balanced request must never invert the
-    # durable control state unexpectedly.
-    if "enabled" not in payload or not isinstance(payload.get("enabled"), bool):
-        raise HTTPException(400, "enabled must be an explicit boolean")
-    requested = bool(payload["enabled"])
+    # One-way daily HALT control. There is deliberately no release endpoint.
+    # The durable control is IST-day scoped, so the next valid trading day starts
+    # without today's HALT event and the live market engine can run normally.
+    if payload.get("enabled") is not True:
+        raise HTTPException(400, "This control only activates the daily kill switch; release is automatic on the next trading day")
     current = bool(live_paper._refresh_kill_switch())
-    reason = str(payload.get("reason") or ("MANUAL_KILL_SWITCH" if requested else "MANUAL_KILL_SWITCH_RELEASED"))
-    if requested != current:
+    if current:
+        state = kill_switch_state()
+        idempotent = True
+    else:
         state = live_paper.set_daily_kill_switch(
-            requested,
+            True,
             cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None,
         )
-    else:
-        state = kill_switch_state()
+        idempotent = False
     print("QUANTNIFTY_KILL_SWITCH_CONTROL " + json.dumps({
-        "requested_enabled": requested,
+        "requested_enabled": True,
         "previous_enabled": current,
         "active": bool(state.get("active")),
-        "reason": reason,
+        "reason": "MANUAL_KILL_SWITCH",
         "day": state.get("day"),
-        "idempotent": requested == current,
+        "idempotent": idempotent,
+        "release_policy": "NEXT_TRADING_DAY_AUTOMATIC",
         "trading": "DISABLED",
     }, separators=(",", ":"), default=str), flush=True)
-    return {"active": bool(state.get("active")), "state": state, "requested_enabled": requested, "idempotent": requested == current}
+    return {"active": bool(state.get("active")), "state": state, "requested_enabled": True, "idempotent": idempotent, "release_policy": "NEXT_TRADING_DAY_AUTOMATIC"}
+
 
 @app.post("/api/v1/replay/decisions")
 async def replay_decisions_api(payload: dict[str,Any]):

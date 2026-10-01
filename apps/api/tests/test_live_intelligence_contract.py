@@ -41,3 +41,10 @@ def test_continuous_refresh_surfaces_decision_errors_in_logs():
     assert 'QUANTNIFTY_DECISION_ERROR' in source
     assert 'QUANTNIFTY_SNAPSHOT_ERROR' in source
     assert 'flush=True' in source
+
+
+def test_intelligence_ui_fails_closed_when_contract_is_incomplete():
+    html = Path('apps/api/src/quantnifty/web/intelligence.html').read_text(encoding='utf-8')
+    assert 'intelligence_contract' in html
+    assert 'INTELLIGENCE CONTRACT INCOMPLETE' in html
+    assert 'No trade decision is displayed.' in html

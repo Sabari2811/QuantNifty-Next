@@ -64,7 +64,7 @@ def test_opposite_direction_plus_gamma_flip_cross_exits():
     previous = {"spot": 22697.8, "gamma_flip": 22716.27}
     current = {"spot": 22723.75, "gamma_flip": 22719.76}
     result = evaluate_intrade_reversal(
-        "BEARISH", current, _decision("BULLISH"), previous, opposite_confirmations=1
+        "BEARISH", current, _decision("BULLISH", gamma_flip=current["gamma_flip"]), previous, opposite_confirmations=1
     )
     assert result["gamma_flip_crossed"] is True
     assert result["action"] == "EXIT_REVERSAL"

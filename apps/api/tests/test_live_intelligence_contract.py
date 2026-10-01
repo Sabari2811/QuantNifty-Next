@@ -48,3 +48,9 @@ def test_intelligence_ui_fails_closed_when_contract_is_incomplete():
     assert 'intelligence_contract' in html
     assert 'INTELLIGENCE CONTRACT INCOMPLETE' in html
     assert 'No trade decision is displayed.' in html
+
+
+def test_adaptive_memory_preserves_failure_patterns_across_trade_updates():
+    source = Path('apps/api/src/quantnifty/research_brain.py').read_text(encoding='utf-8')
+    assert '"failure_patterns": dict(memory.get("failure_patterns") or {})' in source
+    assert '"closed_trade_samples": int(memory.get("closed_trade_samples") or 0)' in source

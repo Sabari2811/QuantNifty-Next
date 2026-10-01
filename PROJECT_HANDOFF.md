@@ -288,3 +288,12 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Added regression coverage for edge-analysis labeling and the three-observation promotion threshold. Updated stale test fixtures so the existing suite explicitly satisfies the authoritative Confirmation V2 contract instead of testing pre-Confirmation-V2 assumptions.
 - Real trading remains permanently disabled/read-only. No broker execution, `data/instruments/fno.csv`, `QuantNifty`, or `TechGeek` changes are included.
 - This continuation is being pushed and deployed immediately; it does not wait for the normal application schedule/cycle.
+
+
+## 2026-10-01 Final verification
+- Final code commit: `4ec41e3363c7457bdce80f60b9cbcb31496ebf32`.
+- GitHub Actions `QuantNifty CI` run **686** completed **successfully** with **231 passed** tests.
+- Render production deployment: `dep-dauuna0473hc73cofpvg`, status **live**, running commit `4ec41e3363c7457bdce80f60b9cbcb31496ebf32`.
+- Render service remained `not_suspended`, one active instance, and resource metrics continued updating after the deployment. Public HTTP metrics are not exposed in the current workspace metric response, so content-level endpoint validation was performed through deployment/runtime health rather than a fabricated HTTP result.
+- The production deploy was triggered immediately after the final push; it did not wait for the normal 09:00/16:00 application schedule.
+- Final code path remains read-only/paper-only; no broker order path was enabled.

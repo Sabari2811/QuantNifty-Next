@@ -56,3 +56,12 @@ def test_adaptive_memory_preserves_failure_patterns_across_trade_updates():
     source = Path('apps/api/src/quantnifty/research_brain.py').read_text(encoding='utf-8')
     assert '"failure_patterns": dict(memory.get("failure_patterns") or {})' in source
     assert '"closed_trade_samples": int(memory.get("closed_trade_samples") or 0)' in source
+
+
+def test_decision_evidence_ui_uses_authoritative_intelligence_schema():
+    html = (Path(__file__).resolve().parents[1] / "src" / "quantnifty" / "web" / "intelligence.html").read_text(encoding="utf-8")
+    assert "x.institutional_signal||{}" in html
+    assert "x.risk_engine||{}" in html
+    assert "fd.status||x.decision?.status" in html
+    assert "fd.signal||{}" not in html
+    assert "fd.risk||{}" not in html

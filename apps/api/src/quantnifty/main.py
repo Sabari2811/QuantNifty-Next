@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import httpx
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -511,13 +511,32 @@ def paper_kill_switch_status():
     return {"active": bool(active), "state": kill_switch_state()}
 
 @app.post("/api/v1/paper/kill-switch")
-def paper_kill_switch():
+def paper_kill_switch(payload: dict[str, Any] = Body(...)):
+    # This endpoint is intentionally explicit, not a toggle. A stale browser tab,
+    # duplicate POST, retry, or load-balanced request must never invert the
+    # durable control state unexpectedly.
+    if "enabled" not in payload or not isinstance(payload.get("enabled"), bool):
+        raise HTTPException(400, "enabled must be an explicit boolean")
+    requested = bool(payload["enabled"])
     current = bool(live_paper._refresh_kill_switch())
-    state = live_paper.set_daily_kill_switch(
-        not current,
-        cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None,
-    )
-    return {"active": bool(state.get("active")), "state": state}
+    reason = str(payload.get("reason") or ("MANUAL_KILL_SWITCH" if requested else "MANUAL_KILL_SWITCH_RELEASED"))
+    if requested != current:
+        state = live_paper.set_daily_kill_switch(
+            requested,
+            cache.get("snapshot") if isinstance(cache.get("snapshot"), dict) else None,
+        )
+    else:
+        state = kill_switch_state()
+    print("QUANTNIFTY_KILL_SWITCH_CONTROL " + json.dumps({
+        "requested_enabled": requested,
+        "previous_enabled": current,
+        "active": bool(state.get("active")),
+        "reason": reason,
+        "day": state.get("day"),
+        "idempotent": requested == current,
+        "trading": "DISABLED",
+    }, separators=(",", ":"), default=str), flush=True)
+    return {"active": bool(state.get("active")), "state": state, "requested_enabled": requested, "idempotent": requested == current}
 
 @app.post("/api/v1/replay/decisions")
 async def replay_decisions_api(payload: dict[str,Any]):

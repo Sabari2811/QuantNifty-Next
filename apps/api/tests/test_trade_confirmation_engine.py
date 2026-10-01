@@ -107,3 +107,20 @@ def test_volume_confirmation_uses_selected_directional_contract():
     # confirms participation.
     result = trade_confirmation(current, previous, _signal(), "early_accumulation")
     assert result["gates"]["volume_expansion"]
+
+
+def test_insufficient_displacement_cannot_release_trade_even_with_other_confirmations():
+    previous = _snapshot(spot=22660.0, premium=175.0, volume=1000000, support=22650.0)
+    # The move breaks the frozen support, but 11 points is below the
+    # expected-move-derived minimum (~24.85 points). All other confirmation
+    # signals are positive, so this specifically proves displacement is a
+    # mandatory gate rather than merely one item in the 4-of-6 score.
+    current = _snapshot(spot=22649.0, premium=182.0, volume=1100000, support=22630.0)
+    result = trade_confirmation(current, previous, _signal(), "early_accumulation")
+    assert result["gates"]["key_level_break"]
+    assert not result["gates"]["displacement"]
+    assert result["score"] >= 4
+    assert result["status"] == "SETUP"
+    assert not result["confirmed"]
+    assert not result["take_trade"]
+    assert "INSUFFICIENT_DISPLACEMENT" in result["reasons"]

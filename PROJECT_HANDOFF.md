@@ -1,6 +1,6 @@
 # QuantNifty-Next — Persistent Project Handoff
 
-**Updated:** 2026-09-17  
+**Updated:** 2026-10-01  
 **Branch:** `main`  
 **Repository:** https://github.com/Sabari2811/QuantNifty-Next  
 **Production:** https://quantnifty-api.onrender.com  
@@ -260,3 +260,17 @@ Never redesign the architecture without an explicit requirement. Never enable re
 - Added regression tests for frozen trigger levels, avoiding repeated breaks when price was already beyond the level, and selected-contract volume confirmation.
 - Commits: `4234029` (confirmation hardening), `3decd60` (tests).
 - Real trading remains permanently disabled/read-only; no broker execution or instrument-file changes.
+
+
+## 2026-10-01 Live intelligence payload / decision observability fix
+- Diagnosed the live Market Brain screen showing provider data while displaying blank intelligence fields and an apparently unqualified NO_TRADE. The provider/DB pipeline was healthy: Render runtime evidence showed LIVE_PROVIDER snapshots with 82 option-chain rows, durable PostgreSQL, and trading=DISABLED.
+- Hardened `apps/api/src/quantnifty/main.py` so `snapshot()` computes the complete intelligence object before publishing the shared cache. A new `intelligence_contract` (`market-intelligence-v2`) records required intelligence fields and fails closed if the payload is incomplete. This prevents API/WebSocket consumers from seeing a partially constructed snapshot.
+- Added `QUANTNIFTY_DECISION_EVIDENCE` structured logs every ~30 seconds with direction, confidence, selected strategy, authoritative decision action, risk reasons, confirmation status/reasons, confirmation level/displacement/supporting confirmations, intelligence contract status, and trading mode. Added explicit `QUANTNIFTY_SNAPSHOT_ERROR` / `QUANTNIFTY_DECISION_ERROR` logs.
+- The Intelligence UI now refuses to display a synthetic NO_TRADE when the intelligence contract is absent/incomplete; it shows **INTELLIGENCE CONTRACT INCOMPLETE** instead.
+- Removed the unrelated pre-existing `_f` health bug from `_live_provider_connected()`; health now checks the cached timestamp safely and requires an OK intelligence contract.
+- During post-deploy validation a latent adaptive-learning bug was exposed on a fresh Render instance: `update_adaptive_memory()` discarded `failure_patterns` and `closed_trade_samples`, causing `KeyError: 'failure_patterns'` once historical closed outcomes were present. Fixed `research_brain.py` to preserve those fields across memory updates. This was necessary for the live decision path to remain healthy with the existing 2 closed outcomes in PostgreSQL.
+- Production deployment: commit `a7c37f183db86c29c54fd2edc46ebe8a514228b9`, Render deployment `dep-dauueou0tbcc73cpbrk0`, reached LIVE at 2026-10-01T04:54:37Z. Service remains paid `1c-2g`, main branch, not suspended, trading=DISABLED.
+- Runtime validation after deployment: new instance successfully emitted `QUANTNIFTY_DECISION_EVIDENCE`; `/api/v1/market` returned HTTP 200; runtime evidence showed LIVE_PROVIDER cached snapshots, 82 rows, PostgreSQL reachable, decisions increasing to 144, snapshots increasing to 1411+, paper status IDLE, trading DISABLED. The new evidence showed a legitimate current **WAIT_CONFIRMATION** state: BEARISH / early_accumulation, confidence 85.8, risk not approved because `trade_confirmation`; at 10:25 IST evidence included `KEY_LEVEL_NOT_BROKEN`, `INSUFFICIENT_DISPLACEMENT`, and `OPTION_PREMIUM_NOT_RESPONDING`. This is now an explicit strategy gate rather than a blank UI state.
+- The old pre-deploy instance emitted the known `'failure_patterns'` error during zero-downtime handoff, but those errors stopped once the old instance was drained; no `QUANTNIFTY_SNAPSHOT_ERROR` was observed on the new instance after the adaptive-memory fix.
+- Tests: GitHub Actions compile passed. The current CI run on this commit reports **222 passed, 7 failed**. The 7 failures are pre-existing/stale expectations in adaptive/context/historical/reversal/trade-learning tests plus one dashboard string expectation; they are not caused by the new intelligence contract or adaptive-memory preservation test. The new live-intelligence regression tests pass. CI is therefore not claimed as fully green.
+- No changes to real-trading execution, broker integration, `data/instruments/fno.csv`, `QuantNifty`, or `TechGeek`.
